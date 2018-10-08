@@ -87,12 +87,6 @@ def test_func(url):
     stop = time.time()
     print("Time: " + "{0:.2f} secs".format((stop-start)))
     plt.show()
-    
-def count_regions(img_array):
-    pass
-
-def merge_adjacent_regions(img_array, size):
-    pass
 
 if __name__ == '__main__':
     test_func(r"PATH/TO/FILE")
