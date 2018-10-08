@@ -9,7 +9,7 @@ BLUE = 2
 
 def extract_channel(img_array, channel=2, gray=True):
     '''
-    Method to extract the channels of a color image. Image is to be expected to be in the RGB color space
+    Method to extract the channels of a color image. Image is expected to be in the RGB color space
     
     Keyword arguments:
     img_array(ndarray) -- The color image to extract the channel from
