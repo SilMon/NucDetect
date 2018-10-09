@@ -40,7 +40,7 @@ class ROI_Handler:
                 #Detection of green foci
                 if green != 0:
                     if self.green[green] == None:
-                        roi = ROI()
+                        roi = ROI(chan=channel.GREEN)
                         roi.add_point((x,y))
                         self.green[green] = roi
                     else:
@@ -48,7 +48,7 @@ class ROI_Handler:
                 #Detection of red foci
                 if red != 0:
                     if self.red[red] == None:
-                        roi = ROI()
+                        roi = ROI(chan=channel.RED)
                         roi.add_point((x,y))
                         self.red[red] = roi
                     else:
@@ -62,20 +62,11 @@ class ROI_Handler:
             if nuc != None:
                 for gre in self.green:
                     if gre != None:
-                        det = nuc.determine_enclosure(gre, channel.GREEN)
-                        if det == ROI.FULL_ENCLOSURE:
-                            nuc.add_roi(gre, channel.GREEN)
+                        if nuc.add_roi(gre):
                             gre_rem.append(gre)
-                        elif det == ROI.PARTIAL_ENCLOSURE:
-                            nuc.add_roi_partially(gre, channel.GREEN)
                 for red in self.red:
                     if red != None:
-                        det = nuc.determine_enclosure(red, channel.RED)
-                        if det == ROI.FULL_ENCLOSURE:
-                            nuc.add_roi(red, channel.RED)
+                        if nuc.add_roi(red):
                             red_rem.append(red)
-                        elif det == ROI.PARTIAL_ENCLOSURE:
-                            nuc.add_roi_partially(red, channel.RED)
             self.green = [x for x in self.green if x not in gre_rem]
             self.red = [x for x in self.red if x not in red_rem]
-            
