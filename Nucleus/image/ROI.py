@@ -21,14 +21,14 @@ class ROI:
         points(list of 2D tuples, optional): The points which describe the area of the ROI. Contains 2D tuples in form of (x,y)
         channel(int, optional): Describes the channel in which the ROI was found (default: channel.BLUE)
         '''
-        self.chan = channel 
+        self.chan = chan
+        self.coordinates = [0,0,0,0] 
         self.width = None
         self.height = None
         self.center = None
         self.points = []        #Points always describes the area of the ROI in form of tuples (x,y)
-        if channel == channel.BLUE:
-            self.green = []         #Contains Sub-ROI of the green channel (if any)
-            self.red = []           #Contains Sub-ROI of the red channel (if any)
+        self.green = []         #Contains Sub-ROI of the green channel (if any)
+        self.red = []           #Contains Sub-ROI of the red channel (if any)
         if points != None:
             self.points.append(points) 
         
@@ -41,31 +41,35 @@ class ROI:
         '''
         self.points.append(point)
 
-    def __calculate_center(self):
+    def _calculate_center(self):
         '''
         Private method to calculate the center of the ROI
         '''
-        if self.width == None:
-            self.calculate_width()
-        if self.height == None:
-            self.calculate_height()
-        self.center = (self.width/2,self.height/2)
+        if self.width is None:
+            self.width = self._calculate_width()
+        if self.height is None:
+            self.height = self._calculate_height()
+        self.center = (self.coordinates[0] + self.width//2,self.coordinates[2] + self.height//2)
     
-    def __calculate_width(self):
+    def _calculate_width(self):
         '''
         Private method to calculate the width of the ROI
         '''
-        minX = max(self.points,key=itemgetter(0))[0] 
+        minX = min(self.points,key=itemgetter(0))[0] 
         maxX = max(self.points,key=itemgetter(0))[0]
-        self.width = maxX - minX   
+        self.coordinates[0] = minX
+        self.coordinates[1] = maxX
+        self.width = maxX - minX
     
-    def __calculate_height(self):
+    def _calculate_height(self):
         '''
         Private method to calculate the height of the ROI
         '''
-        minY = max(self.points,key=itemgetter(1))[0] 
-        maxY = max(self.points,key=itemgetter(1))[0]
-        self.width = maxY - minY  
+        minY = min(self.points,key=itemgetter(1))[1] 
+        maxY = max(self.points,key=itemgetter(1))[1]
+        self.coordinates[2] = minY
+        self.coordinates[3] = maxY
+        self.height = maxY - minY  
     
     def merge(self, roi):
         '''
@@ -77,7 +81,10 @@ class ROI:
         self.points.extend(roi.points)
         self.green.extend(roi.green)
         self.red.extend(roi.red)
-    
+        self._calculate_width()
+        self._calculate_height()
+        self._calculate_center()
+
     def add_roi(self, roi):
         '''
         Method to add a ROI to this instance. Is different from merge() by only adding the red and green points of the given ROI and ignoring its blue points
@@ -88,14 +95,15 @@ class ROI:
         Returns:
         bool -- True if the ROI could be added, False if the roi could not or only partially be added
         '''
-        val = self.__determine_enclosure(roi)
+        val = self._determine_enclosure(roi)
+        enc = False
         if val == ROI.FULL_ENCLOSURE:
-            if roi.chan == channel.GREEN:
+            if roi.chan is channel.GREEN:
                 self.green.append(roi)
             if roi.chan == channel.RED:
                 self.red.append(roi)
-            return True
-        elif val == ROI.PARTIAL_ENCLOSURE:
+            enc = True
+        elif val is ROI.PARTIAL_ENCLOSURE:
             a = set(self.points)
             b = set(roi.points)
             if roi.chan == channel.GREEN:
@@ -103,11 +111,31 @@ class ROI:
             elif roi.chan == channel.RED:
                 self.red.append(ROI.list(a&b))
             roi.points = list(a - b)
-            return False
-        else:
-            return False
+        return enc
     
-    def __determine_enclosure(self, roi):
+    def get_data(self):
+        '''
+        Method to access the data stored in this instance.
+        
+        Returns:
+        dictionary -- A dictionary of the stored information. Keys are: height, width, center, green roi and red roi.
+        '''
+        if self.width is None:
+            self._calculate_width()
+        if self.height is None:
+            self._calculate_height()
+        if self.center is None:
+            self._calculate_center()
+        inf = {
+            "height":self.height,
+            "width":self.width,
+            "center":self.center,
+            "green roi":self.green,
+            "red roi":self.red
+        }
+        return inf
+    
+    def _determine_enclosure(self, roi):
         '''
         Method to determine if a ROI is enclosed by this ROI.
         
