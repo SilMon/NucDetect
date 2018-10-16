@@ -89,6 +89,6 @@ def test_func(url):
     plt.show()
 
 if __name__ == "__main__":
-    file_name = os.path.join(os.path.dirname(__file__), r"examples\test_2.tif")
+    file_name = os.path.join(os.path.dirname(__file__), "test_2.tif")
     test_func(file_name)
     
