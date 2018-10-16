@@ -88,6 +88,7 @@ def test_func(url):
     print("Time: " + "{0:.2f} secs".format((stop-start)))
     plt.show()
 
-if __name__ == '__main__':
-    test_func(r"PATH/TO/FILE")
+if __name__ == "__main__":
+    file_name = os.path.join(os.path.dirname(os.path.dirname(__file__)), r"examples\test_1.tif")
+    test_func(file_name)
     
