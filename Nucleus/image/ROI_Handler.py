@@ -116,25 +116,53 @@ class ROI_Handler:
         img_array[rr,cc,:]= col
          
             
-    def get_data(self,console=True):
+    def get_data(self, console=True, formatted=True):
         '''
         Method to obtain the data stored in this handler
-        
+
         Keyword arguments:
-        console(bool): Determines if the obtained results are formatted and printed to the console
-        
-        Returns: 
-        str -- The data as .csv string
+        console(bool):Determines if results are printed to the console
+        (default:True)
+        formatted(bool): Determines if the output should be formatted
+        (default:True)
+
+        Returns:
+        None -- If printed to console
+        str -- The data as .csv string if printed to file
         '''
+        if formatted:
+            form = "{0:^15};{1:^15};{2:^15};{3:^15};{4:^15};{5:^15}"
+        else:
+            form = "{0};{1};{2};{3};{4};{5}"
+        heading = form.format(
+                "Index", "Width", "Height", "Center", "Green Foci", "Red Foci")
         if console:
-            heading = "{0:^15};{1:^15};{2:^15};{3:^15};{4:^15};{5:^15}".format("Index","Width","Height","Center","Green Foci","Red Foci")
             print(heading)
             ind = 0
             for roi in self.nuclei:
-                if roi != None:
+                if roi is not None:
                     data = roi.get_data()
-                    print("{0:^15};{1:^15};{2:^15};{3:^15};{4:^15};{5:^15}".format(ind,data.get("width"),data.get("height"),str(data.get("center")),len(data.get("green roi")),len(data.get("red roi"))))
+                    print(form.format(ind, data.get("width"),
+                          data.get("height"), str(data.get("center")),
+                          len(data.get("green roi")), len(data.get("red roi")))
+                          )
                     ind += 1
         else:
-            pass#TODO
+            pardir = os.getcwd()
+            pathpardir = os.path.join(os.path.dirname(pardir),
+                                      r"results")
+            os.makedirs(pathpardir, exist_ok=True)
+            pathresult = os.path.join(pathpardir,
+                                      "result.csv")
+            file = open(pathresult, "w")
+            ind = 0
+            file.write(heading + "\n")
+            for roi in self.nuclei:
+                if roi is not None:
+                    data = roi.get_data()
+                    file.write(form.format(ind, data.get("width"),
+                               data.get("height"), str(data.get("center")),
+                               len(data.get("green roi")),
+                               len(data.get("red roi")))+"\n")
+                    ind += 1
     
