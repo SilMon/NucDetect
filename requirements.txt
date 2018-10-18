@@ -1,5 +1,5 @@
 scipy>=0.11
 numpy>=1.13.3
-skimage
+skimage>=0.15.dev0
 matplotlib
 
