@@ -362,8 +362,11 @@ class Detector:
         tuple -- A tuple containing the estimated blurriness of each channel in
         the order blue, red, green
         '''
-        pass
-
+        blue_var = laplace(channels[0], 3).var()
+        red_var = laplace(channels[1], 3).var()
+        green_var = laplace(channels[2], 3).var()
+        return (blue_var, red_var, green_var)
+    
     def _determine_overexposure(self, channels):
         '''
         Private method to determine if an image is overexposed
