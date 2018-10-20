@@ -85,7 +85,6 @@ class Detector:
             cur_snaps["result"] = result
             cur_snaps["quality"] = qual
             if self.save_snapshots:
-                cur_snaps["quality"] = qual
                 cur_snaps["channel"] = channels
                 cur_snaps["threshold"] = thresholds
                 cur_snaps["binarized"] = thr_chan
