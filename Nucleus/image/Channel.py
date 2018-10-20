@@ -104,7 +104,7 @@ def get_dynamic_range(img_array, channel=RED, channel_only=False,
     (0-1)
     '''
     minmax = get_minmax(img_array, channel, channel_only, gray)
-    dr = minmax[1] - minmax[2]
+    dr = minmax[0] - minmax[1]
     if in_percent:
         return dr/255
     else:
