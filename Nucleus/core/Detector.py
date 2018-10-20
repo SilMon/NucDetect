@@ -383,12 +383,8 @@ class Detector:
             for x in range(width):
                 if channels[0][y][x] > blu_th:
                     blue_chan.append(lapl_blue[y][x])
-        for y in range(height):
-            for x in range(width):
                 if channels[1][y][x] > red_th:
                     red_chan.append(lapl_red[y][x])
-        for y in range(height):
-            for x in range(width):
                 if channels[2][y][x] > gre_th:
                     green_chan.append(lapl_green[y][x])
         blue_var = np.var(blue_chan, ddof=1) if len(blue_chan) > 100 else -1
