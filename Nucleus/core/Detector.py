@@ -347,10 +347,10 @@ class Detector:
         2D tuple -- A 2D tuple containing the estimated image quality of each
         channel in the order(blurriness(b,r,g), overexposure(b,r,g))
         '''
-        return (self._calculate_blurrines(channels),
+        return (self._calculate_blurriness(channels),
                 self._determine_overexposure(channels))
 
-    def _calculate_blurrines(self, channels):
+    def _calculate_blurriness(self, channels):
         '''
         Private method to calculate the blurriness factor of each image channel
 
@@ -362,9 +362,38 @@ class Detector:
         tuple -- A tuple containing the estimated blurriness of each channel in
         the order blue, red, green
         '''
-        blue_var = laplace(channels[0], 3).var()
-        red_var = laplace(channels[1], 3).var()
-        green_var = laplace(channels[2], 3).var()
+        blue_chan = []
+        red_chan = []
+        green_chan = []
+        blu_th = Channel.get_minmax(channels[0], channel_only=True)[0] + 1/5 * (
+            Channel.get_dynamic_range(channels[0],
+                                      channel_only=True, in_percent=False))
+        red_th = Channel.get_minmax(channels[1], channel_only=True)[0] + 1/5 * (
+            Channel.get_dynamic_range(channels[1],
+                                      channel_only=True, in_percent=False))
+        gre_th = Channel.get_minmax(channels[2], channel_only=True)[0] + 1/5 * (
+            Channel.get_dynamic_range(channels[2],
+                                      channel_only=True, in_percent=False))
+        lapl_blue = laplace(channels[0], 3)
+        lapl_red = laplace(channels[1], 3)
+        lapl_green = laplace(channels[2], 3)
+        height = len(channels[0])
+        width = len(channels[0][0])
+        for y in range(height):
+            for x in range(width):
+                if channels[0][y][x] > blu_th:
+                    blue_chan.append(lapl_blue[y][x])
+        for y in range(height):
+            for x in range(width):
+                if channels[1][y][x] > red_th:
+                    red_chan.append(lapl_red[y][x])
+        for y in range(height):
+            for x in range(width):
+                if channels[2][y][x] > gre_th:
+                    green_chan.append(lapl_green[y][x])
+        blue_var = np.var(blue_chan, ddof=1) if len(blue_chan) > 100 else -1
+        red_var = np.var(red_chan, ddof=1) if len(red_chan) > 100 else -1
+        green_var = np.var(green_chan, ddof=1) if len(green_chan) > 100 else -1
         return (blue_var, red_var, green_var)
     
     def _determine_overexposure(self, channels):
