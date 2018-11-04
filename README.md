@@ -11,6 +11,7 @@ Requirements
 * numpy>=1.13.3
 * scikit-image>=0.15.dev0
 * matplotlib
+* kivy
 
 Run the following commands to clone and install from GitHub.
 
