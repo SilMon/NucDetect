@@ -10,8 +10,8 @@ Requirements
 * scipy>=0.19.0
 * numpy>=1.13.3
 * scikit-image>=0.15.dev0
-* matplotlib
-* kivy
+* matplotlib >= 3.0.2
+* kivy >=1.10.1
 
 Run the following commands to clone and install from GitHub.
 
