@@ -1,0 +1,341 @@
+#:kivy 1.10.1
+
+<Controller>
+	#:set table_bckg (0.3, 0.3, 0.3, 0.3)
+	#:set app_bckg (0, 0.2, 0.4, 1)
+	#:set elem_col (0.5,0.5,0.5,0.8)
+	#:set btn_col (.30, .45, .80, .85)
+	
+	result_table: result_table
+	image_list: image_list
+	prg_bar: prg_bar
+	prg_bar_label: prg_bar_label
+	show_btn: show_btn
+	save_btn: save_btn
+	
+	BoxLayout:
+		orientation: 'vertical'
+		canvas.before:
+			Color:
+				rgba: app_bckg
+			Rectangle:
+				pos: self.pos
+				size: self.size
+		
+		BoxLayout:
+			orientation: 'horizontal'
+			padding: 3
+			
+			BoxLayout:
+				orientation: 'vertical'
+				size_hint: (0.7, 1)
+				padding: 1
+				
+				BoxLayout:
+					orientation: 'horizontal'
+					size_hint: (1, 0.05)
+
+					Button:
+					    font_name: 'font-awesome.otf'
+						text: '\uf6e8 Start'
+						background_color: btn_col
+						on_press: root.analyze()
+					
+					Button:
+					    font_name: 'font-awesome.otf'
+						text: '\uf07c Load'
+						background_color: btn_col
+						on_press: app.show_load_dialog()
+
+					Button:
+					    font_name: 'font-awesome.otf'
+						text: '\uf03e Show'
+						id: show_btn
+						background_color: btn_col
+						on_press: root.show_result_image()
+						disabled: True
+						
+					Button:
+					    font_name: 'font-awesome.otf'
+						text: '\uf0c7 Save'
+						id: save_btn
+						background_color: btn_col
+						on_press: root.save_results()
+						disabled: True
+
+					Button:
+					    font_name: 'font-awesome.otf'
+						text: '\uf085 Settings'
+						background_color: btn_col
+						on_press: app.open_settings()
+					
+				Label:
+					text: 'Results'
+					font_size: 20
+					bold: True
+					size_hint: (1, 0.1)
+				TableView:
+					size_hint: (1, 0.85)
+					id: result_table
+					canvas.before:
+						Color:
+							rgba: table_bckg
+						Rectangle:
+							pos: self.pos
+							size: self.size
+					
+			BoxLayout:
+				orientation: 'vertical'
+				size_hint: (0.3, 1)
+				padding: 1
+				
+				Image:          
+			        size_hint: (1, 0.2)
+			        source: 'banner.png'
+				
+				Label:
+					text: 'Files'
+					font_size: 20
+					bold: True
+					size_hint: (1, 0.05)
+					
+				TableView:
+					id: image_list
+				    size_hint: (1, 0.75)
+				    width: self.cols
+				    height: self.rows 
+				    canvas.before:
+						Color:
+							rgba: table_bckg
+						Rectangle:
+							pos: self.pos
+							size: self.size
+								
+				BoxLayout:
+					orientation: 'horizontal'
+					size_hint: (1, 0.05)
+						
+					Button:
+					    id: analyze_selected
+						font_name: 'font-awesome.otf'
+					    color: 0,.3,.8,1
+						size_hint: (1, 1)
+						background_color: btn_col
+						text: '\uf610'
+					
+					Button:
+					    id: analyze_all
+					    font_name: 'font-awesome.otf'
+					    color: .8,0,0,1
+						size_hint: (1, 1)
+						background_color: btn_col
+						text: '\uf610'
+						
+					Button:
+					    id: remove_selected
+						font_name: 'font-awesome.otf'
+					    color: 0,.3,.8,1
+						size_hint: (1, 1)
+						background_color: btn_col
+						text: '\uf2ed'
+
+					Button:
+						id: clear_list
+						font_name: 'font-awesome.otf'
+					    color: .8,0,0,1
+						size_hint: (1, 1)
+						background_color: btn_col
+						text: '\uf00d'
+		BoxLayout:
+			size_hint: (1, 0.075)
+			orientation: 'vertical'
+			padding: 5,5,5,5
+			spacing: 2
+			
+			Label:
+				id: prg_bar_label
+				text:'Program ready'	
+						
+			ProgressBar:
+				id: prg_bar
+			
+				
+<OpenFileDialog>
+	BoxLayout:
+        size: root.size
+        pos: root.pos
+        orientation: "vertical"
+        FileChooserListView:
+            id: filechooser
+            path: root.path
+            
+        BoxLayout:
+            size_hint_y: None
+            height: 30
+            Button:
+                text: "Cancel"
+                background_color:
+                on_release: root.cancel()
+
+            Button:
+                text: "Load"
+                on_release: root.load(filechooser.path, filechooser.selection)
+                
+<SaveFileDialog>
+	text_input: text_input
+    BoxLayout:
+        size: root.size
+        pos: root.pos
+        orientation: "vertical"
+        FileChooserListView:
+            id: filechooser
+            on_selection: text_input.text = self.selection and self.selection[0] or ''
+
+        TextInput:
+            id: text_input
+            size_hint_y: None
+            height: 30
+            multiline: False
+
+        BoxLayout:
+            size_hint_y: None
+            height: 30
+            Button:
+                text: "Cancel"
+                on_release: root.cancel()
+
+            Button:
+                text: "Save"
+                on_release: root.save(filechooser.path, text_input.text)
+                
+<TableColumn>
+	viewclass: 'TableCell'
+	bar_pos_y: 'right'
+    SelectableRecycleBoxLayout:
+    	multiselect: True
+        default_size: None, dp(56)
+        default_size_hint: 1, None
+        size_hint_y: None
+        height: self.minimum_height
+        orientation: 'vertical'
+        padding: [1,0,1,0]
+        spacing: 1
+
+<TableCell>
+    background: self.background
+    select_col: self.select_col
+    header_col: self.header_col
+    
+    canvas.before:
+    	Color: 
+    		rgba:  self.background if not self.selected else self.select_col
+    	Rectangle:
+    		pos: self.pos
+    		size: self.size
+
+<ResultWindow>
+    orientation: 'horizontal'
+	figure_window: figure_window
+	padding: 10, 10, 10 ,10
+
+    BoxLayout:
+        padding: 10, 10, 10 ,10
+        size_hint: (0.8, 1)
+        id: figure_window
+
+    BoxLayout:
+        size_hint: (0.1, 0.5)
+        orientation: 'vertical'
+
+        Button:
+            id: original
+            text: 'Original'
+            on_press: root.change_figure("original")
+
+        Label:
+            text: 'Channels'
+
+        BoxLayout:
+            orientation: 'horizontal'
+
+            Button:
+                id: red_channel
+                font_name: 'font-awesome.otf'
+                text: '\uf03e'
+                color: 1,0,0,1
+                on_press: root.change_figure("red_channel")
+
+            Button:
+                id: green_channel
+                font_name: 'font-awesome.otf'
+                text: '\uf03e'
+                color: 0,1,0,1
+                on_press: root.change_figure("green_channel")
+
+            Button:
+                id: blue_channel
+                font_name: 'font-awesome.otf'
+                text: '\uf03e'
+                color: 0,0,1,1
+                on_press: root.change_figure("blue_channel")
+
+        Label:
+            text: 'Thresholds'
+
+        BoxLayout:
+            orientation: 'horizontal'
+
+            Button:
+                id: red_thr
+                font_name: 'font-awesome.otf'
+                text: '\uf03e'
+                color: 1,0,0,1
+                on_press: root.change_figure("red_thr")
+
+            Button:
+                id: green_thr
+                font_name: 'font-awesome.otf'
+                text: '\uf03e'
+                color: 0,1,0,1
+                on_press: root.change_figure("green_thr")
+
+            Button:
+                id: blue_thr
+                font_name: 'font-awesome.otf'
+                text: '\uf03e'
+                color: 0,0,1,1
+                on_press: root.change_figure("blue_thr")
+
+        Label:
+            text: "Markers"
+
+        BoxLayout:
+            orientation: 'horizontal'
+
+            Button:
+                id: red_marker
+                font_name: 'font-awesome.otf'
+                text: '\uf03e'
+                color: 1,0,0,1
+                on_press: root.change_figure("red_marker")
+
+            Button:
+                id: green_marker
+                font_name: 'font-awesome.otf'
+                text: '\uf03e'
+                color: 0,1,0,1
+                on_press: root.change_figure("green_marker")
+
+            Button:
+                id: blue_marker
+                font_name: 'font-awesome.otf'
+                text: '\uf03e'
+                color: 0,0,1,1
+                on_press: root.change_figure("blue_marker")
+        Button:
+            id: result
+            text: "Result"
+            on_press: root.change_figure("result")
+
+        Label:
+            size_hint: (1, 0.4)

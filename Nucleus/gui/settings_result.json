@@ -1,0 +1,23 @@
+[
+	{
+		"type":"bool",
+		"title":"Ignore edge-nuclei",
+		"desc":"Should nuclei at the image edges be ignored?",
+		"section": "Analysis",
+		"key":"edge_ignore"
+	},
+	{
+		"type":"bool",
+		"title":"Reduce oversegmentation",
+		"desc":"Should NucDetect try to reduce oversegmentation?",
+		"section": "Analysis",
+		"key":"oversegmentation"
+	},
+	{
+		"type":"bool",
+		"title":"Assess image quality",
+		"desc":"Should the image quality be assessed before analysis?",
+		"section": "Analysis",
+		"key":"assess_quality"
+	}	
+]
