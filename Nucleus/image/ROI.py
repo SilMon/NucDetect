@@ -4,8 +4,10 @@ Created on 06.10.2018
 @author: Romano Weiss
 '''
 
-from Nucleus.image import Channel
+from NucDetect.image import Channel
 from operator import itemgetter
+from skimage.exposure.exposure import intensity_range
+from builtins import int
 
 
 class ROI:
@@ -36,10 +38,24 @@ class ROI:
         self.points = []
         self.green = []
         self.red = []
+        self.intensities = {}
+        self.average_intensity = 0
+        self.averarage_foci_intensity = []
         if points is not None:
             self.points.append(points)
 
-    def add_point(self, point):
+    def __add__(self, other):
+        if isinstance(other, ROI):
+            self.points.extend(other.points)
+        elif isinstance(other, ()):
+            if len(other) < 2 or len(other) > 2:
+                self.points.append(other[0], other[1])
+            else:
+                raise ValueError("Tuple size has to be 2 (point, intensity)!")
+        else:
+            raise ValueError("Type of other does not match!")
+
+    def add_point(self, point, intensity):
         '''
         Method to add a point to the ROI.
 
@@ -47,6 +63,7 @@ class ROI:
         point(2D tuple): Point to add to the ROI
         '''
         self.points.append(point)
+        self.intensities[point] = intensity
 
     def _calculate_center(self):
         '''
@@ -79,6 +96,27 @@ class ROI:
         self.coordinates[3] = maxY
         self.height = maxY - minY
 
+    def _calculate_average_intensity(self):
+        '''
+        Private method to calculate the average point intensity of this ROI
+        '''
+        int_temp = 0
+        for key, inten in self.intensities:
+            int_temp += inten
+        self.average_intensity = int_temp/len(self.points)
+        return self.average_intensity
+
+    def _calculate_average_foci_intensity(self):
+        green_temp = 0
+        red_temp = 0
+        for roi in self.green:
+            green_temp += roi._calculate_average_intensity()
+        for roi in self.red:
+            red_temp += roi._calculate_average_intensity()
+        self.averarage_foci_intensity.append(green_temp/len(self.green))
+        self.averarage_foci_intensity.append(red_temp/len(self.red))
+        pass
+
     def merge(self, roi):
         '''
         Method to merge to ROI.
@@ -108,20 +146,23 @@ class ROI:
         '''
         val = self._determine_enclosure(roi)
         enc = False
+
         if val == ROI.FULL_ENCLOSURE:
             if roi.chan is Channel.GREEN:
                 self.green.append(roi)
             if roi.chan == Channel.RED:
                 self.red.append(roi)
             enc = True
+        '''
         elif val is ROI.PARTIAL_ENCLOSURE:
             a = set(self.points)
             b = set(roi.points)
             if roi.chan == Channel.GREEN:
-                self.green.append(ROI(list(a & b)))
+                self.green.append(ROI(points=list(a & b), chan=Channel.GREEN))
             elif roi.chan == Channel.RED:
-                self.red.append(ROI.list(a & b))
+                self.red.append(ROI(points=list(a & b), chan=Channel.RED))
             roi.points = list(a - b)
+        '''
         return enc
 
     def get_data(self):
@@ -143,7 +184,9 @@ class ROI:
             "width": self.width,
             "center": self.center,
             "green roi": self.green,
-            "red roi": self.red
+            "green_intensity": 0,
+            "red roi": self.red,
+            "red_intensity": 0
         }
         return inf
 
