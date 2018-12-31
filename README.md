@@ -14,7 +14,7 @@ Requirements
 * kivy >=1.10.1
 * kivy-garden >= 1.10.1 (install matplotlib)
 
-FontAwesome for icon display (http://fortawesome.github.io/Font-Awesome/)
+FontAwesome is used for icon display (http://fortawesome.github.io/Font-Awesome/)
 
 Run the following commands to clone and install from GitHub.
 
