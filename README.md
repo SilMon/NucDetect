@@ -3,7 +3,7 @@
 NucDetect is a Python package to detect and quantify intranuclear DNA repair protein foci.
 
 ### Note
-The current release is very early alpha version. Please report report any detected bugs and/or improvement suggestions
+The current release is a very early alpha version. Please report report any detected bugs and/or improvement suggestions.
 
 Requirements
 ============
