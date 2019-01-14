@@ -12,6 +12,8 @@
 	prg_bar_label: prg_bar_label
 	show_btn: show_btn
 	save_btn: save_btn
+	stat_btn: stat_btn
+	cat_btn: cat_btn
 	
 	BoxLayout:
 		orientation: 'vertical'
@@ -34,12 +36,6 @@
 				BoxLayout:
 					orientation: 'horizontal'
 					size_hint: (1, 0.05)
-
-					Button:
-					    font_name: 'font-awesome.otf'
-						text: '\uf6e8 Start'
-						background_color: btn_col
-						on_press: root.analyze()
 					
 					Button:
 					    font_name: 'font-awesome.otf'
@@ -47,14 +43,6 @@
 						background_color: btn_col
 						on_press: app.show_load_dialog()
 
-					Button:
-					    font_name: 'font-awesome.otf'
-						text: '\uf03e Show'
-						id: show_btn
-						background_color: btn_col
-						on_press: root.show_result_image()
-						disabled: True
-						
 					Button:
 					    font_name: 'font-awesome.otf'
 						text: '\uf0c7 Save'
@@ -65,15 +53,42 @@
 
 					Button:
 					    font_name: 'font-awesome.otf'
+						text: '\uf610 Images'
+						id: show_btn
+						background_color: btn_col
+						on_press: root.show_result_image()
+						disabled: True
+
+					Button:
+					    font_name: 'font-awesome.otf'
+						text: '\uf080 Statistics'
+						id: stat_btn
+						background_color: btn_col
+						on_press: root.show_statistics()
+						disabled: True
+
+					Button:
+                        font_name: 'font-awesome.otf'
+                        text: "\uf0ca Categorize"
+                        id: cat_btn
+                        background_color: btn_col
+                        on_release: root.show_categorization()
+                        disabled: True
+
+					Button:
+					    font_name: 'font-awesome.otf'
 						text: '\uf085 Settings'
 						background_color: btn_col
 						on_press: app.open_settings()
-					
-				Label:
-					text: 'Results'
-					font_size: 20
-					bold: True
-					size_hint: (1, 0.1)
+
+                Label:
+                    text: 'Results'
+                    font_size: 20
+                    bold: True
+                    size_hint: (1, 0.1)
+
+
+
 				TableView:
 					size_hint: (1, 0.85)
 					id: result_table
@@ -121,7 +136,8 @@
 					    color: 0,.3,.8,1
 						size_hint: (1, 1)
 						background_color: btn_col
-						text: '\uf610'
+						text: '\uf6e8'
+						on_release: root.analyze()
 					
 					Button:
 					    id: analyze_all
@@ -129,7 +145,8 @@
 					    color: .8,0,0,1
 						size_hint: (1, 1)
 						background_color: btn_col
-						text: '\uf610'
+						text: '\uf6e8'
+						on_release: root.analyze_all()
 						
 					Button:
 					    id: remove_selected
@@ -138,6 +155,7 @@
 						size_hint: (1, 1)
 						background_color: btn_col
 						text: '\uf2ed'
+						on_release: root.show_statistics()
 
 					Button:
 						id: clear_list
@@ -151,10 +169,13 @@
 			orientation: 'vertical'
 			padding: 5,5,5,5
 			spacing: 2
-			
-			Label:
-				id: prg_bar_label
-				text:'Program ready'	
+
+			BoxLayout:
+			    orientation: 'horizontal'
+
+                Label:
+                    id: prg_bar_label
+                    text:'Program ready'
 						
 			ProgressBar:
 				id: prg_bar
@@ -212,6 +233,7 @@
 	viewclass: 'TableCell'
 	bar_pos_y: 'right'
     SelectableRecycleBoxLayout:
+        key_selection: 'selectable'
     	multiselect: True
         default_size: None, dp(56)
         default_size_hint: 1, None
@@ -339,3 +361,109 @@
 
         Label:
             size_hint: (1, 0.4)
+
+<StatisticsWindow>
+    orientation: "horizontal"
+    size_hint: (1, 1)
+
+    av_num: av_num
+    med_num: med_num
+    low_num: low_num
+    high_num: high_num
+    av_int: av_int
+    med_int: med_int
+    low_int: low_int
+    high_int: high_int
+    av_area: av_area
+    med_area: med_area
+
+
+    TabbedPanel:
+        do_default_tab: False
+
+        TabbedPanelItem:
+            font_name: 'font-awesome.otf'
+            text: '\uf610'
+
+        TabbedPanelItem:
+            font_name: 'font-awesome.otf'
+            text: '\uf080'
+
+    BoxLayout:
+        size_hint: (.3, 1)
+        orientation: 'vertical'
+
+        Label:
+            text: 'Foci Data'
+            font_size: 20
+		    bold: True
+
+        Label:
+            text: 'Average Number: '
+            id: av_num
+
+        Label:
+            text: 'Number Median: '
+            id: med_num
+
+        Label:
+            text: 'Lowest Number: '
+            id: low_num
+
+        Label:
+            text: 'Highest Number: '
+            id: high_num
+
+        Label:
+            text: 'Average Intensity: '
+            id: av_int
+
+        Label:
+            text: 'Intensity Median: '
+            id: med_int
+
+        Label:
+            text: 'Lowest Intensity: '
+            id: low_int
+
+        Label:
+            text: 'Highest Intensity'
+            id: high_int
+
+        Label:
+            text: 'Average Area'
+            id: av_area
+
+        Label:
+            text: 'Median Area'
+            id: med_area
+
+<CategorizationWindow>
+    orientation: 'vertical'
+
+    cat: cat
+
+    Label:
+        size_hint: (1, 0.1)
+        text: 'Please add one category per line'
+
+    TextInput:
+        id: cat
+        size_hint: (1, 0.8)
+        multiline: True
+        hint_text: 'blurry\nnoisy\netc.'
+        text: root.text
+
+    BoxLayout:
+        orientation: 'horizontal'
+        size_hint: (1, 0.1)
+
+        Button:
+            font_name: 'font-awesome.otf'
+            text: '\uf00c'
+            on_release: root.confirm_classification()
+
+        Button
+            font_name: 'font-awesome.otf'
+            text: '\uf00d'
+            on_release: root.cancel_classification()

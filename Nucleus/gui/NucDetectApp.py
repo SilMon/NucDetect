@@ -1,11 +1,13 @@
-'''
+"""
 Created on 11.11.2018
 
 @author: Romano Weiss
-'''
+"""
 import os
 import matplotlib
 import matplotlib.pyplot as plt
+import threading
+import sys
 from kivy.app import App
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.settings import Settings
@@ -22,7 +24,6 @@ from kivy.uix.recycleview.layout import LayoutSelectionBehavior
 from kivy.uix.button import Label
 from threading import Thread
 from kivy.garden.matplotlib.backend_kivyagg import FigureCanvasKivyAgg
-matplotlib.use('module://kivy.garden.matplotlib.backend_kivy')
 
 
 class NucDetect(App):
@@ -45,8 +46,7 @@ class NucDetect(App):
 
     def on_config_change(self, config, section, key, value):
         if config is self.config:
-            print("Config changed!")
-            pass
+            self.controller.on_config_change(config, section, key, value)
 
     def build_settings(self, settings):
         settings.add_json_panel("General Settings", self.config,
@@ -74,17 +74,11 @@ class NucDetect(App):
                             size_hint=(0.9, 0.9))
         self._popup.open()
 
-    def save_results(self):
-        pardir = os.getcwd()
-        pathpardir = os.path.join(os.path.dirname(pardir),
-                                  r"results")
-        os.makedirs(pathpardir, exist_ok=True)
-        pathresult = os.path.join(pathpardir,
-                                  "result - " + self.id + ".csv")
-        pass
-
     def dismiss_popup(self):
         self._popup.dismiss()
+
+    def on_stop(self):
+        self.controller.on_stop()
 
 
 class SaveFileDialog(FloatLayout):
@@ -104,6 +98,45 @@ class SelectableRecycleBoxLayout(FocusBehavior, LayoutSelectionBehavior,
 
         def __init__(self, **kwargs):
             super(SelectableRecycleBoxLayout, self).__init__(**kwargs)
+
+        def get_nodes(self):
+            nodes = self.get_selectable_nodes()
+            if self.nodes_order_reversed:
+                nodes = nodes[::-1]
+            if not nodes:
+                return None, None
+            selected = self.selected_nodes
+            if not selected:
+                self.select_node(nodes[0])
+                return None, None
+            if len(nodes) == 1:
+                return None, None
+            last = nodes.index(selected[-1])
+            self.clear_selection()
+            return last, nodes
+
+        def select_first(self):
+            self.clear_selection()
+            nodes = nodes = self.get_selectable_nodes()
+            self.select_node(nodes[0])
+
+        def select_next(self):
+            last, nodes = self.get_nodes()
+            if not nodes:
+                return
+            if last == len(nodes) - 1:
+                self.select_node(nodes[0])
+            else:
+                self.select_node(nodes[last + 1])
+
+        def select_previous(self):
+            last, nodes = self.get_nodes()
+            if not nodes:
+                return
+            if not last:
+                self.select_node(nodes[-1])
+            else:
+                self.select_node(nodes[last - 1])
 
 
 class TableView(BoxLayout):
@@ -146,6 +179,7 @@ class TableView(BoxLayout):
         if row > self.rows:
             for column in self.children:
                 column.set_row_count(row)
+            self.rows = row
         self.children[col].add_data(row, data, add_data)
 
     def add_data(self, data, add_data={}, row=None):
@@ -170,6 +204,7 @@ class TableView(BoxLayout):
                 if len(add_data) is not 0:
                     temp = add_data[num]
                 self.children[num].add_data(data=data[num], add_data=temp)
+            self.rows += 1
         elif row > self.rows:
             self.rows = row
             for col in range(self.cols):
@@ -179,6 +214,7 @@ class TableView(BoxLayout):
                 if len(add_data) is not 0:
                     temp = add_data[col]
                 self.add_data(col, row, data=data[col], add_data=temp)
+            self.rows = row
         else:
             for num in range(len(data)):
                 temp = {}
@@ -214,6 +250,18 @@ class TableView(BoxLayout):
     def clear_data(self):
         for col in self.children:
             col.clear_data()
+
+    def select_first(self):
+        for col in self.children:
+            col.select_first()
+
+    def select_next(self):
+        for col in self.children:
+            col.select_next()
+
+    def select_previous(self):
+        for col in self.children:
+            col.select_previous()
 
 
 class TableColumn(RecycleView):
@@ -273,6 +321,16 @@ class TableColumn(RecycleView):
             cell["text"] = ""
             cell["add_data"] = {}
 
+    def select_first(self):
+        print("First selected")
+        self.children[0].select_first()
+
+    def select_next(self):
+        self.children[0].select_next()
+
+    def select_previous(self):
+        self.children[0].select_previous()
+
 
 class TableCell(RecycleDataViewBehavior, Label):
     background = ObjectProperty((.30, .30, .30, .50))
@@ -288,20 +346,20 @@ class TableCell(RecycleDataViewBehavior, Label):
         super(TableCell, self).__init__(**kwargs)
 
     def refresh_view_attrs(self, rv, index, data):
-        ''' Catch and handle the view changes '''
+        """ Catch and handle the view changes """
         self.index = index
         return super(TableCell, self).refresh_view_attrs(
             rv, index, data)
 
     def on_touch_down(self, touch):
-        ''' Add selection on touch down '''
+        """ Add selection on touch down """
         if super(TableCell, self).on_touch_down(touch):
             return True
         if self.collide_point(*touch.pos) and self.selectable:
             return self.parent.select_with_touch(self.index, touch)
 
     def apply_selection(self, rv, index, is_selected):
-        ''' Respond to the selection of items in the view. '''
+        """ Respond to the selection of items in the view. """
         if self.parent is not None:
             if self.selectable:
                 self.selected = is_selected
@@ -351,9 +409,11 @@ class ResultWindow(BoxLayout):
             )
         elif id == "original":
             fig = self._change_figure(snaps["original"])
+        size = self.cnvs.size
         self.cnvs.figure = fig
         self.cnvs.draw()
-        self.canvas.ask_update()
+        self.cnvs.size = size
+        # TODO
 
     def _change_figure(self, img_array, gray=True):
         result = plt.figure()
@@ -365,20 +425,67 @@ class ResultWindow(BoxLayout):
         return result
 
 
-class AnalyserThread(Thread):
-    callback = None
-    key = ""
+class StatisticsWindow(BoxLayout):
+    """
+    Class for displaying statistics
+    """
+    av_area = ObjectProperty(None)
+    med_area = ObjectProperty(None)
+    av_num = ObjectProperty(None)
+    med_area = ObjectProperty(None)
+    low_area = ObjectProperty(None)
+    high_area = ObjectProperty(None)
+    av_int = ObjectProperty(None)
+    med_int = ObjectProperty(None)
+    low_int = ObjectProperty(None)
+    high_int = ObjectProperty(None)
+    stat = None
 
-    def __init__(self, target=None, callback=None, key="", *args, **kwargs):
-        super(AnalyserThread, self).__init__(target=target, *args, **kwargs)
-        self.callback = callback
-        self.key = key
+    def __init__(self, **kwargs):
+        super(StatisticsWindow, self).__init__(**kwargs)
 
-    def run(self):
-        self._target(self.key)
-        if self.callback is not None:
-            self.callback()
+    def set_statistics(self, statistic):
+        """
+        TODO
+        :return:
+        """
+        self.stat = statistic
 
+    def show_statistic(self):
+        self.av_area.text = self.stat["av_area"]
+        self.med_area.text = self.stat["med_area"]
+        self.av_num.text = self.stat["av_num"]
+
+
+class CategorizationWindow(BoxLayout):
+    cat = ObjectProperty(None)
+    detector = None
+    key = None
+    text = StringProperty("")
+
+    def __init__(self, **kwargs):
+        super(CategorizationWindow, self).__init__(**kwargs)
+
+    def set_detector(self, detector, image_key):
+        self.detector = detector
+        self.key = image_key
+
+    def load_categories(self, categories):
+        for cat in categories:
+            self.text += str(cat) + "\n"
+        print(self.text)
+
+    def confirm_classification(self):
+        if self.cat.text is not "":
+            print("Confirm")
+            categories = self.cat.text.split('\n')
+            print(self.key)
+            self.detector.categorize_image(self.key, categories)
+        self.cancel_classification()
+
+    def cancel_classification(self):
+        print("Dismiss")
+        self.parent.parent.parent.dismiss()
 
 class Controller(FloatLayout):
     result_table = ObjectProperty(None)
@@ -387,6 +494,8 @@ class Controller(FloatLayout):
     prg_bar_label = ObjectProperty(None)
     show_btn = ObjectProperty(None)
     save_btn = ObjectProperty(None)
+    stat_btn = ObjectProperty(None)
+    cat_btn = ObjectProperty(None)
 
     def __init__(self, **kwargs):
         super(Controller, self).__init__(**kwargs)
@@ -413,23 +522,22 @@ class Controller(FloatLayout):
                                          add_data=[{"file": file,
                                                     "path": path}]
                                          )
-        self.select_all_images()
 
     def remove_image_from_list(self, widget):
         self.image_list.remove_widget(widget)
 
     def analyze(self):
         if not self.reg_image:
-            print("No image selected!")
-        else:
-            print("Start analysis")
-            self.set_progress("Analysing " + str(self.reg_image["path"]),
-                              0)
-            key = self.reg_image["key"]
-            thread = AnalyserThread(target=self.analyze_image, key=key)
-            thread.start()
+            self.image_list.select_first()
+        self.set_progress("Analysing " + str(self.reg_image["name"]),
+                          0, 100)
+        key = self.reg_image["key"]
+        thread = Thread(target=self.analyze_image, args=(key,
+                                "Analysis finished -- Program ready",
+                                100, 100,))
+        thread.start()
 
-    def analyze_image(self, key):
+    def analyze_image(self, key, message, percent, maxi):
         self.detector.analyse_image(key)
         data = self.detector.get_output(key)
         self.result_table.clear_data()
@@ -437,49 +545,91 @@ class Controller(FloatLayout):
         for x in range(len(data["data"])):
             dat = data["data"][x]
             self.result_table.add_data(data=dat)
-        self.set_progress("Analysis finished -- Program ready", 100)
+        self.set_progress(message, percent, maxi=maxi)
         self.save_btn.disabled = False
         self.show_btn.disabled = False
+        self.stat_btn.disabled = False
+        self.cat_btn.disabled = False
 
-    def set_progress(self, text, progress):
-        self.prg_bar_label.text = text
+    def set_progress(self, text, progress, maxi, symbol=""):
+        self.prg_bar_label.text = text + " -- " + str(progress) + "% " + symbol
+        self.prg_bar.max = maxi
         self.prg_bar.value = progress
 
     def analyze_all(self):
-        pass
+        self.image_list.select_first()
+        thread = Thread(target=self._analyze_all,args=(
+                                0, self.image_list.rows,))
+        thread.start()
+
+    def _analyze_all(self, percent=0, maxi=0):
+        self.analyze_image(self.reg_image["key"],
+                           message="Analysing " + self.reg_image["name"],
+                           percent=percent, maxi=maxi)
+        if percent < maxi:
+            self.image_list.select_next()
+            self._analyze_all(percent=percent + 1, maxi=maxi)
+        if percent == maxi:
+            self.set_progress(text="Analysis finished -- Program ready",
+                              progress=maxi,
+                              maxi=maxi)
 
     def register_selection(self, data, add_data):
+        self.save_btn.disabled = True
+        self.show_btn.disabled = True
+        self.stat_btn.disabled = True
+        self.cat_btn.disabled = True
+        self.reg_image["name"] = data
         self.reg_image["path"] = add_data["path"]
         self.reg_image["key"] = self.detector.load_image(add_data["path"])
-
-    def select_all_images(self):
-        '''
-        self.image_list.select_column(0)
-        '''
 
     def show_result_image(self):
         rw = ResultWindow()
         rw.detector = self.detector
         rw.add_figure(self.reg_image["key"])
-        pop = Popup(title="Result Image", content=rw,size_hint=(0.9, 0.9))
+        pop = Popup(title="Result Image", content=rw, size_hint=(0.9, 0.9))
         pop.open()
 
     def save_results(self):
         key = self.reg_image["key"]
         save = Thread(target=self._save_results, args=(key,))
-        self.set_progress("Saving Results", 0)
+        self.set_progress("Saving Results", progress=0, symbol="", maxi=100)
         save.start()
 
     def _save_results(self, key):
         self.detector.create_ouput(key)
-        self.set_progress("Saving Results", 50)
+        self.set_progress("Saving Results", progress=50, symbol="", maxi=100)
         self.detector.save_result_image(key)
-        self.set_progress("Results saved -- Program ready", 100)
+        self.set_progress("Results saved -- Program ready", progress=100, symbol="", maxi=100)
 
+    def on_config_change(self, config, section, key, value):
+        if section == "Analysis":
+            self.detector.settings["key"] = value
+
+    def show_statistics(self):
+        sw = StatisticsWindow()
+        sw.set_statistics(self.detector.get_statistics(self.reg_image["key"]))
+        pop = Popup(title="Statistics", content=sw, size_hint=(0.9, 0.9))
+        pop.open()
+
+    def show_categorization(self):
+        cat = CategorizationWindow()
+        key = self.reg_image["key"]
+        cat.set_detector(self.detector, key)
+        categories = self.detector.get_categories(key)
+        if categories is not None:
+            cat.load_categories(categories)
+        pop = Popup(title="Categorization", content=cat, size_hint=(0.4, 0.6))
+        pop.open()
+
+    def on_stop(self):
+        self.detector.save_all_snaps()
 
 Factory.register('Root', cls=Controller)
 Factory.register('LoadDialog', cls=OpenFileDialog)
 Factory.register('SaveDialog', cls=SaveFileDialog)
 
 if __name__ == '__main__':
+    sys.setrecursionlimit(100000)
+    threading.stack_size(200000000)
     NucDetect().run()

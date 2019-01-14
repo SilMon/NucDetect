@@ -7,6 +7,13 @@
 		"key":"edge_ignore"
 	},
 	{
+		"type":"numeric",
+		"title":"Image Padding",
+		"desc":"Which image padding should be applied?",
+		"section": "Analysis",
+		"key":"padding"
+	},
+	{
 		"type":"bool",
 		"title":"Reduce oversegmentation",
 		"desc":"Should NucDetect try to reduce oversegmentation?",
