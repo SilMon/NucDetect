@@ -1,8 +1,8 @@
-'''
+"""
 Created on 02.10.2018
 
 @author: Romano Weiss
-'''
+"""
 from skimage.exposure import histogram
 RED = 0
 GREEN = 1
@@ -10,7 +10,7 @@ BLUE = 2
 
 
 def extract_channel(img_array, channel=2, gray=True):
-    '''
+    """
     Method to extract the channels of a color image. Image is expected to be
     in the RGB color space
 
@@ -24,7 +24,7 @@ def extract_channel(img_array, channel=2, gray=True):
 
     Returns:
     ndarray: The color channel as ndarray
-    '''
+    """
     channels = [0, 1, 2]
     channels.remove(channel)
     if gray:
@@ -38,7 +38,7 @@ def extract_channel(img_array, channel=2, gray=True):
 
 def get_minmax(img_array, percent=0, channel=RED,
                channel_only=False, gray=True):
-    '''
+    """
     Method to get the minimum and maximum of the given color channel.
 
     Keyword arguments:
@@ -55,7 +55,7 @@ def get_minmax(img_array, percent=0, channel=RED,
 
     Returns:
     tuple: (min_value,max_value)
-    '''
+    """
     if percent < 0 or percent > 1:
         raise ValueError("Invalid percentage provided!")
     hist = get_channel_histogram(img_array, channel, channel_only, gray)
@@ -82,7 +82,7 @@ def get_minmax(img_array, percent=0, channel=RED,
 
 def get_dynamic_range(img_array, channel=RED, channel_only=False,
                       gray=True, in_percent=True):
-    '''
+    """
     Method to obtain the dynamic range of a specific color channel
 
     Keyword arguments:
@@ -102,7 +102,7 @@ def get_dynamic_range(img_array, channel=RED, channel_only=False,
     (0-255)
     float: If in_percent=True - The dynamic range of the respective channel
     (0-1)
-    '''
+    """
     minmax = get_minmax(img_array, channel, channel_only, gray)
     dr = minmax[1] - minmax[0]
     if in_percent:
@@ -113,7 +113,7 @@ def get_dynamic_range(img_array, channel=RED, channel_only=False,
 
 def get_channel_histogram(img_array, channel=RED, channel_only=False,
                           gray=True, nbins=255):
-    '''
+    """
     Method to obtain the histogram of the respective channel.
 
     Keyword arguments:
@@ -127,7 +127,7 @@ def get_channel_histogram(img_array, channel=RED, channel_only=False,
 
     Returns:
     array: The calculated channel histogram as 2D array.
-    '''
+    """
     if channel_only:
         return histogram(img_array, nbins)
     else:
@@ -137,7 +137,7 @@ def get_channel_histogram(img_array, channel=RED, channel_only=False,
 
 def percentile_threshold(img_array, channel=RED,
                          channel_only=False, p0=0.8, ignore=0.0005):
-    '''
+    """
     Method to threshold a specific color channel globally. The overall
     threshold is determined by calculating the the 80. percentile.
     Thereby, ignore percent are excluded from the calculation to
@@ -156,5 +156,5 @@ def percentile_threshold(img_array, channel=RED,
 
     Returns:
     float: The calculated threshold (0.0-255.0)
-    '''
+    """
     return get_minmax(img_array, ignore, channel, channel_only, True)[1] * p0

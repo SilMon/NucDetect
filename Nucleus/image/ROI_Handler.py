@@ -1,8 +1,8 @@
-'''
+"""
 Created on 06.10.2018
 
 @author: Romano Weiss
-'''
+"""
 from skimage.draw import circle_perimeter
 from NucDetect.image.ROI import ROI
 from NucDetect.image import Channel
@@ -13,17 +13,17 @@ import numpy as np
 
 
 class ROI_Handler:
-    '''
+    """
     Class to detect and handle ROIs
-    '''
+    """
 
     def __init__(self, ident=None):
-        '''
+        """
         Constructor of the class.
 
         Keyword arguments:
         ident: A unique identifier of the handler
-        '''
+        """
         self.blue_ws = None
         self.red_ws = None
         self.green_ws = None
@@ -31,18 +31,19 @@ class ROI_Handler:
         self.blue_name = None
         self.red_name = "Red Foci"
         self.green_name = "Green Foci"
-        self.nuclei = [None] * 200
-        self.green = [None] * 500
-        self.red = [None] * 500
+        self.nuclei = [None] * 500
+        self.green = [None] * 2000
+        self.red = [None] * 2000
+        self.stat = {}
 
     def set_names(self, names):
-        '''
+        """
         Method to rename the image channels
 
         Keyword arguments:
         names(tuple): Tuple containing the names of the channels.
         Structure: (blue name, red name, green name)
-        '''
+        """
         if names is not None:
             if names[0] is not None:
                 self.blue_name = names[0]
@@ -57,9 +58,9 @@ class ROI_Handler:
         self.green_ws = watersheds[2]
 
     def analyse_image(self):
-        '''
+        """
         Method to analyse an image according to the given data
-        '''
+        """
         # Analysis of the blue channel
         for y in range(len(self.blue_ws)):
             for x in range(len(self.blue_ws[0])):
@@ -90,26 +91,6 @@ class ROI_Handler:
                         self.red[red] = roi
                     else:
                         self.red[red].add_point((x, y), red)
-        '''
-        Determination of over-segmentation of nuclei & removal
-        of falsely identified nuclei
-        '''
-        '''                
-        av_size = self._calculate_average_roi_area(self.nuclei)
-        rem = []
-        for roi1 in self.nuclei:
-            if roi1 is not None:
-                if len(roi1.points) < 0.75 * av_size:
-                    for roi2 in self.nuclei:
-                        if roi2 is not None and roi2 is not roi1:
-                            dist = self._calculate_roi_distance(roi1, roi2)
-                            width_diff = abs(roi1.width//2 + roi2.width//2)
-                            height_diff = abs(roi1.height//2 + roi2.height//2)
-                            if (width_diff >= dist[0]) and (height_diff >= dist[1]):
-                                roi1.merge(roi2)
-                                rem.append(roi2)
-        self.nuclei = [x for x in self.nuclei if x not in rem]
-        '''
         # Determine the green and red ROIs each nucleus includes
         gre_rem = []
         red_rem = []
@@ -127,9 +108,23 @@ class ROI_Handler:
                             red_rem.append(red)
             self.green = [x for x in self.green if x not in gre_rem]
             self.red = [x for x in self.red if x not in red_rem]
+        for nuc in self.nuclei:
+            if nuc is not None:
+                nuc.perform_foci_quality_check()
+        self.calculate_statistics()
+        self._check_roi_for_quality()
+
+    def _check_roi_for_quality(self):
+        for nucleus in self.nuclei:
+            if nucleus is not None:
+                nuc_stat = nucleus.calculate_statistics()
+                if nuc_stat["area"] <= self.stat["area average"]*0.2:
+                    self.nuclei.remove(nucleus)
+                elif nuc_stat["area"] >= self.stat["area average"] * 1.4:
+                    pass
 
     def _calculate_roi_distance(self, roi1, roi2):
-        '''
+        """
         Private method to calculate the distance between two given ROI
 
         Keyword arguments:
@@ -138,14 +133,14 @@ class ROI_Handler:
 
         Returns:
         tuple: The total horizontal and vertical distance in the form (x,y)
-        '''
+        """
         center1 = roi1.get_data().get("center")
         center2 = roi2.get_data().get("center")
         dist = (abs(center1[0]-center2[0]), abs(center1[1]-center2[1]))
         return dist
 
     def _calculate_average_roi_area(self, roi_list):
-        '''
+        """
         Private method to calculate the average area of the stored roi.
 
         Keyword arguments:
@@ -154,7 +149,7 @@ class ROI_Handler:
 
         Returns:
         int -- The calculated area
-        '''
+        """
         area = []
         for roi in roi_list:
             if roi is not None:
@@ -162,7 +157,7 @@ class ROI_Handler:
         return np.median(area)
 
     def _draw_roi(self, img_array):
-        '''
+        """
         Method to draw the ROI saved in this handler on the image
 
         Keyword arguments:
@@ -170,28 +165,36 @@ class ROI_Handler:
 
         Returns:
         ndarray -- The image with the drawn ROI
-        '''
+        """
         canvas = img_array.copy()
         for roi in self.nuclei:
             if roi is not None:
-                self._draw_rois(canvas, roi, (50, 50, 255))
+                green_num = 0
+                red_num = 0
                 for green in roi.green:
                     if green is not None:
                         self._draw_rois(canvas, green, (50, 255, 50))
+                        green_num += 1
                 for red in roi.red:
                     if red is not None:
                         self._draw_rois(canvas, red, (255, 50, 50))
+                        red_num += 1
+                if red_num > 0 or green_num > 0:
+                    self._draw_rois(canvas, roi, (50, 50, 255))
+                else:
+                    self._draw_rois(canvas, roi, (120, 120, 255))
+
         return canvas
 
     def _draw_rois(self, img_array, roi, col):
-        '''
+        """
         Private method to draw rois on a image.
 
         Keyword arguments:
         img_array(ndarray): The image to draw the ROI on.
         roi(ROI): The roi to draw on the image
         col(3D tuple): The color in which the roi should be highlighted
-        '''
+        """
         data = roi.get_data()
         rr, cc = circle_perimeter(
                                   data.get("center")[1], data.get("center")[0],
@@ -202,12 +205,12 @@ class ROI_Handler:
         img_array[rr, cc, :] = col
 
     def _annotate_image(self, ax, show=True):
-        '''
+        """
         Method to annotate the result image
 
         Keyword arguments:
         fig (figure): The figure to annotate
-        '''
+        """
         ind = 0
         for roi in self.nuclei:
             if roi is not None:
@@ -225,20 +228,86 @@ class ROI_Handler:
                 ind += 1
 
     def create_result_image(self, img_array, show=True):
-        '''
+        """
         Method to create the final output image.
 
         Returns:
         figure (matplotlib) -- The created result image
-        '''
+        """
         result = plt.figure()
         ax = result.add_subplot(111)
         ax.imshow(self._draw_roi(img_array))
         self._annotate_image(ax, show)
         return result
 
+    def calculate_statistics(self):
+        """
+        Method to calculate statistics about the saved ROIs
+        :return: dict -- A dictonary containing the data
+        """
+        area = []
+        av_area = 0
+        num = 0
+        num_red = []
+        av_num_red = 0
+        num_empty = 0
+        int_red = []
+        av_int_red = 0
+        num_green = []
+        av_num_green = 0
+        int_green = []
+        av_int_green = 0
+
+        for nucleus in self.nuclei:
+            if nucleus is not None:
+                temp_stat = nucleus.calculate_statistics()
+                tarea = temp_stat["area"]
+                area.append(tarea)
+                av_area += tarea
+                tnum_red = temp_stat["red_roi"]
+                num_red.append(tnum_red)
+                av_num_red += tnum_red
+                tint_red = temp_stat["red_av_int"]
+                int_red.append(tint_red)
+                av_int_red += tint_red
+                tnum_green = temp_stat["green_roi"]
+                num_green.append(tnum_green)
+                av_num_green += tnum_green
+                tint_green = temp_stat["green_av_int"]
+                int_green.append(tint_green)
+                av_int_green += tint_green
+                num += 1
+                if tnum_red is 0 and tnum_green is 0:
+                    num_empty += 1
+        if num > 0:
+            av_area /= len(area)
+            red = len(num_red)
+            av_num_red /= red
+            av_int_red /= red
+            green = len(num_red)
+            av_num_green /= green
+            av_int_green /= green
+
+        self.stat = {
+            "area": area,
+            "area average": av_area,
+            "number": num,
+            "empty": num,
+            "number red": num_red,
+            "number green": num_green,
+            "number red average": av_num_red,
+            "number green average": av_num_green,
+            "intensity red": int_red,
+            "intensity green": int_green,
+            "intensity red average": av_int_red,
+            "intensity green average": av_int_green,
+        }
+
+    def get_statistics(self):
+        return self.stat
+
     def get_data(self, console=False, formatted=False):
-        '''
+        """
         Method to obtain the data stored in this handler
 
         Keyword arguments:
@@ -249,7 +318,7 @@ class ROI_Handler:
 
         Returns:
         dict: A dictionary containing all stored information
-        '''
+        """
         if formatted:
             form = "{0:^15};{1:^15};{2:^15};{3:^15};{4:^15};{5:^15}"
         else:

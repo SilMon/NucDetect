@@ -1,25 +1,24 @@
-'''
+"""
 Created on 06.10.2018
 
 @author: Romano Weiss
-'''
+"""
 
 from NucDetect.image import Channel
 from operator import itemgetter
-from skimage.exposure.exposure import intensity_range
-from builtins import int
+import numpy as np
 
 
 class ROI:
-    '''
+    """
     Class to handle Regions Of Interest (R.O.I.)
-    '''
+    """
     NO_ENCLOSURE = -1
     PARTIAL_ENCLOSURE = 0
     FULL_ENCLOSURE = 1
 
     def __init__(self, points=None, chan=Channel.BLUE):
-        '''
+        """
         Constructor to initialize the ROI. Each ROI is initialized with no
         points and assumed to be in the blue channel if not set otherwise
 
@@ -29,7 +28,7 @@ class ROI:
 
         channel(int, optional): Describes the channel in which the ROI was
         found (default: channel.BLUE)
-        '''
+        """
         self.chan = chan
         self.coordinates = [0, 0, 0, 0]
         self.width = None
@@ -38,9 +37,10 @@ class ROI:
         self.points = []
         self.green = []
         self.red = []
+        self.stat = {}
         self.intensities = {}
-        self.average_intensity = 0
-        self.averarage_foci_intensity = []
+        self.min_foc_int = 40
+        self.min_border = 5
         if points is not None:
             self.points.append(points)
 
@@ -56,19 +56,19 @@ class ROI:
             raise ValueError("Type of other does not match!")
 
     def add_point(self, point, intensity):
-        '''
+        """
         Method to add a point to the ROI.
 
         Keyword arguments:
         point(2D tuple): Point to add to the ROI
-        '''
+        """
         self.points.append(point)
         self.intensities[point] = intensity
 
     def _calculate_center(self):
-        '''
+        """
         Private method to calculate the center of the ROI
-        '''
+        """
         if self.width is None:
             self.width = self._calculate_width()
         if self.height is None:
@@ -77,9 +77,9 @@ class ROI:
                        self.coordinates[2] + self.height//2)
 
     def _calculate_width(self):
-        '''
+        """
         Private method to calculate the width of the ROI
-        '''
+        """
         minX = min(self.points, key=itemgetter(0))[0]
         maxX = max(self.points, key=itemgetter(0))[0]
         self.coordinates[0] = minX
@@ -87,43 +87,34 @@ class ROI:
         self.width = maxX - minX
 
     def _calculate_height(self):
-        '''
+        """
         Private method to calculate the height of the ROI
-        '''
+        """
         minY = min(self.points, key=itemgetter(1))[1]
         maxY = max(self.points, key=itemgetter(1))[1]
         self.coordinates[2] = minY
         self.coordinates[3] = maxY
         self.height = maxY - minY
 
-    def _calculate_average_intensity(self):
-        '''
-        Private method to calculate the average point intensity of this ROI
-        '''
-        int_temp = 0
-        for key, inten in self.intensities:
-            int_temp += inten
-        self.average_intensity = int_temp/len(self.points)
-        return self.average_intensity
-
-    def _calculate_average_foci_intensity(self):
-        green_temp = 0
-        red_temp = 0
-        for roi in self.green:
-            green_temp += roi._calculate_average_intensity()
-        for roi in self.red:
-            red_temp += roi._calculate_average_intensity()
-        self.averarage_foci_intensity.append(green_temp/len(self.green))
-        self.averarage_foci_intensity.append(red_temp/len(self.red))
-        pass
+    def perform_foci_quality_check(self):
+        if self.chan is not Channel.BLUE:
+            raise Exception("A focus has no foci!")
+        for red in self.red:
+            stat = red.calculate_statistics()
+            if stat["av_int"] < self.min_foc_int:
+                self.red.remove(red)
+        for green in self.green:
+            stat = green.calculate_statistics()
+            if stat["av_int"] < self.min_foc_int:
+                self.green.remove(green)
 
     def merge(self, roi):
-        '''
+        """
         Method to merge to ROI.
 
         Keyword arguments:
         roi(ROI): The ROI to merge this instance with
-        '''
+        """
         self.points.extend(roi.points)
         self.green.extend(roi.green)
         self.red.extend(roi.red)
@@ -132,7 +123,7 @@ class ROI:
         self._calculate_center()
 
     def add_roi(self, roi):
-        '''
+        """
         Method to add a ROI to this instance. Is different from merge() by only
         adding the red and green points of the given ROI and ignoring its blue
         points
@@ -143,7 +134,7 @@ class ROI:
         Returns:
         bool -- True if the ROI could be added, False if the roi could not or
                 only partially be added
-        '''
+        """
         val = self._determine_enclosure(roi)
         enc = False
 
@@ -166,13 +157,13 @@ class ROI:
         return enc
 
     def get_data(self):
-        '''
+        """
         Method to access the data stored in this instance.
 
         Returns:
         dictionary --   A dictionary of the stored information.
                         Keys are: height, width, center, green roi and red roi.
-        '''
+        """
         if self.width is None:
             self._calculate_width()
         if self.height is None:
@@ -191,7 +182,7 @@ class ROI:
         return inf
 
     def _determine_enclosure(self, roi):
-        '''
+        """
         Method to determine if a ROI is enclosed by this ROI.
 
         Keyword arguments:
@@ -201,7 +192,7 @@ class ROI:
         int --  ROI.FULL_ENCOLURE if the given ROI is completely enclosed.
                 ROI.PARTIAL_ENCLOSURE if the given ROI is partially enclosed.
                 ROI.NO_ENCLOSURE if the given ROI is not enclosed.
-        '''
+        """
         # Use set intersection to determine enclosure
         a = set(self.points)
         b = set(roi.points)
@@ -211,3 +202,92 @@ class ROI:
             return ROI.PARTIAL_ENCLOSURE
         else:
             return ROI.NO_ENCLOSURE
+
+    def calculate_statistics(self):
+        """
+        Method to calculate the statistics regarding this ROI
+
+        :return: dict -- A dict containing the calculated data
+        """
+        if self.chan == Channel.BLUE and not self.stat:
+            red_av_int = 0
+            red_low_int = 255
+            red_high_int = 0
+            red_med_int = []
+            red_av_area = 0
+            red_low_area = 0
+            red_high_area = 0
+            green_av_int = 0
+            green_low_int = 255
+            green_high_int = 0
+            green_med_int = []
+            green_av_area = 0
+            green_low_area = 0
+            green_high_area = 0
+            for red in self.red:
+                stat = red.calculate_statistics()
+                t_int = stat["av_int"]
+                t_are = stat["area"]
+                red_av_int += t_int
+                red_med_int.append(t_int)
+                red_high_int = t_int if t_int > red_high_int else red_high_int
+                red_low_int = t_int if t_int < red_low_int else red_low_int
+                red_av_area += t_are
+                red_high_area = t_are if t_are > red_high_area else red_high_area
+                red_low_area = t_are if t_are < red_low_area else red_low_area
+            len_red = len(self.red) if len(self.red) > 0 else 1
+            red_av_area = red_av_area / len_red
+            red_av_int = red_av_int / len_red
+            red_med_int = np.median(red_med_int)
+            for green in self.green:
+                stat = green.calculate_statistics()
+                t_int = stat["av_int"]
+                t_are = stat["area"]
+                green_av_int += t_int
+                green_med_int.append(t_int)
+                green_high_int = t_int if t_int > green_high_int else green_high_int
+                green_low_int = t_int if t_int < green_low_int else green_low_int
+                green_av_area += t_are
+                green_low_area = t_are if t_are < green_low_area else green_low_area
+                green_high_area = t_are if t_are > green_high_area else green_high_area
+            len_green = len(self.green) if len(self.green) > 0 else 1
+            green_av_area = green_av_area / len_green
+            green_av_int = green_av_int / len_green
+            green_med_int = np.median(green_med_int)
+            self.stat = {
+                "area": len(self.points),
+                "red_roi": len(self.red),
+                "green_roi": len(self.green),
+                "red_av_int": red_av_int,
+                "red_med_int": red_med_int,
+                "red_high_int": red_high_int,
+                "red_low_int": red_low_int,
+                "red_av_area": red_av_area,
+                "red_low_area": red_low_area,
+                "red_high_area": red_high_area,
+                "green_av_int": green_av_int,
+                "green_med_int": green_med_int,
+                "green_high_int": green_high_int,
+                "green_low_int": green_low_int,
+                "green_av_area": green_av_area,
+                "green_low_area": green_low_area,
+                "green_high_area": green_high_area
+            }
+        elif not self.stat:
+            av_int = 0
+            low_int = 255
+            high_int = 0
+            med_int = []
+            for key, val in self.intensities:
+                av_int += val
+                med_int.append(val)
+                low_int = val if val < low_int else low_int
+                high_int = val if val > high_int else high_int
+            self.stat = {
+                "low_int": low_int,
+                "high_int": high_int,
+                "av_int": av_int / len(self.points),
+                "med_int": med_int.sort(),
+                "area": len(self.points)
+            }
+        return self.stat
