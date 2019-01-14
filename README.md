@@ -1,4 +1,4 @@
-# *NucDetect* - A python package for Detection and Quantification of DNA Doublestrand Breaks
+# *NucDetect* - A python package for Detection and Quantification of DNA Doublestrand Breaks (v0.3)
 
 NucDetect is a Python package to detect and quantify intranuclear DNA repair protein foci.
 
