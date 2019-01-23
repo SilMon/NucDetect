@@ -14,8 +14,7 @@ Requirements
 * numpy>=1.13.3
 * scikit-image>=0.15.dev0
 * matplotlib >= 3.0.2
-* kivy >=1.10.1
-* kivy-garden >= 1.10.1 (install matplotlib)
+* PyQT5 >= 5.11.3
 
 FontAwesome is used for icon display (http://fortawesome.github.io/Font-Awesome/)
 
