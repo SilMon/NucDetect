@@ -16,6 +16,7 @@ Requirements
 * matplotlib >= 3.0.2
 * PyQT5 >= 5.11.3
 * Pillow
+* qtawesome
 
 FontAwesome is used for icon display (http://fortawesome.github.io/Font-Awesome/)
 
