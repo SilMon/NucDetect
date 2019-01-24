@@ -3,3 +3,4 @@ numpy>=1.13.3
 skimage>=0.15.dev0
 matplotlib>=3.0.2
 pyqt5>=5.11.3
+pillow
