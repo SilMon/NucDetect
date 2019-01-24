@@ -15,6 +15,7 @@ Requirements
 * scikit-image>=0.15.dev0
 * matplotlib >= 3.0.2
 * PyQT5 >= 5.11.3
+* Pillow
 
 FontAwesome is used for icon display (http://fortawesome.github.io/Font-Awesome/)
 
