@@ -1,0 +1,55 @@
+{
+  "General": [
+    {
+      "title": "Test Slider",
+      "desc": "Test Description",
+      "type": "slider",
+      "value": 50,
+      "values": {
+        "min": 0,
+        "max": 100,
+        "step": 2
+      }
+    },
+    {
+      "title": "Test Text",
+      "desc": "Test Description",
+      "type": "text",
+      "value": "Blah blah blah Mr. Freeman"
+    },
+    {
+      "title": "Test Combo",
+      "desc": "Test Description",
+      "type": "combo",
+      "value": "second",
+      "values": "first,second,third"
+    }
+  ],
+  "Processing": [
+    {
+      "title": "Test Slider",
+      "desc": "Test Description",
+      "type": "slider",
+      "value": 50,
+      "values": {
+        "min": 0,
+        "max": 100,
+        "step": 2
+      }
+    },
+    {
+      "title": "Test Text",
+      "desc": "Test Description",
+      "type": "text",
+      "value": "Blah blah blah Mr. Freeman"
+    },
+    {
+      "title": "Test Combo",
+      "desc": "Test Description",
+      "type": "combo",
+      "value": "second",
+      "values": "first,second,third"
+    }
+  ]
+}
+
