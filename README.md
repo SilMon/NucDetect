@@ -28,4 +28,5 @@ $ git clone https://github.com/SilMon/NucDetect.git
 ```
 
 Author: Romano Weiss
+
 Co-Author: Stefan Rödiger
