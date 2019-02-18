@@ -3,24 +3,26 @@ Created on 15.10.2018
 
 @author: Romano Weiss
 """
+import hashlib
+import os
 import pickle
-from skimage import io
-from NucDetect.image import Channel
-from skimage.filters import sobel, threshold_yen,threshold_isodata, laplace
-from skimage.morphology import watershed
-from skimage.feature import peak_local_max
-from skimage.exposure import histogram
-from scipy import ndimage as ndi
-from NucDetect.image.ROI_Handler import ROI_Handler
+import time
+
 import matplotlib.pyplot as plt
 import numpy as np
-import os
-import hashlib
-import time
-from skimage.feature._canny import canny
-from skimage.transform.hough_transform import hough_ellipse
+from scipy import ndimage as ndi
+from skimage import io
 from skimage.draw.draw import ellipse
+from skimage.exposure import histogram
+from skimage.feature import peak_local_max
+from skimage.feature._canny import canny
+from skimage.filters import sobel, laplace
+from skimage.morphology import watershed
 from skimage.morphology.binary import binary_dilation, binary_opening
+from skimage.transform.hough_transform import hough_ellipse
+
+from NucDetect.image import Channel
+from NucDetect.image.ROI_Handler import ROI_Handler
 
 
 class Detector:
@@ -136,6 +138,7 @@ class Detector:
         :return: None
         """
         print("Analysis started")
+        start = time.time()
         snap = self.load_snaps(which)
         if snap is not None:
             self.snaps[which] = snap
@@ -143,37 +146,40 @@ class Detector:
             img = self.images[which]
             names = img[1]
             img_array = img[0]
-            #img_array = self._add_image_padding(img[0], dim=3, padding=self.settings["padding"])
+            # img_array = self._add_image_padding(img[0], dim=3, padding=self.settings["padding"])
             start = time.time()
             channels = self._get_channels(img_array)
             if self.assessment:
                 qual = self._estimate_image_quality(channels)
-                print("Quality assessed")
             handler = ROI_Handler(ident=which)
             handler.set_names(names)
             if self.settings["hough"]:
-                print("Hough started: " + str(time.time() - start))
                 thr_chan, params = self._detect_regions(channels, accuracy=20,
                                                         threshold=250, min_size_1=50, min_size_2=2, min_size_3=2,
                                                         max_size_1=300, max_size_2=10, max_size_3=10)
-                print("Labelling started: " + str(time.time() - start))
-                markers = self._perform_labelling(thr_chan)
-                handler.set_watersheds(markers)
+                markers, lab_nums = self._perform_labelling(thr_chan)
+                handler.set_data(markers, lab_nums, channels)
             else:
                 thr_chan = self._get_thresholded_channels(channels)
+                '''
                 edms = self._calculate_edm(thr_chan)
                 loc_max = self._calculate_local_maxima(thr_chan, edms)
-                markers = self._perform_labelling(loc_max)
+                '''
+                markers, lab_nums = self._perform_labelling(thr_chan)
+                '''
                 watersheds = self.perform_watershed(edms, markers, thr_chan)
-                handler.set_watersheds(watersheds)
-            print("Handler started: " + str(time.time() - start))
+                '''
+                handler.set_data(markers, lab_nums=lab_nums, orig=channels)
             handler.analyse_image()
+            handler.calculate_statistics()
             # result = handler.create_result_image(self._remove_image_padding(img_array))
-            result = handler.create_result_image(img_array)
+            result_qt = handler.create_result_image_as_qtimage(img_array)
+            result_mpl = handler.create_result_image_as_mplfigure(img_array)
             cur_snaps = {
                 "id": which,
                 "handler": handler,
-                "result": result,
+                "result_qt": result_qt,
+                "result_mpl": result_mpl,
                 "original": img_array,
                 "settings": self.settings,
                 "categories": []
@@ -187,20 +193,23 @@ class Detector:
                 if self.settings["hough"]:
                     cur_snaps["params"] = params
                 else:
-                    cur_snaps["edm"] = edms
-                    cur_snaps["max"] = loc_max
-                    cur_snaps["watershed"] = watersheds
+                    cur_snaps["edm"] = thr_chan
+                    cur_snaps["max"] = thr_chan
+                    cur_snaps["watershed"] = thr_chan
             cur_snaps["time"] = "{0:.2f} sec".format(time.time() - start)
             if len(self.snaps) == save_threshold:
                 for x in range(save_threshold-1):
                     self.save_snaps(self.keys[x])
-            else:
-                self.snaps[which] = cur_snaps
-            print("Analysis complete in " + "{0:.2f} sec".format(time.time() - start))
+            self.snaps[which] = cur_snaps
+        print("Analysis complete in " + "{0:.2f} sec".format(time.time() - start))
 
     def save_all_snaps(self):
         for key in self.images:
-            self.save_snaps(key, clear=False)
+            try:
+                self.save_snaps(key, clear=False)
+            except KeyError as ke:
+                    # TODO
+                pass
 
     def save_snaps(self, key, clear=True):
         """
@@ -215,8 +224,10 @@ class Detector:
         os.makedirs(pathpardir, exist_ok=True)
         pathsnap = os.path.join(pathpardir,
                                   str(key) + ".snap")
+        del self.snaps[key]["result_qt"]
         pickle.dump(self.snaps[key], open(pathsnap, "wb"))
         if clear:
+            print("Image deleted: " + key)
             del self.snaps[key]
             del self.images[key]
             self.keys.remove(key)
@@ -228,9 +239,6 @@ class Detector:
         :param key: The md5 hash of the image
         :return: None if the file does not exist or the settings were changed else +1 if the file could be loaded
         """
-
-        #TODO Fehlerhaft
-
         pardir = os.getcwd()
         pathpardir = os.path.join(os.path.dirname(pardir),
                                   r"results/snaps")
@@ -243,6 +251,7 @@ class Detector:
             if os.path.isfile(pathsnap):
                 snap = pickle.load(open(pathsnap, "rb"))
                 if self.settings == snap["settings"]:
+                    snap["result_qt"] = snap["handler"].create_result_image_as_qtimage(snap["original"])
                     return snap
                 else:
                     return None
@@ -336,18 +345,15 @@ class Detector:
         self.snaps.get(which)["handler"].get_data(console=False, formatted=formatted)
 
     def get_output(self, which):
+        print("Current key: " + str(which))
+        if self.snaps.get(which) is None:
+            print("Fail key: "  + str(which))
+            print(self.snaps)
         return self.snaps.get(which)["handler"].get_data()
 
     def get_statistics(self, which):
-        return self.snaps.get(which)["handler"].calculate_statistics()
+        return self.snaps.get(which)["handler"].get_statistics()
 
-    def get_result_image_as_figure(self, which):
-        """
-        Method to get the result image as figure
-        :param which: The md5 hash of the image
-        :return: The annotated result image as matplotlib.figure
-        """
-        return self.snaps.get(which)["result"]
 
     def show_result_image(self, which):
         """
@@ -384,7 +390,7 @@ class Detector:
         os.makedirs(pathpardir, exist_ok=True)
         pathresult = os.path.join(pathpardir,
                                   "result - " + str(which) + ".png")
-        fig = self.snaps.get(which)["handler"].create_result_image(
+        fig = self.snaps.get(which)["handler"].create_result_image_as_mplfigure(
               self.images.get(which)[0], show=False)
         fig.axes[0].get_xaxis().set_visible(False)
         fig.axes[0].get_yaxis().set_visible(False)
@@ -392,6 +398,7 @@ class Detector:
                     bbox_inches="tight",
                     pad_inches=0)
         plt.close()
+        return pathresult
 
     def _get_channels(self, img):
         """
@@ -421,7 +428,6 @@ class Detector:
         tuple  -- A tuple containing the thresholds for each channel
         in the order blue, red, green
         """
-        # TODO
         edges_blue = (sobel(channels[0]) * 255).astype("uint8")
         det = []
         ch_blue_bin = edges_blue > 5
@@ -459,46 +465,26 @@ class Detector:
                     points.append((y-1, x))
         return nuc if len(nuc) > 0 else None
 
-    def _calculate_local_region_threshold(self, nuclei, channel,
-                                          ign=0.0005, percent=0.8, minimum=40):
+    def _calculate_local_region_threshold(self, nuclei, channel):
         chan = np.zeros(shape=channel.shape)
         for nuc in nuclei:
             thresh = []
             for p in nuc:
-                if channel[p[0]][p[1]] > minimum:
+                if channel[p[0]][p[1]]:
                     thresh.append((p, channel[p[0]][p[1]]))
             if thresh:
-                thresh_np, offset = self._create_numpy_from_point_list(thresh)
-                # edges = (sobel(thresh_np) * 255).astype("uint8")
+                thresh_np, offset = self.create_numpy_from_point_list(thresh)
                 edges = canny(thresh_np)
                 if np.max(edges) > 0:
-                    #th = threshold_yen(edges)
-                    #chan_bin = thresh_np > th
                     chan_fill = ndi.binary_fill_holes(edges)
                     chan_open = ndi.binary_opening(chan_fill)
                     self._imprint_data_into_channel(chan, chan_open, offset)
-                '''
-                hist = np.histogram(thresh, bins=255)
-                
-                ignore = ign * len(thresh) + 1
-                max_val = 255
-                max_pix = 0
-                for i in reversed(hist[0]):
-                    max_pix += i
-                    if max_pix >= ignore:
-                        break
-                    else:
-                        max_val -= 1
-                local_threshold = max_val * percent if max_val * percent > minimum else minimum
-                for p in nuc:
-                    chan[p[0]][p[1]] = channel[p[0]][p[1]] > local_threshold
-                '''
         return chan
 
-    def _check_threshold_for_values(self, list):
-        for row in list:
-            for int in row:
-                if int > 0:
+    def _check_threshold_for_values(self, lst):
+        for row in lst:
+            for i in row:
+                if i > 0:
                     return True
         return False
 
@@ -508,13 +494,12 @@ class Detector:
                 if data[i][ii] is not 0:
                     channel[i + offset[0]][ii+offset[1]] = data[i][ii]
 
-    def _create_numpy_from_point_list(self, list):
-        # TODO
+    def create_numpy_from_point_list(self, lst):
         min_y = 0xffffffff
         max_y = 0
         min_x = 0xffffffff
         max_x = 0
-        for point in list:
+        for point in lst:
             if point[0][1] > max_x:
                 max_x = point[0][1]
             if point[0][1] < min_x:
@@ -526,7 +511,7 @@ class Detector:
         y_dist = max_y - min_y + 1
         x_dist = max_x - min_x + 1
         numpy = np.zeros((y_dist, x_dist), dtype=np.uint8)
-        for p in list:
+        for p in lst:
             numpy[p[0][0]-min_y, p[0][1]-min_x] = p[1]
         return numpy, (min_y, min_x)
 
@@ -567,23 +552,14 @@ class Detector:
         Returns:
         tuple -- A tuple containing the thresholded channel and a list with the parameters of all detected ellipses
         """
-        start = time.time()
-        print("Ellipse detection started")
-        print("Edge detection started")
         edges = self._detect_edges(self._add_image_padding(channel))
         # Fill holes to reduce number of edges --> time saving
         edges = binary_dilation(edges)
         edges = binary_dilation(edges)
         filled = ndi.binary_fill_holes(edges)
         filled = self._detect_edges(filled)
-        print("Edge detection finished")
-        plt.imshow(filled, cmap='gray')
-        plt.show()
-        print("Hough transform started")
         hough = hough_ellipse(filled, accuracy, threshold, min_size, max_size)
-        print("Hough transform finished")
         hough.sort(order="accumulator")
-        print(time.time() - start)
         params = []
         # Detect max_number ellipses in the image
         for y in range(min(max_number, len(hough))):
@@ -654,6 +630,9 @@ class Detector:
         except Exception:
             return ""
 
+    def load_available_categories(self):
+        pass
+
     def _detect_edges(self, channel, sigma=2, low_threshold=0.55, high_threshold=0.8):
         """
         Privat method to detect the edges of the given channel via the canny operator.
@@ -721,10 +700,10 @@ class Detector:
         tuple -- A tuple containing the labeled local maxima of each channel
         in the order blue, red, green
         """
-        markers_blue = ndi.label(loc_max[0])[0]
-        markers_red = ndi.label(loc_max[1])[0]
-        markers_green = ndi.label(loc_max[2])[0]
-        return markers_blue, markers_red, markers_green
+        markers_blue, lab_num_blue = ndi.label(loc_max[0])
+        markers_red, lab_num_red = ndi.label(loc_max[1])
+        markers_green, lab_num_green = ndi.label(loc_max[2])
+        return (markers_blue, markers_red, markers_green), (lab_num_blue, lab_num_red, lab_num_green)
 
     def perform_watershed(self, edms, markers, thr_chan):
         """
