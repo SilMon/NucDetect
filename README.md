@@ -1,9 +1,12 @@
-# *NucDetect* - A python package for Detection and Quantification of DNA Doublestrand Breaks (v0.3)
+# *NucDetect* - A python package for Detection and Quantification of DNA Doublestrand Breaks (v0.5)
 
 NucDetect is a Python package to detect and quantify intranuclear DNA repair protein foci.
 
 ### Note
 The current release is a very early alpha version. Please report report any detected bugs and/or improvement suggestions.
+
+### Warning
+NucDetect currently does not support screen resolutions higher than 1920 × 1080 pixels. If you are using a monitor with a higher resolution, you might encounter visual bugs.
 
 Requirements
 ============
@@ -17,8 +20,6 @@ Requirements
 * PyQT5 >= 5.11.3
 * Pillow
 * qtawesome
-
-FontAwesome is used for icon display (http://fortawesome.github.io/Font-Awesome/)
 
 Run the following commands to clone and install from GitHub.
 
