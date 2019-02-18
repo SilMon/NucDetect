@@ -4,6 +4,7 @@ Created on 02.10.2018
 @author: Romano Weiss
 """
 from skimage.exposure import histogram
+import numpy as np
 RED = 0
 GREEN = 1
 BLUE = 2

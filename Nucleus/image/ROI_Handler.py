@@ -3,13 +3,22 @@ Created on 06.10.2018
 
 @author: Romano Weiss
 """
-from skimage.draw import circle_perimeter
-from NucDetect.image.ROI import ROI
-from NucDetect.image import Channel
-import os
 import datetime
+import os
+
 import matplotlib.pyplot as plt
 import numpy as np
+from PIL import Image
+from PIL.ImageQt import ImageQt
+from PyQt5.QtCore import QPoint, Qt, QRectF
+from PyQt5.QtGui import QPainter, QStaticText, QTextOption, QColor, QBrush
+from scipy import ndimage as ndi
+from skimage.draw import circle_perimeter
+from skimage.feature import peak_local_max
+from skimage.morphology import watershed
+
+from NucDetect.image import Channel
+from NucDetect.image.ROI import ROI
 
 
 class ROI_Handler:
@@ -24,16 +33,22 @@ class ROI_Handler:
         Keyword arguments:
         ident: A unique identifier of the handler
         """
-        self.blue_ws = None
-        self.red_ws = None
-        self.green_ws = None
+        self.blue_markers = None
+        self.red_markers = None
+        self.green_markers = None
+        self.blue_lab_nums = None
+        self.red_lab_nums = None
+        self.green_lab_nums = None
+        self.blue_orig = None
+        self.red_orig = None
+        self.green_orig = None
         self.id = ident
         self.blue_name = None
         self.red_name = "Red Foci"
         self.green_name = "Green Foci"
-        self.nuclei = [None] * 500
-        self.green = [None] * 2000
-        self.red = [None] * 2000
+        self.nuclei = None
+        self.green = None
+        self.red = None
         self.stat = {}
 
     def set_names(self, names):
@@ -52,45 +67,39 @@ class ROI_Handler:
             if names[2] is not None:
                 self.green_name = names[2]
 
-    def set_watersheds(self, watersheds):
-        self.blue_ws = watersheds[0]
-        self.red_ws = watersheds[1]
-        self.green_ws = watersheds[2]
+    def set_data(self, markers, lab_nums, orig):
+        self.blue_orig = orig[0]
+        self.red_orig = orig[1]
+        self.green_orig = orig[2]
+        self.blue_markers = markers[0]
+        self.red_markers = markers[1]
+        self.green_markers = markers[2]
+        self.blue_lab_nums = lab_nums[0]
+        self.red_lab_nums = lab_nums[1]
+        self.green_lab_nums = lab_nums[2]
 
     def analyse_image(self):
         """
         Method to analyse an image according to the given data
         """
         # Analysis of the blue channel
-        for y in range(len(self.blue_ws)):
-            for x in range(len(self.blue_ws[0])):
-                blue = self.blue_ws[y][x]
-                green = self.green_ws[y][x]
-                red = self.red_ws[y][x]
-                # Detection of nuclei
-                if blue != 0:
-                    if self.nuclei[blue] is None:
-                        roi = ROI()
-                        roi.add_point((x, y), blue)
-                        self.nuclei[blue] = roi
-                    else:
-                        self.nuclei[blue].add_point((x, y), blue)
-                # Detection of green foci
-                if green != 0:
-                    if self.green[green] is None:
-                        roi = ROI(chan=Channel.GREEN)
-                        roi.add_point((x, y), green)
-                        self.green[green] = roi
-                    else:
-                        self.green[green].add_point((x, y), green)
-                # Detection of red foci
-                if red != 0:
-                    if self.red[red] is None:
-                        roi = ROI(chan=Channel.RED)
-                        roi.add_point((x, y), red)
-                        self.red[red] = roi
-                    else:
-                        self.red[red].add_point((x, y), red)
+        self.nuclei = self.extract_roi_from_channel(
+            channel=self.blue_markers,
+            orig=self.blue_orig,
+            num_labels=self.blue_lab_nums
+        )
+        self.red = self.extract_roi_from_channel(
+            channel=self.red_markers,
+            orig=self.red_orig,
+            num_labels=self.red_lab_nums,
+            channel_type=Channel.RED
+        )
+        self.green = self.extract_roi_from_channel(
+            channel=self.green_markers,
+            orig=self.green_orig,
+            num_labels=self.green_lab_nums,
+            channel_type=Channel.GREEN
+        )
         # Determine the green and red ROIs each nucleus includes
         gre_rem = []
         red_rem = []
@@ -115,46 +124,100 @@ class ROI_Handler:
         self._check_roi_for_quality()
 
     def _check_roi_for_quality(self):
+        rem_list = []
+        add_list = []
         for nucleus in self.nuclei:
             if nucleus is not None:
                 nuc_stat = nucleus.calculate_statistics()
                 if nuc_stat["area"] <= self.stat["area average"]*0.2:
                     self.nuclei.remove(nucleus)
-                elif nuc_stat["area"] >= self.stat["area average"] * 1.4:
-                    pass
+        self.calculate_statistics()
+        for nucleus in self.nuclei:
+            if nucleus is not None:
+                nuc_stat = nucleus.calculate_statistics()
+                if nuc_stat["area"] >= self.stat["area average"] * 1.2:
+                    index = self.nuclei.index(nucleus)
+                    points, offset = self.create_numpy_from_point_list(nucleus.points)
+                    gr_rois = []
+                    re_rois = []
+                    for gr in nucleus.green:
+                        gr_rois.append(gr)
+                    for re in nucleus.red:
+                        re_rois.append(re)
+                    points_edm = ndi.distance_transform_edt(points)
+                    points_loc_max = peak_local_max(points_edm, labels=points, indices=False,
+                                                    footprint=np.ones((91, 91)))
+                    points_labels, num_labels = ndi.label(points_loc_max)
+                    points_ws = watershed(-points_edm, points_labels, mask=points)
+                    nucs = self.extract_roi_from_channel(points_ws, self.blue_orig, num_labels, offset=offset)
+                    # Check which of the foci belongs to which nucleus
+                    gre_rem = []
+                    red_rem = []
+                    for nuc in nucs:
+                        gre_rem.clear()
+                        red_rem.clear()
+                        if nuc is not None:
+                            for gre in gr_rois:
+                                if gre is not None:
+                                    if nuc.add_roi(gre):
+                                        gre_rem.append(gre)
+                            for red in re_rois:
+                                if red is not None:
+                                    if nuc.add_roi(red):
+                                        red_rem.append(red)
+                        gr_rois = [x for x in gr_rois if x not in gre_rem]
+                        re_rois = [x for x in re_rois if x not in red_rem]
+                    rem_list.append(nucleus)
+                    for nuc in nucs:
+                        add_list.append((index, nuc))
+        for n in add_list:
+            self.nuclei.insert(n[0], n[1])
+        for rem_nuc in rem_list:
+            self.nuclei.remove(rem_nuc)
+        for nucleus in self.nuclei:
+            nucleus.perform_foci_quality_check()
 
-    def _calculate_roi_distance(self, roi1, roi2):
-        """
-        Private method to calculate the distance between two given ROI
+    def extract_roi_from_channel(self, channel, orig, num_labels, channel_type=Channel.BLUE, offset=None):
+        rois = [None] * (num_labels+1)
+        for y in range(len(channel)):
+            for x in range(len(channel[0])):
+                lab = channel[y][x]
+                if lab != 0:
+                    if rois[lab] is None:
+                        roi = ROI(chan=channel_type)
+                        if offset is None:
+                            roi.add_point((x, y), orig[y][x])
+                        else:
+                            roi.add_point((x + offset[1], y + offset[0]), orig[y + offset[0]][x + offset[1]])
+                        rois[lab] = roi
+                    else:
+                        if offset is None:
+                            rois[lab].add_point((x, y), orig[y][x])
+                        else:
+                            rois[lab].add_point((x + offset[1], y + offset[0]), orig[y + offset[0]][x + offset[1]])
+        del rois[0]
+        return rois
 
-        Keyword arguments:
-        roi1(ROI): The first ROI
-        roi2(ROI): The second ROI
-
-        Returns:
-        tuple: The total horizontal and vertical distance in the form (x,y)
-        """
-        center1 = roi1.get_data().get("center")
-        center2 = roi2.get_data().get("center")
-        dist = (abs(center1[0]-center2[0]), abs(center1[1]-center2[1]))
-        return dist
-
-    def _calculate_average_roi_area(self, roi_list):
-        """
-        Private method to calculate the average area of the stored roi.
-
-        Keyword arguments:
-        roi_list(list of ROI):  List which contains the ROI to use for the
-                                calculation
-
-        Returns:
-        int -- The calculated area
-        """
-        area = []
-        for roi in roi_list:
-            if roi is not None:
-                area.append(len(roi.points))
-        return np.median(area)
+    def create_numpy_from_point_list(self, lst):
+        min_y = 0xffffffff
+        max_y = 0
+        min_x = 0xffffffff
+        max_x = 0
+        for point in lst:
+            if point[0] > max_x:
+                max_x = point[0]
+            if point[0] < min_x:
+                min_x = point[0]
+            if point[1] > max_y:
+                max_y = point[1]
+            if point[1] < min_y:
+                min_y = point[1]
+        y_dist = max_y - min_y + 1
+        x_dist = max_x - min_x + 1
+        numpy = np.zeros((y_dist, x_dist), dtype=np.uint8)
+        for p in lst:
+            numpy[p[1]-min_y, p[0]-min_x] = True
+        return numpy, (min_y, min_x)
 
     def _draw_roi(self, img_array):
         """
@@ -227,7 +290,7 @@ class ROI_Handler:
                             )
                 ind += 1
 
-    def create_result_image(self, img_array, show=True):
+    def create_result_image_as_mplfigure(self, img_array, show=True):
         """
         Method to create the final output image.
 
@@ -240,70 +303,89 @@ class ROI_Handler:
         self._annotate_image(ax, show)
         return result
 
+    def create_result_image_as_qtimage(self, img_array):
+        i = Image.fromarray(self._draw_roi(img_array), mode="RGB")
+        img = ImageQt(i)
+        painter = QPainter()
+        painter.begin(img)
+        ind = 0
+        for roi in self.nuclei:
+            if roi is not None:
+                tex = "<font color=\"white\">In:{0:>6}<br>R:{1:>6}<br>G:{2:>6}</font>".format(str(ind),
+                                                             str(len(roi.red)),
+                                                             str(len(roi.green)))
+                dat = roi.get_data()
+                c = dat["center"]
+                dim = (dat["width"], dat["height"])
+                rect = QRectF(c[0]-20, c[1]-20, 40, 40)
+                painter.fillRect(rect, QBrush(QColor(100, 100, 0, 40)))
+                center = QPoint(c[0]-18, c[1]-18)
+                text = QStaticText()
+                text.setTextFormat(Qt.RichText)
+                opt = QTextOption()
+                opt.setAlignment(Qt.AlignLeft)
+                opt.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
+                text.setTextOption(opt)
+                text.setText(tex)
+                painter.drawStaticText(center, text)
+                ind += 1
+        painter.end()
+        return img
+
     def calculate_statistics(self):
         """
         Method to calculate statistics about the saved ROIs
         :return: dict -- A dictonary containing the data
         """
+        # TODO aufräumen
         area = []
-        av_area = 0
-        num = 0
+        num_nuc = 0
         num_red = []
-        av_num_red = 0
         num_empty = 0
         int_red = []
-        av_int_red = 0
+        int_red_tot = []
         num_green = []
-        av_num_green = 0
         int_green = []
-        av_int_green = 0
+        int_green_tot = []
 
         for nucleus in self.nuclei:
             if nucleus is not None:
                 temp_stat = nucleus.calculate_statistics()
-                tarea = temp_stat["area"]
-                area.append(tarea)
-                av_area += tarea
-                tnum_red = temp_stat["red_roi"]
-                num_red.append(tnum_red)
-                av_num_red += tnum_red
-                tint_red = temp_stat["red_av_int"]
-                int_red.append(tint_red)
-                av_int_red += tint_red
-                tnum_green = temp_stat["green_roi"]
-                num_green.append(tnum_green)
-                av_num_green += tnum_green
-                tint_green = temp_stat["green_av_int"]
-                int_green.append(tint_green)
-                av_int_green += tint_green
-                num += 1
-                if tnum_red is 0 and tnum_green is 0:
+                area.append(temp_stat["area"])
+                num_red.append(temp_stat["red_roi"])
+                int_red.append(temp_stat["red_av_int"])
+                num_green.append(temp_stat["green_roi"])
+                int_green.append(temp_stat["green_av_int"])
+                int_red_tot.append(temp_stat["red_int"])
+                int_green_tot.append((temp_stat["green_int"]))
+                if len(int_red_tot[-1]) is 0 and len(int_green_tot[-1]) is 0:
                     num_empty += 1
-        if num > 0:
-            av_area /= len(area)
-            red = len(num_red)
-            av_num_red /= red
-            av_int_red /= red
-            green = len(num_red)
-            av_num_green /= green
-            av_int_green /= green
-
         self.stat = {
             "area": area,
-            "area average": av_area,
-            "number": num,
-            "empty": num,
+            "area average": np.average(area),
+            "area median": np.median(area),
+            "area std": np.std(area),
+            "number": len(self.nuclei),
+            "empty": num_empty,
             "number red": num_red,
             "number green": num_green,
-            "number red average": av_num_red,
-            "number green average": av_num_green,
+            "number red average": np.average(num_red),
+            "number red std": np.std(num_red),
+            "number green average": np.average(num_green),
+            "number green std": np.std(num_green),
             "intensity red": int_red,
+            "intensity red total": int_red_tot,
             "intensity green": int_green,
-            "intensity red average": av_int_red,
-            "intensity green average": av_int_green,
+            "intensity green total": int_green_tot,
+            "intensity red average": np.average(int_red),
+            "intensity red std": np.std(int_red),
+            "intensity green average": np.average(int_green),
+            "intensity green std": np.std(int_green)
         }
 
     def get_statistics(self):
+        if len(self.stat) == 0:
+            self.calculate_statistics()
         return self.stat
 
     def get_data(self, console=False, formatted=False):
