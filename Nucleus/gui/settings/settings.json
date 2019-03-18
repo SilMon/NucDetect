@@ -1,55 +1,161 @@
 {
   "General": [
     {
-      "title": "Test Slider",
-      "desc": "Test Description",
-      "type": "slider",
-      "value": 50,
+      "id": "Automatic Recalculation",
+      "title": "Automatic re-calculation on Settings change",
+      "desc": "Automatic calculation restart upon changes in the settings",
+      "type": "check",
+      "value": 2,
       "values": {
-        "min": 0,
-        "max": 100,
-        "step": 2
+        "tristate": 0
       }
     },
     {
-      "title": "Test Text",
-      "desc": "Test Description",
+      "id": "Result Path",
+      "title": "Result - Data Path",
+      "desc": "The saving path of the CSV files",
       "type": "text",
-      "value": "Blah blah blah Mr. Freeman"
+      "value": "./results"
     },
     {
-      "title": "Test Combo",
-      "desc": "Test Description",
-      "type": "combo",
-      "value": "second",
-      "values": "first,second,third"
+      "id": "result",
+      "title": "Result - Image Path",
+      "desc": "The saving path of the result images",
+      "type": "text",
+      "value": "./results/images"
+    },
+    {
+      "id": "Statistics Height",
+      "title": "Statistics charts height",
+      "desc": "The height of the saved statistical charts in inch",
+      "type": "slider",
+      "value": 15,
+      "values": {
+        "min": 5,
+        "max": 50,
+        "step": 1,
+        "unit": "inch"
+      }
+    },
+    {
+      "id": "Statistics Width",
+      "title": "Statistics charts width",
+      "desc": "The width of the saved statistical charts in inch",
+      "type": "slider",
+      "value": 30,
+      "values": {
+        "min": 5,
+        "max": 50,
+        "step": 1,
+        "unit": "inch"
+      }
+    },
+    {
+      "id": "Statistics DPI",
+      "title": "Statistics charts dpi",
+      "desc": "The dpi of the saved statistical charts in inch",
+      "type": "slider",
+      "value": 450,
+      "values": {
+        "min": 60,
+        "max": 1000,
+        "step": 20,
+        "unit": "dpi"
+      }
+    },
+    {
+      "id": "snaps_save",
+      "title": "Snapshot saving",
+      "desc": "Should the program save snapshots of the analysis process? Requires additional disc space, but drastically reduces loadings time of previously analysed images.",
+      "type": "check",
+      "value": 1,
+      "values": {
+        "tristate": 0
+      }
+    },
+    {
+      "id": "snaps_path",
+      "title": "Snapshot saving path",
+      "desc": "Path leading to the saved snaps",
+      "type": "text",
+      "value": "./results/snaps"
+    },
+    {
+      "id": "snaps_number",
+      "title": "Number of saved snapshots",
+      "desc": "The number of snaps to hold in memory. Warning, numbers higher than 2 may lead to crashes.",
+      "type": "slider",
+      "value": 2,
+      "values": {
+        "min": 0,
+        "max": 5,
+        "step": 1,
+        "unit": ""
+      }
     }
   ],
   "Processing": [
     {
-      "title": "Test Slider",
-      "desc": "Test Description",
-      "type": "slider",
-      "value": 50,
+      "id": "Channel Names",
+      "title": "Channel Names",
+      "desc": "The names assigned to the isolated channels.Separate the individual names by ';' in the order BRGXY...Z",
+      "type": "text",
+      "value": "DAPI;APC;FITC"
+    },
+    {
+      "id": "assess_quality",
+      "title": "Image Quality Assessment",
+      "desc": "Should the program try to evaluate the quality of an provided image?",
+      "type": "check",
+      "value": 1,
       "values": {
-        "min": 0,
-        "max": 100,
-        "step": 2
+        "tristate": 0
       }
     },
     {
-      "title": "Test Text",
-      "desc": "Test Description",
-      "type": "text",
-      "value": "Blah blah blah Mr. Freeman"
+      "id": "edge_sig",
+      "title": "Sigma Value",
+      "desc": "The standard deviation of the gaussian filter used for edge detection",
+      "type": "decspin",
+      "value": 1.0,
+      "values": {
+        "min": 0.01,
+        "max": 20,
+        "step": 0.01,
+        "decimals": 3,
+        "prefix": "",
+        "suffix": ""
+      }
     },
     {
-      "title": "Test Combo",
-      "desc": "Test Description",
-      "type": "combo",
-      "value": "second",
-      "values": "first,second,third"
+      "id": "edge_low",
+      "title": "Low Hysteresis Threshold",
+      "desc": "Lower bound for hysteresis thresholding",
+      "type": "decspin",
+      "value": 0.1,
+      "values": {
+        "min": 0.01,
+        "max": 3,
+        "step": 0.01,
+        "decimals": 3,
+        "prefix": "",
+        "suffix": ""
+      }
+    },
+    {
+      "id": "edge_high",
+      "title": "High Hysteresis Threshold",
+      "desc": "High bound for hysteresis thresholding",
+      "type": "decspin",
+      "value": 0.2,
+      "values": {
+        "min": 0.01,
+        "max": 3,
+        "step": 0.01,
+        "decimals": 3,
+        "prefix": "",
+        "suffix": ""
+      }
     }
   ]
 }
-
