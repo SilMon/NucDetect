@@ -41,6 +41,7 @@ class ROI:
         self.intensities = {}
         self.min_foc_int = 20
         self.min_border = 5
+        self.on_edge = False
         if points is not None:
             self.points.append(points)
 
@@ -48,12 +49,25 @@ class ROI:
         if isinstance(other, ROI):
             self.points.extend(other.points)
         elif isinstance(other, ()):
-            if len(other) < 2 or len(other) > 2:
+            if len(other) != 2:
                 self.points.append(other[0], other[1])
             else:
                 raise ValueError("Tuple size has to be 2 (point, intensity)!")
         else:
             raise ValueError("Type of other does not match!")
+
+    def __eq__(self, other):
+        if type(other) is not ROI:
+            return False
+        elif self.chan == Channel.BLUE:
+            return self.points == other.points
+        else:
+            selfset = set(self.points)
+            otherset = set(other.points)
+            if selfset <= otherset or otherset <= selfset:
+                return True
+            else:
+                return False
 
     def add_point(self, point, intensity):
         """
@@ -101,11 +115,11 @@ class ROI:
             raise Exception("A focus has no foci!")
         for red in self.red:
             stat = red.calculate_statistics()
-            if stat["av_int"] < self.min_foc_int or stat["area"] < 9:
+            if stat["av_int"] < self.min_foc_int or stat["area"] < 5:
                 self.red.remove(red)
         for green in self.green:
             stat = green.calculate_statistics()
-            if stat["av_int"] < self.min_foc_int or stat["area"] < 9:
+            if stat["av_int"] < self.min_foc_int or stat["area"] < 5:
                 self.green.remove(green)
 
     def merge(self, roi):
@@ -170,6 +184,7 @@ class ROI:
         if self.center is None:
             self._calculate_center()
         inf = {
+            "minmax": self.coordinates,
             "height": self.height,
             "width": self.width,
             "center": self.center,
@@ -209,6 +224,10 @@ class ROI:
         :return: dict -- A dict containing the calculated data
         """
         if self.chan == Channel.BLUE:
+            lowest_y = 0xffffffff
+            lowest_x = 0xffffffff
+            highest_y = -1
+            highest_x = -1
             red_av_int = 0
             red_low_int = 255
             red_high_int = 0
@@ -223,6 +242,15 @@ class ROI:
             green_av_area = 0
             green_low_area = 0
             green_high_area = 0
+            for point in self.points:
+                if point[0] < lowest_x:
+                    lowest_x = point[0]
+                if point[0] > highest_x:
+                    highest_x = point[0]
+                if point[1] < lowest_y:
+                    lowest_y = point[0]
+                if point[1] > highest_y:
+                    highest_y = point[1]
             for red in self.red:
                 stat = red.calculate_statistics()
                 t_int = stat["av_int"]
@@ -252,6 +280,10 @@ class ROI:
             green_av_area = green_av_area / len_green
             green_av_int = green_av_int / len_green
             self.stat = {
+                "lowest_y": lowest_y,
+                "highest_y": highest_y,
+                "lowest_x": lowest_x,
+                "highest_x": highest_x,
                 "area": len(self.points),
                 "red_roi": len(self.red),
                 "green_roi": len(self.green),

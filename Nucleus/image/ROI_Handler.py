@@ -33,12 +33,17 @@ class ROI_Handler:
         Keyword arguments:
         ident: A unique identifier of the handler
         """
+        self.edge_ignore = True
         self.blue_markers = None
         self.red_markers = None
+        self.red_blobs = None
         self.green_markers = None
+        self.green_blobs = None
         self.blue_lab_nums = None
         self.red_lab_nums = None
+        self.red_blob_nums = None
         self.green_lab_nums = None
+        self.green_blob_nums = None
         self.blue_orig = None
         self.red_orig = None
         self.green_orig = None
@@ -67,21 +72,26 @@ class ROI_Handler:
             if names[2] is not None:
                 self.green_name = names[2]
 
-    def set_data(self, markers, lab_nums, orig):
+    def set_data(self, markers, blobs, lab_nums, blob_nums, orig):
         self.blue_orig = orig[0]
         self.red_orig = orig[1]
         self.green_orig = orig[2]
         self.blue_markers = markers[0]
         self.red_markers = markers[1]
+        self.red_blobs = blobs[0]
         self.green_markers = markers[2]
+        self.green_blobs = blobs[1]
         self.blue_lab_nums = lab_nums[0]
         self.red_lab_nums = lab_nums[1]
+        self.red_blob_nums = blob_nums[0]
         self.green_lab_nums = lab_nums[2]
+        self.green_blob_nums = blob_nums[1]
 
     def analyse_image(self):
         """
         Method to analyse an image according to the given data
         """
+        print("Image analysis")
         # Analysis of the blue channel
         self.nuclei = self.extract_roi_from_channel(
             channel=self.blue_markers,
@@ -94,12 +104,24 @@ class ROI_Handler:
             num_labels=self.red_lab_nums,
             channel_type=Channel.RED
         )
+        self.red.extend(self.extract_roi_from_channel(
+            channel=self.red_blobs,
+            orig=self.red_orig,
+            num_labels=self.red_blob_nums,
+            channel_type=Channel.RED
+        ))
         self.green = self.extract_roi_from_channel(
             channel=self.green_markers,
             orig=self.green_orig,
             num_labels=self.green_lab_nums,
             channel_type=Channel.GREEN
         )
+        self.green.extend(self.extract_roi_from_channel(
+            channel=self.green_blobs,
+            orig=self.green_orig,
+            num_labels=self.green_blob_nums,
+            channel_type=Channel.GREEN
+        ))
         # Determine the green and red ROIs each nucleus includes
         gre_rem = []
         red_rem = []
@@ -129,8 +151,32 @@ class ROI_Handler:
         for nucleus in self.nuclei:
             if nucleus is not None:
                 nuc_stat = nucleus.calculate_statistics()
-                if nuc_stat["area"] <= self.stat["area average"]*0.2:
-                    self.nuclei.remove(nucleus)
+                if nuc_stat["area"] < self.stat["area median"]*0.25:
+                    rem_list.append(nucleus)
+                if self.edge_ignore:
+                    y_coord = nuc_stat["lowest_y"], nuc_stat["highest_y"]
+                    x_coord = nuc_stat["lowest_x"], nuc_stat["highest_x"]
+                    if (x_coord[0] == 0 or x_coord[1] == len(self.blue_orig[0]) or
+                       y_coord[0] == 0 or y_coord[1] == len(self.blue_orig)):
+
+                        rem_list.append(nucleus)
+        # Remove foci duplicates
+        red_dup = []
+        green_dup = []
+        for x in range(len(self.red)):
+            for y in range(len(self.red) - x):
+                if self.red[x] not in red_dup:
+                    if self.red[x] == self.red[y]:
+                        red_dup.append(self.red[x])
+        for x in range(len(self.green)):
+            for y in range(len(self.green) - x):
+                if self.green[x] not in green_dup:
+                    if self.green[x] == self.green[y]:
+                        green_dup.append(self.green[x])
+        self.red = [x for x in self.red if x not in red_dup]
+        self.green = [x for x in self.green if x not in green_dup]
+        self.nuclei = [x for x in self.nuclei if x not in rem_list]
+        rem_list.clear()
         self.calculate_statistics()
         for nucleus in self.nuclei:
             if nucleus is not None:
@@ -138,12 +184,8 @@ class ROI_Handler:
                 if nuc_stat["area"] >= self.stat["area average"] * 1.2:
                     index = self.nuclei.index(nucleus)
                     points, offset = self.create_numpy_from_point_list(nucleus.points)
-                    gr_rois = []
-                    re_rois = []
-                    for gr in nucleus.green:
-                        gr_rois.append(gr)
-                    for re in nucleus.red:
-                        re_rois.append(re)
+                    gr_rois = nucleus.green
+                    re_rois = nucleus.red
                     points_edm = ndi.distance_transform_edt(points)
                     points_loc_max = peak_local_max(points_edm, labels=points, indices=False,
                                                     footprint=np.ones((91, 91)))
@@ -170,10 +212,10 @@ class ROI_Handler:
                     rem_list.append(nucleus)
                     for nuc in nucs:
                         add_list.append((index, nuc))
-        for n in add_list:
-            self.nuclei.insert(n[0], n[1])
         for rem_nuc in rem_list:
             self.nuclei.remove(rem_nuc)
+        for n in add_list:
+            self.nuclei.insert(n[0], n[1])
         for nucleus in self.nuclei:
             nucleus.perform_foci_quality_check()
 
@@ -219,6 +261,35 @@ class ROI_Handler:
             numpy[p[1]-min_y, p[0]-min_x] = True
         return numpy, (min_y, min_x)
 
+    def get_roi_as_image(self, roi):
+        min_y = 0xffffffff
+        max_y = 0
+        min_x = 0xffffffff
+        max_x = 0
+        for point in roi.points:
+            if point[0] > max_x:
+                max_x = point[0]
+            if point[0] < min_x:
+                min_x = point[0]
+            if point[1] > max_y:
+                max_y = point[1]
+            if point[1] < min_y:
+                min_y = point[1]
+        y_dist = max_y - min_y + 1
+        x_dist = max_x - min_x + 1
+        blue = np.zeros(shape=(y_dist, x_dist), dtype="uint8")
+        red = np.zeros(shape=(y_dist, x_dist), dtype="uint8")
+        green = np.zeros(shape=(y_dist, x_dist), dtype="uint8")
+        merge = np.zeros(shape=(y_dist, x_dist, 3), dtype="uint8")
+        for p in roi.points:
+            blue[p[1]-min_y, p[0]-min_x] = self.blue_orig[p[1], p[0]]
+            red[p[1] - min_y, p[0] - min_x] = self.red_orig[p[1], p[0]]
+            green[p[1] - min_y, p[0] - min_x] = self.green_orig[p[1], p[0]]
+            merge[p[1] - min_y, p[0] - min_x] = (self.red_orig[p[1], p[0]],
+                                                 self.green_orig[p[1], p[0]],
+                                                 self.blue_orig[p[1], p[0]])
+        return blue, red, green, merge, (y_dist, x_dist), self.nuclei.index(roi)
+
     def _draw_roi(self, img_array):
         """
         Method to draw the ROI saved in this handler on the image
@@ -259,8 +330,10 @@ class ROI_Handler:
         col(3D tuple): The color in which the roi should be highlighted
         """
         data = roi.get_data()
+        center = data.get("center")
+        img_array[center[1], center[0]] = (204, 204, 0)
         rr, cc = circle_perimeter(
-                                  data.get("center")[1], data.get("center")[0],
+                                  center[1], center[0],
                                   max(data.get("height")//2,
                                       data.get("width")//2, 2),
                                   shape=img_array.shape
@@ -316,7 +389,6 @@ class ROI_Handler:
                                                              str(len(roi.green)))
                 dat = roi.get_data()
                 c = dat["center"]
-                dim = (dat["width"], dat["height"])
                 rect = QRectF(c[0]-20, c[1]-20, 40, 40)
                 painter.fillRect(rect, QBrush(QColor(100, 100, 0, 40)))
                 center = QPoint(c[0]-18, c[1]-18)
@@ -410,13 +482,9 @@ class ROI_Handler:
                 self.green_name, self.red_name)
         now = datetime.datetime.now()
         # Prepare data
-        data = {}
-        data["header"] = ["Index", "Width", "Height", "Center",
-                          self.green_name, self.red_name]
-        data["id"] = self.id
-        data["date"] = now
-        data["blue channel"] = self.blue_name
-        data["data"] = []
+        data = {"header": ["Index", "Width", "Height", "Center",
+                           self.green_name, self.red_name], "id": self.id, "date": now, "blue channel": self.blue_name,
+                "data": []}
         ind = 0
         for roi in self.nuclei:
             if roi is not None:
