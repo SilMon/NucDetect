@@ -7,19 +7,17 @@ import hashlib
 import os
 import pickle
 import time
+from math import sqrt
 
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy import ndimage as ndi
 from skimage import io
-from skimage.draw.draw import ellipse
+from skimage.draw import circle, circle_perimeter
 from skimage.exposure import histogram
-from skimage.feature import peak_local_max
-from skimage.feature._canny import canny
+from skimage.feature import canny, blob_log
 from skimage.filters import sobel, laplace
-from skimage.morphology import watershed
-from skimage.morphology.binary import binary_dilation, binary_opening
-from skimage.transform.hough_transform import hough_ellipse
+from skimage.morphology.binary import binary_opening
 
 from NucDetect.image import Channel
 from NucDetect.image.ROI_Handler import ROI_Handler
@@ -146,33 +144,18 @@ class Detector:
             img = self.images[which]
             names = img[1]
             img_array = img[0]
-            # img_array = self._add_image_padding(img[0], dim=3, padding=self.settings["padding"])
             start = time.time()
             channels = self._get_channels(img_array)
             if self.assessment:
                 qual = self._estimate_image_quality(channels)
             handler = ROI_Handler(ident=which)
             handler.set_names(names)
-            if self.settings["hough"]:
-                thr_chan, params = self._detect_regions(channels, accuracy=20,
-                                                        threshold=250, min_size_1=50, min_size_2=2, min_size_3=2,
-                                                        max_size_1=300, max_size_2=10, max_size_3=10)
-                markers, lab_nums = self._perform_labelling(thr_chan)
-                handler.set_data(markers, lab_nums, channels)
-            else:
-                thr_chan = self._get_thresholded_channels(channels)
-                '''
-                edms = self._calculate_edm(thr_chan)
-                loc_max = self._calculate_local_maxima(thr_chan, edms)
-                '''
-                markers, lab_nums = self._perform_labelling(thr_chan)
-                '''
-                watersheds = self.perform_watershed(edms, markers, thr_chan)
-                '''
-                handler.set_data(markers, lab_nums=lab_nums, orig=channels)
+            thr_chan = self._get_thresholded_channels(channels)
+            markers, lab_nums = self._perform_labelling(thr_chan[0])
+            blobs, blob_num = self._detect_blobs(channels)
+            handler.set_data(markers, blobs, lab_nums=lab_nums, blob_nums=blob_num, orig=channels)
             handler.analyse_image()
             handler.calculate_statistics()
-            # result = handler.create_result_image(self._remove_image_padding(img_array))
             result_qt = handler.create_result_image_as_qtimage(img_array)
             result_mpl = handler.create_result_image_as_mplfigure(img_array)
             cur_snaps = {
@@ -188,27 +171,20 @@ class Detector:
                 cur_snaps["quality"] = qual
             if self.settings["save_snaps"]:
                 cur_snaps["channel"] = channels
-                cur_snaps["binarized"] = thr_chan
-                cur_snaps["watershed"] = markers
-                if self.settings["hough"]:
-                    cur_snaps["params"] = params
-                else:
-                    cur_snaps["edm"] = thr_chan
-                    cur_snaps["max"] = thr_chan
-                    cur_snaps["watershed"] = thr_chan
-            cur_snaps["time"] = "{0:.2f} sec".format(time.time() - start)
+                cur_snaps["binarized"] = thr_chan[0]
+                cur_snaps["edges"] = thr_chan[1]
+            cur_snaps["time"] = "{0:.3f} sec".format(time.time() - start)
             if len(self.snaps) == save_threshold:
                 for x in range(save_threshold-1):
                     self.save_snaps(self.keys[x])
             self.snaps[which] = cur_snaps
-        print("Analysis complete in " + "{0:.2f} sec".format(time.time() - start))
+        print("Analysis complete in " + "{:.3f} sec".format(time.time() - start))
 
     def save_all_snaps(self):
         for key in self.images:
             try:
                 self.save_snaps(key, clear=False)
             except KeyError as ke:
-                    # TODO
                 pass
 
     def save_snaps(self, key, clear=True):
@@ -284,6 +260,7 @@ class Detector:
         """
         if self.save_snapshots and len(self.snaps) > 0:
             if which is not None:
+                # TODO
                 snap = which
                 vals = self.snaps.get(which)
                 fig, axes = plt.subplots(ncols=3, nrows=5, figsize=(20, 9))
@@ -345,15 +322,10 @@ class Detector:
         self.snaps.get(which)["handler"].get_data(console=False, formatted=formatted)
 
     def get_output(self, which):
-        print("Current key: " + str(which))
-        if self.snaps.get(which) is None:
-            print("Fail key: "  + str(which))
-            print(self.snaps)
         return self.snaps.get(which)["handler"].get_data()
 
     def get_statistics(self, which):
         return self.snaps.get(which)["handler"].get_statistics()
-
 
     def show_result_image(self, which):
         """
@@ -433,7 +405,7 @@ class Detector:
         ch_blue_bin = edges_blue > 5
         ch_blue_bin = ndi.binary_fill_holes(ch_blue_bin)
         ch_blue_bin = binary_opening(ch_blue_bin)
-        truth_table = np.zeros((len(ch_blue_bin), len(ch_blue_bin[0])), dtype=bool)
+        truth_table = np.zeros(shape=ch_blue_bin.shape, dtype=bool)
         for i in range(len(ch_blue_bin)):
             for ii in range(len(ch_blue_bin[0])):
                 if ch_blue_bin[i][ii] and not truth_table[i][ii]:
@@ -442,7 +414,7 @@ class Detector:
                         det.append(nuc)
         ch_red_bin = self._calculate_local_region_threshold(det, channels[1])
         ch_gre_bin = self._calculate_local_region_threshold(det, channels[2])
-        return ch_blue_bin, ch_red_bin, ch_gre_bin
+        return (ch_blue_bin, ch_red_bin[0], ch_gre_bin[0]), (edges_blue, ch_red_bin[1], ch_gre_bin[1])
 
     def _flood_fill(self, point, region_map, truth_table):
         points = [
@@ -457,41 +429,37 @@ class Detector:
             x = p[1]
             if (x >= 0) and (x < width) and (y >= 0) and (y < height):
                 if region_map[y][x] and not truth_table[y][x]:
+                    if y == 0 | x == 0:
+                        print("Edge")
                     truth_table[y][x] = True
                     nuc.append(p)
                     points.append((y+1, x))
                     points.append((y, x+1))
                     points.append((y, x-1))
                     points.append((y-1, x))
-        return nuc if len(nuc) > 0 else None
+        return nuc if nuc else None
 
     def _calculate_local_region_threshold(self, nuclei, channel):
         chan = np.zeros(shape=channel.shape)
+        edge_map = np.zeros(shape=channel.shape, dtype=bool)
         for nuc in nuclei:
             thresh = []
             for p in nuc:
-                if channel[p[0]][p[1]]:
-                    thresh.append((p, channel[p[0]][p[1]]))
+                thresh.append((p, channel[p[0]][p[1]]))
             if thresh:
                 thresh_np, offset = self.create_numpy_from_point_list(thresh)
-                edges = canny(thresh_np)
+                edges = self._detect_edges(thresh_np)
                 if np.max(edges) > 0:
                     chan_fill = ndi.binary_fill_holes(edges)
                     chan_open = ndi.binary_opening(chan_fill)
                     self._imprint_data_into_channel(chan, chan_open, offset)
-        return chan
-
-    def _check_threshold_for_values(self, lst):
-        for row in lst:
-            for i in row:
-                if i > 0:
-                    return True
-        return False
+                    self._imprint_data_into_channel(edge_map, edges, offset)
+        return chan, edge_map
 
     def _imprint_data_into_channel(self, channel, data, offset):
         for i in range(len(data)):
             for ii in range(len(data[0])):
-                if data[i][ii] is not 0:
+                if data[i][ii] != 0:
                     channel[i + offset[0]][ii+offset[1]] = data[i][ii]
 
     def create_numpy_from_point_list(self, lst):
@@ -515,107 +483,21 @@ class Detector:
             numpy[p[0][0]-min_y, p[0][1]-min_x] = p[1]
         return numpy, (min_y, min_x)
 
-    def _detect_regions(self, channels, accuracy, threshold, min_size_1, min_size_2, min_size_3,
-                        max_size_1, max_size_2, max_size_3, max_number=200):
-        """
-        Private method to detect unique regions inside the channels of the image.
+    def _detect_blobs(self, channels, min_sigma=1, max_sigma=5, num_sigma=10, threshold=.1):
+        blobs_red = blob_log(channels[1], min_sigma=min_sigma, max_sigma=max_sigma, num_sigma=num_sigma,
+                             threshold=threshold)
+        blobs_green = blob_log(channels[2], min_sigma=min_sigma, max_sigma=max_sigma, num_sigma=num_sigma,
+                               threshold=threshold)
+        blobs_red_map = self._create_blob_map(channels[1].shape, blobs_red)
+        blobs_green_map = self._create_blob_map(channels[2].shape, blobs_green)
+        return (blobs_red_map, blobs_green_map), (len(blobs_red), len(blobs_green))
 
-        Keyword arguments:
-        channels: Tuple containing all channels of the image
-        accuracy: Bin size on the minor axis used in the accumulator.
-        threshold: Accumulator threshold value.
-        min_size: Minimal major axis length.
-        max_size: Maximal major axis length.
-        max_number: The max number of recognized ellipses
-
-        Returns:
-        tuple -- A tuple containing the calculated EDM for each channel in the
-        order blue, red, green
-        """
-        nuclei = self._detect_ellipses(channels[0], accuracy, threshold, min_size_1, max_size_1, max_number)
-        red_foci = self._detect_ellipses(channels[1], accuracy, threshold, min_size_2, max_size_2, max_number)
-        green_foci = self._detect_ellipses(channels[2], accuracy, threshold, min_size_3, max_size_3, max_number)
-        return (nuclei[0], red_foci[0], green_foci[0]), (nuclei[1], red_foci[1], green_foci[1])
-    
-    def _detect_ellipses(self, channel, accuracy, threshold, min_size, max_size, max_number=200):
-        """
-        Private method to detect ellipses via Hough Transform. Is used to detect nuclei and foci.
-
-        Keyword arguments:
-        channel: The respective channel of the image
-        accuracy: Bin size on the minor axis used in the accumulator.
-        threshold: Accumulator threshold value.
-        min_size: Minimal major axis length.
-        max_size: Maximal major axis length.
-        max_number: The max number of recognized ellipses
-
-        Returns:
-        tuple -- A tuple containing the thresholded channel and a list with the parameters of all detected ellipses
-        """
-        edges = self._detect_edges(self._add_image_padding(channel))
-        # Fill holes to reduce number of edges --> time saving
-        edges = binary_dilation(edges)
-        edges = binary_dilation(edges)
-        filled = ndi.binary_fill_holes(edges)
-        filled = self._detect_edges(filled)
-        hough = hough_ellipse(filled, accuracy, threshold, min_size, max_size)
-        hough.sort(order="accumulator")
-        params = []
-        # Detect max_number ellipses in the image
-        for y in range(min(max_number, len(hough))):
-            best = hough[-y]
-            # yc, xc, a, b, orientation
-            yc, xc, a, b = [int(round(x)) for x in best[1:5]]
-#            yc, xc, a, b = (int(round(x)) for x in best[1:5])
-            orientation = best[5]
-            params.append((yc, xc, a, b, orientation))
-        bina = np.zeros(shape=channel.shape)
-        # Create binarized image from parameters
-        for x in params:
-            cy, cx = ellipse(x[0], x[1], x[2], x[3], x[4]) 
-            bina[cy, cx] = 1
-        return bina, params
-    
-    def _add_image_padding(self, img, dim=1, padding=5):
-        """
-        Private method to add padding to an image
-
-        Keyword arguments:
-        padding: The amount of padding added to the image
-
-        Returns:
-        The padded image
-        """
-        if dim is not 1:
-            pad = np.empty((len(img)+2*padding, len(img[0])+2*padding, dim), dtype=np.uint8)
-        else:
-            pad = np.empty((len(img) + 2 * padding, len(img[0]) + 2 * padding), dtype=np.uint8)
-        for y in range(len(img)):
-            for x in range(len(img[0])):
-                pad[y + padding, x + padding] = img[y, x]
-        return pad
-
-    def _remove_image_padding(self, img, dim=1, padding=5):
-        """
-        Private method to remove padding from an image
-        :param img: The image to remove the padding from
-        :param padding: The amount of padding to remove (default: 5)
-        :return: The image without the padding
-        """
-        '''
-        if dim is not 1:
-            unpad = np.empty((len(img)- 2 * padding,
-                              len(img[0])- 2 * padding, dim), dtype=np.uint8)
-        else:
-            unpad = np.empty((len(img) - 2 * padding,
-                              len(img[0]) - 2 * padding), dtype=np.uint8)
-        for y in range(len(img)-padding):
-            for x in range(len(img[0])-padding):
-                print(img[y+padding, x+padding])
-                unpad[y, x] = img[y+padding-1, x+padding-1]
-        return unpad
-        '''
-        return img
+    def _create_blob_map(self, shape, blob_dat):
+        map = np.zeros(shape, dtype="uint8")
+        for blob in blob_dat:
+            rr, cc = circle(blob[0], blob[1], blob[2]*sqrt(2)-0.5, shape=shape)
+            map[rr, cc] = 1
+        return map
 
     def categorize_image(self, key, categories):
         if categories and categories is not self.snaps[key]["categories"]:
@@ -627,13 +509,13 @@ class Detector:
         try:
             cat = self.snaps[key]["categories"]
             return cat
-        except Exception:
+        except KeyError:
             return ""
 
     def load_available_categories(self):
         pass
 
-    def _detect_edges(self, channel, sigma=2, low_threshold=0.55, high_threshold=0.8):
+    def _detect_edges(self, channel, sigma=1, low_threshold=None, high_threshold=None):
         """
         Privat method to detect the edges of the given channel via the canny operator.
 
@@ -647,46 +529,6 @@ class Detector:
         array -- The edge map of the given channel
         """
         return canny(channel, sigma, low_threshold, high_threshold)
-
-    def _calculate_edm(self, thr_chan):
-        """
-        Private method to calculate the euclidean distance maps (EDMs) of each
-        channel.
-
-        Keyword arguments:
-        thr_chan (tuple): Tuple containing the thresholded channels in the
-        order blue, red, green
-
-        Returns:
-        tuple -- A tuple containing the calculated EDM for each channel in the
-        order blue, red, green
-        """
-        edt_blue = ndi.distance_transform_edt(thr_chan[0])
-        edt_red = ndi.distance_transform_edt(thr_chan[1])
-        edt_green = ndi.distance_transform_edt(thr_chan[2])
-        return edt_blue, edt_red, edt_green
-
-    def _calculate_local_maxima(self, labels, edms):
-        """
-        Private method to calculate the local maxima of euclidean distance maps
-
-        Keyword arguments:
-        labels (tuple): A tuple containing the thresholded channels in the
-        order blue, red, green
-        edms (tuple): A tuple containing the euclidean distance maps of each
-        channel in the order blue, red, green
-
-        Returns:
-        tuple -- A tuple containing arrays of the calculated local maxima of
-        each channel in the order blue, red, green
-        """
-        edt_blue_max = peak_local_max(edms[0], labels=labels[0], indices=False,
-                                      footprint=np.ones((91, 91)))
-        edt_red_max = peak_local_max(edms[1], labels=labels[1], indices=False,
-                                     footprint=np.ones((3, 3)))
-        edt_gre_max = peak_local_max(edms[2], labels=labels[2], indices=False,
-                                     footprint=np.ones((3, 3)))
-        return edt_blue_max, edt_red_max, edt_gre_max
 
     def _perform_labelling(self, loc_max):
         """
@@ -704,30 +546,6 @@ class Detector:
         markers_red, lab_num_red = ndi.label(loc_max[1])
         markers_green, lab_num_green = ndi.label(loc_max[2])
         return (markers_blue, markers_red, markers_green), (lab_num_blue, lab_num_red, lab_num_green)
-
-    def perform_watershed(self, edms, markers, thr_chan):
-        """
-        Private method to perform watershed segmentation for each channel
-
-        Keyword arguments:
-        edms (tuple): A tuple containing the calculated euclidean distance
-        maps for each channel in the order blue, red, green
-        markers (tuple): A tuple containing the markers used to identify each
-        individual region of each channel in the order blue, red, green
-        thr_chan: A tuple containing the thresholded channels in the order
-        blue, red, green
-
-        Returns:
-        tuple -- A tuple of the segmented channels in the order blue, red,
-        green
-        """
-        ws_blue = self._remove_image_padding(watershed(-edms[0], markers[0], mask=thr_chan[0]),
-                                             padding=self.settings["padding"])
-        ws_red = self._remove_image_padding(watershed(-edms[1], markers[1], mask=thr_chan[1]),
-                                            padding=self.settings["padding"])
-        ws_green = self._remove_image_padding(watershed(-edms[2], markers[2], mask=thr_chan[2]),
-                                              padding=self.settings["padding"])
-        return ws_blue, ws_red, ws_green
 
     def _estimate_image_quality(self, channels):
         """
