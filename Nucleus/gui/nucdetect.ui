@@ -15,13 +15,12 @@
   </property>
   <property name="styleSheet">
    <string notr="true">QPushButton{
-	font-family: Font Awesome;
 	color: White;
 	background-color: rgba(22, 42, 75 , 255);
 	border: none;
 	font-size: 14px;
  	text-align: center;
-    display: inline-block;
+     display: inline-block;
 	min-height: 25;
 	min-width: 40;
 }
@@ -195,6 +194,16 @@ QDialog{
             </property>
             <property name="text">
              <string>Categories</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="btn_modify">
+            <property name="enabled">
+             <bool>false</bool>
+            </property>
+            <property name="text">
+             <string>Modifiy</string>
             </property>
            </widget>
           </item>
@@ -543,6 +552,26 @@ QDialog{
     </item>
    </layout>
   </widget>
+  <action name="actionLoad">
+   <property name="text">
+    <string>Load...</string>
+   </property>
+  </action>
+  <action name="actionSave">
+   <property name="text">
+    <string>Save...</string>
+   </property>
+  </action>
+  <action name="actionSave_all">
+   <property name="text">
+    <string>Save all...</string>
+   </property>
+  </action>
+  <action name="actionExit">
+   <property name="text">
+    <string>Exit</string>
+   </property>
+  </action>
  </widget>
  <resources/>
  <connections/>

@@ -27,9 +27,11 @@
 	border: none;
 	font-size: 14px;
  	text-align: center;
-    display: inline-block;
+     display: inline-block;
 	min-height: 25;
 	min-width: 40;
+	padding-left: 4px;
+	padding-right: 4px;
 }
 
 QPushButton:hover{
@@ -103,7 +105,7 @@ QHLine, QVLine, Line{
      <property name="currentIndex">
       <number>0</number>
      </property>
-     <widget class="QWidget" name="tab">
+     <widget class="QWidget" name="tab_dist">
       <attribute name="title">
        <string>Foci Distribution</string>
       </attribute>
@@ -210,22 +212,6 @@ QHLine, QVLine, Line{
           </spacer>
          </item>
          <item>
-          <widget class="QDialogButtonBox" name="buttonBox">
-           <property name="sizePolicy">
-            <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-             <horstretch>0</horstretch>
-             <verstretch>0</verstretch>
-            </sizepolicy>
-           </property>
-           <property name="standardButtons">
-            <set>QDialogButtonBox::Help|QDialogButtonBox::SaveAll</set>
-           </property>
-           <property name="centerButtons">
-            <bool>true</bool>
-           </property>
-          </widget>
-         </item>
-         <item>
           <spacer name="horizontalSpacer_5">
            <property name="orientation">
             <enum>Qt::Horizontal</enum>
@@ -245,7 +231,7 @@ QHLine, QVLine, Line{
        </item>
       </layout>
      </widget>
-     <widget class="QWidget" name="tab_2">
+     <widget class="QWidget" name="tab_int">
       <attribute name="title">
        <string>Intensity</string>
       </attribute>
@@ -317,22 +303,6 @@ QHLine, QVLine, Line{
           </spacer>
          </item>
          <item>
-          <widget class="QDialogButtonBox" name="buttonBox_2">
-           <property name="sizePolicy">
-            <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-             <horstretch>0</horstretch>
-             <verstretch>0</verstretch>
-            </sizepolicy>
-           </property>
-           <property name="standardButtons">
-            <set>QDialogButtonBox::Help|QDialogButtonBox::SaveAll</set>
-           </property>
-           <property name="centerButtons">
-            <bool>true</bool>
-           </property>
-          </widget>
-         </item>
-         <item>
           <spacer name="horizontalSpacer_4">
            <property name="orientation">
             <enum>Qt::Horizontal</enum>
@@ -352,7 +322,7 @@ QHLine, QVLine, Line{
        </item>
       </layout>
      </widget>
-     <widget class="QWidget" name="tab_3">
+     <widget class="QWidget" name="tab_val">
       <attribute name="title">
        <string>Values</string>
       </attribute>
@@ -446,19 +416,6 @@ QHLine, QVLine, Line{
           </spacer>
          </item>
          <item>
-          <widget class="QDialogButtonBox" name="buttonBox_3">
-           <property name="sizePolicy">
-            <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
-             <horstretch>0</horstretch>
-             <verstretch>0</verstretch>
-            </sizepolicy>
-           </property>
-           <property name="standardButtons">
-            <set>QDialogButtonBox::Help|QDialogButtonBox::SaveAll</set>
-           </property>
-          </widget>
-         </item>
-         <item>
           <spacer name="horizontalSpacer_6">
            <property name="orientation">
             <enum>Qt::Horizontal</enum>
@@ -480,8 +437,63 @@ QHLine, QVLine, Line{
      </widget>
     </widget>
    </item>
+   <item>
+    <widget class="QDialogButtonBox" name="bbox">
+     <property name="sizePolicy">
+      <sizepolicy hsizetype="Expanding" vsizetype="Minimum">
+       <horstretch>0</horstretch>
+       <verstretch>0</verstretch>
+      </sizepolicy>
+     </property>
+     <property name="layoutDirection">
+      <enum>Qt::LeftToRight</enum>
+     </property>
+     <property name="orientation">
+      <enum>Qt::Horizontal</enum>
+     </property>
+     <property name="standardButtons">
+      <set>QDialogButtonBox::Help|QDialogButtonBox::SaveAll</set>
+     </property>
+     <property name="centerButtons">
+      <bool>false</bool>
+     </property>
+    </widget>
+   </item>
   </layout>
  </widget>
  <resources/>
- <connections/>
+ <connections>
+  <connection>
+   <sender>bbox</sender>
+   <signal>accepted()</signal>
+   <receiver>Dialog</receiver>
+   <slot>accept()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>248</x>
+     <y>254</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>157</x>
+     <y>274</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>bbox</sender>
+   <signal>rejected()</signal>
+   <receiver>Dialog</receiver>
+   <slot>reject()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>316</x>
+     <y>260</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>286</x>
+     <y>274</y>
+    </hint>
+   </hints>
+  </connection>
+ </connections>
 </ui>
