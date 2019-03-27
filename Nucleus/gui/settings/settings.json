@@ -25,45 +25,6 @@
       "value": "./results/images"
     },
     {
-      "id": "Statistics Height",
-      "title": "Statistics charts height",
-      "desc": "The height of the saved statistical charts in inch",
-      "type": "slider",
-      "value": 15,
-      "values": {
-        "min": 5,
-        "max": 50,
-        "step": 1,
-        "unit": "inch"
-      }
-    },
-    {
-      "id": "Statistics Width",
-      "title": "Statistics charts width",
-      "desc": "The width of the saved statistical charts in inch",
-      "type": "slider",
-      "value": 30,
-      "values": {
-        "min": 5,
-        "max": 50,
-        "step": 1,
-        "unit": "inch"
-      }
-    },
-    {
-      "id": "Statistics DPI",
-      "title": "Statistics charts dpi",
-      "desc": "The dpi of the saved statistical charts in inch",
-      "type": "slider",
-      "value": 450,
-      "values": {
-        "min": 60,
-        "max": 1000,
-        "step": 20,
-        "unit": "dpi"
-      }
-    },
-    {
       "id": "snaps_save",
       "title": "Snapshot saving",
       "desc": "Should the program save snapshots of the analysis process? Requires additional disc space, but drastically reduces loadings time of previously analysed images.",
