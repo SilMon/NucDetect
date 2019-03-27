@@ -26,6 +26,13 @@ Run the following commands to clone and install from GitHub.
 ```console
 $ git clone https://github.com/SilMon/NucDetect.git
 ```
+### Supported Image Formats
+Following images are supported by NucDetect:
+* TIFF
+* PNG
+* JPG
+* BMP
+___
 
 Author: Romano Weiss
 
