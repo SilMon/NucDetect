@@ -17,8 +17,8 @@ from skimage.draw import circle_perimeter
 from skimage.feature import peak_local_max
 from skimage.morphology import watershed
 
-from NucDetect.image import Channel
-from NucDetect.image.ROI import ROI
+from Nucleus.image import Channel
+from Nucleus.image.ROI import ROI
 
 
 class ROI_Handler:

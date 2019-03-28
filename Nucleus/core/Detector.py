@@ -19,14 +19,22 @@ from skimage.feature import canny, blob_log
 from skimage.filters import sobel, laplace
 from skimage.morphology.binary import binary_opening
 
-from NucDetect.image import Channel
-from NucDetect.image.ROI_Handler import ROI_Handler
+from Nucleus.image import Channel
+from Nucleus.image.ROI_Handler import ROI_Handler
 
 
 class Detector:
     """
     Class to detect intranuclear proteins in provided fluorescence images
     """
+
+    FORMATS = [
+        ".tif",
+        ".tiff",
+        ".png",
+        ".jpg",
+        ".bmp"
+    ]
 
     def __init__(self):
         """
@@ -71,14 +79,14 @@ class Detector:
         }
         self.keys = []
 
-    def _check_for_saved_snaps(self):
-        pardir = os.getcwd()
-        pathpardir = os.path.join(os.path.dirname(pardir),
-                                  r"results/snaps")
-        if os.path.isdir(pathpardir):
-            for file in os.listdir(pathpardir):
-                name = file.split(".")[0]
-        pass
+    def clear(self):
+        """
+        Method to clean all loaded images
+        :return: None
+        """
+        self.images.clear()
+        self.snaps.clear()
+        self.keys.clear()
 
     def load_image(self, url, names=None):
         """
@@ -93,23 +101,29 @@ class Detector:
         str -- The md5 value used as id for the image. Needed to obtain the
         results of the processing
         """
-        key = self._calculate_image_id(url)
-        self.images[key] = (io.imread(url), names)
-        self.keys.append(key)
-        return key
+        if os.path.splitext(url)[1] in Detector.FORMATS:
+            key = self._calculate_image_id(url)
+            self.images[key] = (io.imread(url), names)
+            self.keys.append(key)
+            return key
 
     def load_image_folder(self, direct):
         """
         Method to load all images of a specific directory
 
-        Keyword arguments:
-        direct (str): The path to the directory
+        :param direct: The path to the directory (str)
+        :return: None
         """
+        for t in os.walk(direct):
+            for file in t[2]:
+                self.load_image(os.path.join(t[0], file))
+        '''
         files = os.listdir(direct)
         for file in files:
             path = os.path.join(direct, file)
             if os.path.isfile(path):
                 self.load_image(path)
+        '''
 
     def _calculate_image_id(self, url):
         """
@@ -135,7 +149,6 @@ class Detector:
         by the detector. Is needed to avoid stack overflow when used to analyse a lot images. Default: 2
         :return: None
         """
-        print("Analysis started")
         start = time.time()
         snap = self.load_snaps(which)
         if snap is not None:
@@ -178,14 +191,10 @@ class Detector:
                 for x in range(save_threshold-1):
                     self.save_snaps(self.keys[x])
             self.snaps[which] = cur_snaps
-        print("Analysis complete in " + "{:.3f} sec".format(time.time() - start))
 
     def save_all_snaps(self):
         for key in self.images:
-            try:
-                self.save_snaps(key, clear=False)
-            except KeyError as ke:
-                pass
+            self.save_snaps(key, clear=False)
 
     def save_snaps(self, key, clear=True):
         """
@@ -194,19 +203,19 @@ class Detector:
         :param clear: If true the current snap dict will be cleared. Needed to avoid stack overflow when anaylsing
         many images
         """
-        pardir = os.getcwd()
-        pathpardir = os.path.join(os.path.dirname(pardir),
-                                  r"results/snaps")
-        os.makedirs(pathpardir, exist_ok=True)
-        pathsnap = os.path.join(pathpardir,
-                                  str(key) + ".snap")
-        del self.snaps[key]["result_qt"]
-        pickle.dump(self.snaps[key], open(pathsnap, "wb"))
-        if clear:
-            print("Image deleted: " + key)
-            del self.snaps[key]
-            del self.images[key]
-            self.keys.remove(key)
+        if key in self.snaps:
+            pardir = os.getcwd()
+            pathpardir = os.path.join(os.path.dirname(pardir),
+                                      r"results/snaps")
+            os.makedirs(pathpardir, exist_ok=True)
+            pathsnap = os.path.join(pathpardir,
+                                      str(key) + ".snap")
+            del self.snaps[key]["result_qt"]
+            pickle.dump(self.snaps[key], open(pathsnap, "wb"))
+            if clear:
+                del self.snaps[key]
+                del self.images[key]
+                self.keys.remove(key)
 
     def load_snaps(self, key):
         """
@@ -233,15 +242,6 @@ class Detector:
                     return None
             else:
                 return None
-
-    def export_snaps_as_image(self, key, which=None):
-        """
-        Method to export the snapshots of an image to file.
-        :param key: The md5 hash of the image
-        :param which: Defines which snapshots should be exported. If None, all will be exported.
-        :return: None
-        """
-        # TODO
 
     def analyse_images(self):
         """

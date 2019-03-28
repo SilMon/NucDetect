@@ -4,7 +4,7 @@ Created on 06.10.2018
 @author: Romano Weiss
 """
 
-from NucDetect.image import Channel
+from Nucleus.image import Channel
 from operator import itemgetter
 import numpy as np
 
