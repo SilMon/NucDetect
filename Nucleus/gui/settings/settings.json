@@ -1,7 +1,7 @@
 {
   "General": [
     {
-      "id": "Automatic Recalculation",
+      "id": "aut_recalc",
       "title": "Automatic re-calculation on Settings change",
       "desc": "Automatic calculation restart upon changes in the settings",
       "type": "check",
@@ -11,14 +11,14 @@
       }
     },
     {
-      "id": "Result Path",
+      "id": "res_path",
       "title": "Result - Data Path",
       "desc": "The saving path of the CSV files",
       "type": "text",
       "value": "./results"
     },
     {
-      "id": "result",
+      "id": "res_img_path",
       "title": "Result - Image Path",
       "desc": "The saving path of the result images",
       "type": "text",
@@ -42,7 +42,7 @@
       "value": "./results/snaps"
     },
     {
-      "id": "snaps_number",
+      "id": "snaps_num",
       "title": "Number of saved snapshots",
       "desc": "The number of snaps to hold in memory. Warning, numbers higher than 2 may lead to crashes.",
       "type": "slider",
@@ -57,14 +57,14 @@
   ],
   "Processing": [
     {
-      "id": "Channel Names",
+      "id": "chan_names",
       "title": "Channel Names",
       "desc": "The names assigned to the isolated channels.Separate the individual names by ';' in the order BRGXY...Z",
       "type": "text",
       "value": "DAPI;APC;FITC"
     },
     {
-      "id": "assess_quality",
+      "id": "ass_qual",
       "title": "Image Quality Assessment",
       "desc": "Should the program try to evaluate the quality of an provided image?",
       "type": "check",

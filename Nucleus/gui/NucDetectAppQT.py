@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import sys
 import time
 import json
@@ -25,10 +26,10 @@ from skimage import img_as_ubyte
 from skimage.draw import ellipse, circle
 
 from Nucleus.core.Detector import Detector
-from NucDetect.gui.settings.Settings import SettingsShowWidget, SettingsSlider, SettingsText, SettingsComboBox, \
+from Nucleus.gui.settings.Settings import SettingsShowWidget, SettingsSlider, SettingsText, SettingsComboBox, \
     SettingsCheckBox, SettingsDial, SettingsSpinner, SettingsDecimalSpinner
-from NucDetect.image import Channel
-from NucDetect.image.ROI import ROI
+from Nucleus.image import Channel
+from Nucleus.image.ROI import ROI
 
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, False)
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, False)
@@ -39,6 +40,7 @@ ui_class_dial = os.path.join(os.getcwd(), "classification_dialog.ui")
 ui_stat_dial = os.path.join(os.getcwd(), "statistics_dialog.ui")
 ui_settings_dial = os.path.join(os.getcwd(), "settings_dialog.ui")
 ui_modification_dial = os.path.join(os.getcwd(), "modification_dialog.ui")
+database = os.path.join(os.pardir, "database{}nucdetect.db".format(os.sep))
 
 
 class NucDetect(QMainWindow):
@@ -54,6 +56,9 @@ class NucDetect(QMainWindow):
     def __init__(self):
         QMainWindow.__init__(self)
         self.detector = Detector()
+        self.connection = sqlite3.connect(database)
+        self.cursor = self.connection.cursor()
+        self.settings = self.load_settings()
         self.reg_images = {}
         self.sel_images = []
         self.img_keys = {}
@@ -62,6 +67,12 @@ class NucDetect(QMainWindow):
         self._setup_ui()
         self.setWindowTitle("NucDetect")
         self.setWindowIcon(QtGui.QIcon('logo.png'))
+
+    def load_settings(self):
+        self.cursor.execute(
+            "SELECT key_, value FROM settings"
+        )
+        return dict(self.cursor.fetchall())
 
     def closeEvent(self, event):
         self.on_close()
@@ -137,8 +148,8 @@ class NucDetect(QMainWindow):
         imgdir = os.path.join(os.path.dirname(pardir),
                               r"images")
         file_name, _ = QFileDialog.getOpenFileName(self, "QFileDialog.getOpenFileName()", imgdir,
-                                                  "All Files (*);;TIFF Files (*.tiff);;PNG Files (*.png)",
-                                                  options=options)
+                                                   "Image Files (*.tif *.tiff *.png *.jpg *.jpeg *.bmp)",
+                                                   options=options)
         if file_name:
             self.add_image_to_list(file_name)
 
@@ -148,25 +159,21 @@ class NucDetect(QMainWindow):
         :param name: The path leading to the file
         :return: None
         """
-        if name.rfind("\\") is -1:
-            file = name[name.rfind("/") + 1:]
-            folder = os.path.dirname(name)
-            folder = folder[folder.rfind("/") + 1:]
-        else:
-            file = name[name.rfind("\\") + 1:]
-            folder = os.path.dirname(name)
-            folder = folder[folder.rfind("\\") + 1:]
-        t = time.strftime('%d.%m.%Y, %H:%M', time.gmtime(os.path.getctime(name)))
-        item = QStandardItem()
-        item_text = "Name: " + file + "\nFolder: " + folder + "\nDate: " + str(t)
-        item.setText(item_text)
-        item.setTextAlignment(QtCore.Qt.AlignLeft)
-        icon = QIcon()
-        icon.addFile(name)
-        item.setIcon(icon)
-        self.img_list_model.appendRow(item)
-        self.reg_images[item_text] = name
-        self.img_keys[name] = self.detector.load_image(name)
+        temp = os.path.split(name)
+        folder = temp[0].split(sep=os.sep)[-1]
+        file = temp[1]
+        if os.path.splitext(file)[1] in Detector.FORMATS:
+            t = time.strftime('%d.%m.%Y', time.gmtime(os.path.getctime(name)))
+            item = QStandardItem()
+            item_text = "Name: {}\nFolder: {}\nDate: {}".format(file, folder, str(t))
+            item.setText(item_text)
+            item.setTextAlignment(QtCore.Qt.AlignLeft)
+            icon = QIcon()
+            icon.addFile(name)
+            item.setIcon(icon)
+            self.img_list_model.appendRow(item)
+            self.reg_images[item_text] = name
+            self.img_keys[name] = self.detector.load_image(name)
 
     def add_images_from_folder(self, url):
         """
@@ -174,23 +181,34 @@ class NucDetect(QMainWindow):
         :param url: The path of the folder
         :return: None
         """
-        files = os.listdir(url)
-        for file in files:
-            path = os.path.join(url, file)
-            if os.path.isfile(path):
-                self.add_image_to_list(path)
+        for t in os.walk(url):
+            for file in t[2]:
+                self.add_image_to_list(os.path.join(t[0], file))
 
-    def remove_image_from_list(self, name):
+    def remove_image_from_list(self):
         """
         Method to remove an loaded image from the file list.
-        :param name: The file name of the image to remove
-        :return:
+        :return: None
         """
-        # TODO
-        pass
+        cur_ind = self.ui.list_images.currentIndex()
+        self.img_list_model.removeRow(cur_ind.row())
+        if cur_ind.row() < self.img_list_model.rowCount():
+            self.ui.list_images.selectionModel().select(cur_ind, QItemSelectionModel.Select)
+            self.ui.list_images.setCurrentIndex(cur_ind)
+        else:
+            nex = self.img_list_model.index(cur_ind.row() - 1, 0)
+            self.ui.list_images.selectionModel().select(nex, QItemSelectionModel.Select)
+            self.ui.list_images.setCurrentIndex(nex)
 
     def clear_image_list(self):
-        pass
+        """
+        Method to clear the list of loaded images
+        :return: None
+        """
+        self.img_list_model.clear()
+        self.reg_images.clear()
+        self.img_keys.clear()
+        self.detector.clear()
 
     def analyze(self):
         """
@@ -213,14 +231,32 @@ class NucDetect(QMainWindow):
         thread.start()
 
     def analyze_image(self, key, message, percent, maxi):
+        con = sqlite3.connect(database)
+        curs = con.cursor()
         self.unsaved_changes = True
         self.detector.analyse_image(key)
         data = self.detector.get_output(key)
         self.res_table_model.setRowCount(0)
         self.res_table_model.setHorizontalHeaderLabels(data["header"])
         self.res_table_model.setColumnCount(len(data["data"][0]))
+        if not curs.execute(
+            "SELECT analysed FROM imgIndex WHERE md5 = ?",
+            (key,)
+        ).fetchall():
+            curs.execute(
+                "DELETE FROM results WHERE md5 = ?",
+                (key,)
+            )
         for x in range(len(data["data"])):
             row = []
+            row_cop = data["data"][x].copy()
+            row_cop.insert(0, key)
+            row_cop[4] = str(row_cop[4])
+            print(row_cop)
+            curs.execute(
+                "INSERT INTO results VALUES (?, ?, ?, ?, ?, ?, ?)",
+                row_cop
+            )
             for text in data["data"][x]:
                 item = QStandardItem()
                 item.setText(str(text))
@@ -228,6 +264,12 @@ class NucDetect(QMainWindow):
                 item.setSelectable(False)
                 row.append(item)
             self.res_table_model.appendRow(row)
+        curs.execute(
+            "UPDATE imgIndex SET analysed = ? WHERE md5 = ?",
+            (True, key)
+        )
+        con.commit()
+        con.close()
         self.prg_signal.emit(message.format(self.detector.snaps[key]["time"]), percent, maxi, "")
         self.ui.btn_save.setEnabled(True)
         self.ui.btn_images.setEnabled(True)
@@ -456,10 +498,15 @@ class NucDetect(QMainWindow):
         mod = ModificationDialog(handler=self.detector.snaps[self.cur_img["key"]]["handler"])
         mod.setWindowTitle("Modification")
         mod.setWindowIcon(QtGui.QIcon("logo.png"))
+        mod.setWindowFlags(mod.windowFlags() |
+                           QtCore.Qt.WindowSystemMenuHint |
+                           QtCore.Qt.WindowMinMaxButtonsHint |
+                           QtCore.Qt.Window)
         mod.exec()
 
     def on_close(self):
         self.detector.save_all_snaps()
+        self.connection.close()
 
 
 class MPLPlot(FigureCanvas):
@@ -914,10 +961,6 @@ class ModificationDialog(QDialog):
         self.ui.btn_merge.clicked.connect(self.on_button_click)
         self.ui.btn_remove.clicked.connect(self.on_button_click)
         self.ui.btn_edit.clicked.connect(self.on_button_click)
-        self.ui.btn_max.clicked.connect(self.change_window_size)
-        self.ui.btn_max.setIcon(qta.icon("fa5s.window-maximize", color="white"))
-        self.ui.btn_min.clicked.connect(self.change_window_size)
-        self.ui.btn_min.setIcon(qta.icon("fa5s.window-minimize", color="white"))
         # Initialize interactivity of graphics view
         self.set_current_image()
 
@@ -1015,15 +1058,6 @@ class ModificationDialog(QDialog):
             if len(index) > 1:
                 self.ui.btn_merge.setEnabled(True)
 
-    def change_window_size(self):
-        ident = self.sender().objectName()
-        if ident == "btn_max":
-            self.setWindowState(Qt.WindowFullScreen)
-            self.on_selection_change()
-        else:
-            self.setWindowState(Qt.WindowNoState)
-            self.on_selection_change()
-
     def get_qimage_from_numpy(self, numpy):
         img = Image.fromarray(numpy)
         qimg = ImageQt(img)
@@ -1062,8 +1096,7 @@ class NucView(QGraphicsView):
         for nuc in self.handler.nuclei:
             self.images.append(self.handler.get_roi_as_image(nuc))
         # Initialization of the background image
-        pmap = QPixmap()
-        self.sc_bckg = self.scene().addPixmap(pmap)
+        self.sc_bckg = self.scene().addPixmap(QPixmap())
         self.show_nucleus(self.index, self.channel)
 
     def show_nucleus(self, index, channel):
@@ -1165,7 +1198,7 @@ class NucView(QGraphicsView):
                         self.handler.nuclei[self.index].red.remove(self.map[item])
                     else:
                         self.handler.nuclei[self.index].green.remove(self.map[item])
-                    del self.map[item] # TODO Testen
+                    del self.map[item]
                     self.scene().removeItem(item)
 
     def mousePressEvent(self, event):
@@ -1253,7 +1286,6 @@ class QGraphicsFocusItem(QGraphicsEllipseItem):
         self.setAcceptHoverEvents(True)
         self.setFlag(QGraphicsItem.ItemIsSelectable)
         self.channel = channel
-        # TODO
 
     def hoverEnterEvent(self, *args, **kwargs):
         self.cur_col = self.hover_color

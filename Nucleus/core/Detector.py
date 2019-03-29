@@ -117,13 +117,6 @@ class Detector:
         for t in os.walk(direct):
             for file in t[2]:
                 self.load_image(os.path.join(t[0], file))
-        '''
-        files = os.listdir(direct)
-        for file in files:
-            path = os.path.join(direct, file)
-            if os.path.isfile(path):
-                self.load_image(path)
-        '''
 
     def _calculate_image_id(self, url):
         """
@@ -251,51 +244,6 @@ class Detector:
             raise ValueError("No images provided!")
         for key, img in self.images.items():
             self.analyse_image(key)
-
-    def show_snapshot(self, which):
-        """
-        Method to show the saved processing snapshots of a specific image using matplotlib
-
-        :param which The md5 hash of the image
-        """
-        if self.save_snapshots and len(self.snaps) > 0:
-            if which is not None:
-                # TODO
-                snap = which
-                vals = self.snaps.get(which)
-                fig, axes = plt.subplots(ncols=3, nrows=5, figsize=(20, 9))
-                fig.canvas.set_window_title("Analysis of: " + snap)
-                ax = axes.ravel()
-                ax[0].imshow(vals.get("channel")[0], cmap='gray')
-                ax[0].set_title("Blue channel")
-                ax[1].imshow(vals.get("channel")[1], cmap='gray')
-                ax[1].set_title("Red channel")
-                ax[2].imshow(vals.get("channel")[2], cmap='gray')
-                ax[2].set_title("Green channel")
-                ax[3].imshow(vals.get("binarized")[0], cmap='gray')
-                ax[3].set_title("Thresholding - triangle")
-                ax[4].imshow(vals.get("binarized")[1], cmap='gray')
-                ax[4].set_title("Thresholding - custom")
-                ax[5].imshow(vals.get("binarized")[2], cmap='gray')
-                ax[5].set_title("Thresholding - custom")
-                ax[6].imshow(vals.get("edm")[0], cmap="gray")
-                ax[6].set_title("Euclidean Distance Transform")
-                ax[7].imshow(vals.get("edm")[1], cmap="gray")
-                ax[7].set_title("Euclidean Distance Transform")
-                ax[8].imshow(vals.get("edm")[2], cmap="gray")
-                ax[8].set_title("Euclidean Distance Transform")
-                ax[9].imshow(vals.get("watershed")[0], cmap='gray')
-                ax[9].set_title("Watershed")
-                ax[10].imshow(vals.get("watershed")[1], cmap='gray')
-                ax[10].set_title("Watershed")
-                ax[11].imshow(vals.get("watershed")[2], cmap='gray')
-                ax[11].set_title("Watershed")
-                ax[12].set_title("Result")
-                ax[12].imshow(vals.get("result"))
-                for a in ax:
-                    a.axis('off')
-                plt.gray()
-                plt.show()
 
     def show_result(self, which, formatted=True):
         """
