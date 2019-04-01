@@ -222,102 +222,64 @@ class ROI:
         :return: dict -- A dict containing the calculated data
         """
         if self.chan == Channel.BLUE:
-            lowest_y = 0xffffffff
-            lowest_x = 0xffffffff
-            highest_y = -1
-            highest_x = -1
-            red_av_int = 0
-            red_low_int = 255
-            red_high_int = 0
-            red_med_int = []
-            red_av_area = 0
-            red_low_area = 0
-            red_high_area = 0
-            green_av_int = 0
-            green_low_int = 255
-            green_high_int = 0
-            green_med_int = []
-            green_av_area = 0
-            green_low_area = 0
-            green_high_area = 0
-            for point in self.points:
-                if point[0] < lowest_x:
-                    lowest_x = point[0]
-                if point[0] > highest_x:
-                    highest_x = point[0]
-                if point[1] < lowest_y:
-                    lowest_y = point[0]
-                if point[1] > highest_y:
-                    highest_y = point[1]
+            red_int = []
+            red_area = []
+            green_int = []
+            green_area = []
+            xpos = [x for x in self.points[0]]
+            ypos = [y for y in self.points[1]]
             for red in self.red:
                 stat = red.calculate_statistics()
                 t_int = stat["av_int"]
                 t_are = stat["area"]
-                red_av_int += t_int
-                red_med_int.append(t_int)
-                red_high_int = t_int if t_int > red_high_int else red_high_int
-                red_low_int = t_int if t_int < red_low_int else red_low_int
-                red_av_area += t_are
-                red_high_area = t_are if t_are > red_high_area else red_high_area
-                red_low_area = t_are if t_are < red_low_area else red_low_area
-            len_red = len(self.red) if len(self.red) > 0 else 1
-            red_av_area = red_av_area / len_red
-            red_av_int = red_av_int / len_red
+                red_int.append(t_int)
+                red_area.append(t_are)
             for green in self.green:
                 stat = green.calculate_statistics()
                 t_int = stat["av_int"]
                 t_are = stat["area"]
-                green_av_int += t_int
-                green_med_int.append(t_int)
-                green_high_int = t_int if t_int > green_high_int else green_high_int
-                green_low_int = t_int if t_int < green_low_int else green_low_int
-                green_av_area += t_are
-                green_low_area = t_are if t_are < green_low_area else green_low_area
-                green_high_area = t_are if t_are > green_high_area else green_high_area
-            len_green = len(self.green) if len(self.green) > 0 else 1
-            green_av_area = green_av_area / len_green
-            green_av_int = green_av_int / len_green
+                green_int.append(t_int)
+                green_area.append(t_are)
+            if not red_int or not red_area:
+                red_int.append(-1)
+                red_area.append(-1)
+            if not green_int or green_area:
+                green_int.append(-1)
+                green_area.append(-1)
             self.stat = {
-                "lowest_y": lowest_y,
-                "highest_y": highest_y,
-                "lowest_x": lowest_x,
-                "highest_x": highest_x,
+                "lowest_y": min(ypos),
+                "highest_y": max(ypos),
+                "lowest_x": min(xpos),
+                "highest_x": max(xpos),
                 "area": len(self.points),
                 "red_roi": len(self.red),
                 "green_roi": len(self.green),
-                "red_int": red_med_int,
-                "red_av_int": red_av_int,
-                "red_med_int": np.median(red_med_int),
-                "red_high_int": red_high_int,
-                "red_low_int": red_low_int,
-                "red_av_area": red_av_area,
-                "red_low_area": red_low_area,
-                "red_high_area": red_high_area,
-                "green_int": green_med_int,
-                "green_av_int": green_av_int,
-                "green_med_int": np.median(green_med_int),
-                "green_high_int": green_high_int,
-                "green_low_int": green_low_int,
-                "green_av_area": green_av_area,
-                "green_low_area": green_low_area,
-                "green_high_area": green_high_area
+                "red_int": red_int,
+                "red_av_int": np.average(red_int),
+                "red_med_int": np.median(red_int),
+                "red_high_int": max(red_int),
+                "red_low_int": min(red_int),
+                "red_av_area": np.average(red_area),
+                "red_low_area": min(red_area),
+                "red_high_area": max(red_area),
+                "green_int": green_int,
+                "green_av_int": np.average(green_int),
+                "green_med_int": np.median(green_int),
+                "green_high_int": max(green_int),
+                "green_low_int": min(green_int),
+                "green_av_area": np.average(green_area),
+                "green_low_area": min(green_area),
+                "green_high_area": max(green_area)
             }
         else:
-            av_int = 0
-            low_int = 255
-            high_int = 0
-            med_int = []
-            for key, val in self.intensities.items():
-                av_int += val
-                med_int.append(val)
-                low_int = val if val < low_int else low_int
-                high_int = val if val > high_int else high_int
+            int_ = list(self.intensities.values())
+            print(min(int_))
             self.stat = {
-                "low_int": low_int,
-                "high_int": high_int,
-                "av_int": av_int / len(self.points),
-                "med_int": med_int.sort(),
-                "area": len(self.points)
+                "low_int": int(min(int_)),
+                "high_int": int(max(int_)),
+                "av_int": np.average(int_),
+                "med_int": np.median(int_),
+                "area": len(int_)
             }
         return self.stat
 

@@ -436,7 +436,7 @@ class NucDetect(QMainWindow):
         stat_dialog.ui.lbl_num_red_max.setText(
             "Max. Red Number: {:>}".format(max(stat["number red"])))
         stat_dialog.ui.lbl_num_red_min.setText(
-            "Min. Red Number: {:>}".format(min([ x for x in stat["number red"] if x > 0])))
+            "Min. Red Number: {:>}".format(min([x for x in stat["number red"] if x > 0])))
         stat_dialog.ui.lbl_num_green_max.setText(
             "Max. Green Number: {:>}".format(max(stat["number green"])))
         stat_dialog.ui.lbl_num_green_min.setText(
