@@ -240,19 +240,77 @@ class NucDetect(QMainWindow):
         self.res_table_model.setHorizontalHeaderLabels(data["header"])
         self.res_table_model.setColumnCount(len(data["data"][0]))
         if not curs.execute(
-            "SELECT analysed FROM imgIndex WHERE md5 = ?",
+            "SELECT * FROM imgIndex WHERE md5 = ?",
             (key,)
         ).fetchall():
             curs.execute(
                 "DELETE FROM results WHERE md5 = ?",
                 (key,)
             )
+            curs.execute(
+                "DELETE FROM nuclei WHERE image = ?",
+                (key,)
+            )
+            curs.execute(
+                "DELETE FROM foci WHERE image = ?",
+                (key,)
+            )
+            curs.execute(
+                "DELETE FROM focStat WHERE image = ?",
+                (key,)
+            )
+            curs.execute(
+                "DELETE FROM nucStat WHERE image = ?",
+                (key,)
+            )
+        for nucleus in self.detector.snaps[key]["handler"].nuclei:
+            nucdat = nucleus.get_data()
+            nucstat = nucleus.calculate_statistics()
+            curs.execute(
+                "INSERT INTO nuclei VALUES (?, ?, ?, ?, ?, ?)",
+                (nucdat["id"], key, nucdat["center"][0], nucdat["center"][1], nucdat["width"], nucdat["height"])
+            )
+            curs.execute(
+                "INSERT INTO nucStat VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? , ?, ?, ?, ? ,?)",
+                (
+                    nucdat["id"], nucstat["area"], nucstat["red_roi"], nucstat["green_roi"], nucstat["red_av_int"],
+                    nucstat["red_med_int"], nucstat["green_av_int"], nucstat["green_med_int"], nucstat["red_low_int"],
+                    nucstat["red_high_int"], nucstat["green_low_int"], nucstat["green_high_int"], nucstat["red_av_int"],
+                    nucstat["green_av_int"],nucstat["red_low_int"], nucstat["red_high_int"], nucstat["green_low_int"],
+                    nucstat["green_high_int"], key
+                )
+            )
+            for red in nucleus.red:
+                focdat = red.get_data()
+                focstat = red.calculate_statistics()
+                curs.execute(
+                    "INSERT INTO foci VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (focdat["id"], key, nucdat["id"], focdat["center"][0], focdat["center"][1], focdat["width"],
+                     focdat["height"])
+                )
+                curs.execute(
+                    "INSERT INTO focStat VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (focdat["id"], nucdat["id"], 1, focstat["low_int"], focstat["high_int"], focstat["av_int"],
+                     focstat["med_int"], focstat["area"], key)
+                )
+            for green in nucleus.green:
+                focdat = green.get_data()
+                focstat = green.calculate_statistics()
+                curs.execute(
+                    "INSERT INTO foci VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (focdat["id"], key, nucdat["id"], focdat["center"][0], focdat["center"][1], focdat["width"],
+                     focdat["height"])
+                )
+                curs.execute(
+                    "INSERT INTO focStat VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (focdat["id"], nucdat["id"], 2, focstat["low_int"], focstat["high_int"], focstat["av_int"],
+                     focstat["med_int"], focstat["area"], key)
+                )
         for x in range(len(data["data"])):
             row = []
             row_cop = data["data"][x].copy()
             row_cop.insert(0, key)
             row_cop[4] = str(row_cop[4])
-            print(row_cop)
             curs.execute(
                 "INSERT INTO results VALUES (?, ?, ?, ?, ?, ?, ?)",
                 row_cop

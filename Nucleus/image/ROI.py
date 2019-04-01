@@ -7,6 +7,7 @@ Created on 06.10.2018
 from Nucleus.image import Channel
 from operator import itemgetter
 import numpy as np
+import hashlib
 
 
 class ROI:
@@ -21,13 +22,9 @@ class ROI:
         """
         Constructor to initialize the ROI. Each ROI is initialized with no
         points and assumed to be in the blue channel if not set otherwise
-
-        Keyword arguments:
-        points(list of 2D tuples, optional): The points which describe the area
-        of the ROI. Contains 2D tuples in form of (x,y)
-
-        channel(int, optional): Describes the channel in which the ROI was
-        found (default: channel.BLUE)
+        :param image_id: Tmd5 hash of the image containing the ROI (optional)
+        :param points: The points which describe the area of the ROI. Contains 2D tuples in form of (x,y) (2D list)
+        :param chan: Describes the channel in which the ROI was found (default: channel.BLUE, optional)
         """
         self.chan = chan
         self.coordinates = [0, 0, 0, 0]
@@ -191,7 +188,8 @@ class ROI:
             "green roi": self.green,
             "green_intensity": 0,
             "red roi": self.red,
-            "red_intensity": 0
+            "red_intensity": 0,
+            "id": self.get_id()
         }
         return inf
 
@@ -322,3 +320,11 @@ class ROI:
                 "area": len(self.points)
             }
         return self.stat
+
+    def get_id(self):
+        """
+        Returns an unique identifier for this roi
+        :return: The id as str
+        """
+        m = hashlib.md5("{}{}".format(self.points, self.chan).encode())
+        return m.hexdigest()
