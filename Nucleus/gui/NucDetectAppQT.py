@@ -268,8 +268,8 @@ class NucDetect(QMainWindow):
             nucdat = nucleus.get_data()
             nucstat = nucleus.calculate_statistics()
             curs.execute(
-                "INSERT INTO nuclei VALUES (?, ?, ?, ?, ?, ?)",
-                (nucdat["id"], key, nucdat["center"][0], nucdat["center"][1], nucdat["width"], nucdat["height"])
+                "INSERT INTO nuclei VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (nucdat["id"], key, nucdat["center"][0], nucdat["center"][1], nucdat["width"], nucdat["height"], True)
             )
             curs.execute(
                 "INSERT INTO nucStat VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? , ?, ?, ?, ? ,?)",
@@ -1386,7 +1386,6 @@ class QGraphicsFocusItem(QGraphicsEllipseItem):
 
 
 if __name__ == '__main__':
-    np.set_printoptions(threshold=np.nan)
     app = QtWidgets.QApplication(sys.argv)
     pixmap = QPixmap("banner_norm.png")
     splash = QSplashScreen(pixmap)

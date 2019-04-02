@@ -36,7 +36,7 @@ class Detector:
         ".bmp"
     ]
 
-    def __init__(self, settings):
+    def __init__(self):
         """
         Constructor to initialize the detector
 
@@ -47,35 +47,10 @@ class Detector:
         self.images = {}
         self.snaps = {}
         self.save_snapshots = True
-        self.assessment = False  # settings["assess quality"]
         self.settings = {
-            "assess_quality": False,
-            "save_snaps": True,
-            "oversegmentation": False,
-            "padding": 10,
-            "edge-ignore": True,
-            "hough": False,
-            "hough_acc": 20,
-            "hough_thresh": 250,
-            "hough_min_size1": 50,
-            "hough_max_size1" : 300,
-            "hough_min_size2": 2,
-            "hough_max_size2": 10,
-            "hough_min_size3": 2,
-            "hough_man_size3": 10,
-            "hough_num": 200,
-            "nucleus_hor": 13,
-            "nucleus_vert": 91,
-            "foci_hor": 31,
-            "foci_vert": 31,
-            "foci_perc": 40,
-            "foci_min": 10,
-            "foci_ign": 0.0005,
-            "res_csv": 1,
-            "res_cons": 0,
-            "res_form": 0,
-            "res_img_ann": 1,
-            "res_snap": 1
+            "ass_qual": True,
+            "snaps_num": 2,
+            "snaps_save": 1,
         }
         self.keys = []
 
@@ -152,7 +127,7 @@ class Detector:
             img_array = img[0]
             start = time.time()
             channels = self._get_channels(img_array)
-            if self.assessment:
+            if self.settings["ass_qual"]:
                 qual = self._estimate_image_quality(channels)
             handler = ROI_Handler(ident=which)
             handler.set_names(names)
@@ -173,9 +148,9 @@ class Detector:
                 "settings": self.settings,
                 "categories": []
             }
-            if self.settings["assess_quality"]:
+            if self.settings["ass_qual"]:
                 cur_snaps["quality"] = qual
-            if self.settings["save_snaps"]:
+            if self.settings["snaps_save"]:
                 cur_snaps["channel"] = channels
                 cur_snaps["binarized"] = thr_chan[0]
                 cur_snaps["edges"] = thr_chan[1]
