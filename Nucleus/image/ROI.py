@@ -18,12 +18,12 @@ class ROI:
     PARTIAL_ENCLOSURE = 0
     FULL_ENCLOSURE = 1
 
-    def __init__(self, points=None, chan=Channel.BLUE):
+    def __init__(self, points=None, auto=True, chan=Channel.BLUE):
         """
         Constructor to initialize the ROI. Each ROI is initialized with no
         points and assumed to be in the blue channel if not set otherwise
-        :param image_id: Tmd5 hash of the image containing the ROI (optional)
         :param points: The points which describe the area of the ROI. Contains 2D tuples in form of (x,y) (2D list)
+        :param auto: Determines if the ROI was detected automatically.
         :param chan: Describes the channel in which the ROI was found (default: channel.BLUE, optional)
         """
         self.chan = chan
@@ -37,8 +37,7 @@ class ROI:
         self.stat = {}
         self.intensities = {}
         self.min_foc_int = 20
-        self.min_border = 5
-        self.on_edge = False
+        self.auto = auto
         if points is not None:
             self.points.append(points)
 

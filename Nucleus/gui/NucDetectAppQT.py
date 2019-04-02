@@ -59,6 +59,7 @@ class NucDetect(QMainWindow):
         self.connection = sqlite3.connect(database)
         self.cursor = self.connection.cursor()
         self.settings = self.load_settings()
+        self.detector.settings = self.settings
         self.reg_images = {}
         self.sel_images = []
         self.img_keys = {}
@@ -173,7 +174,7 @@ class NucDetect(QMainWindow):
             item.setIcon(icon)
             self.img_list_model.appendRow(item)
             self.reg_images[item_text] = name
-            self.img_keys[name] = self.detector.load_image(name)
+            self.img_keys[name] = self.detector.load_image(name, self.settings["chan_names"])
 
     def add_images_from_folder(self, url):
         """
@@ -525,7 +526,11 @@ class NucDetect(QMainWindow):
         cl_dialog.ui = uic.loadUi(ui_class_dial, cl_dialog)
         cl_dialog.setWindowTitle("Classification")
         cl_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
-        categories = self.detector.get_categories(self.cur_img["key"])
+        # categories = self.detector.get_categories(self.cur_img["key"])
+        categories = self.cursor.execute(
+            "SELECT category FROM categories WHERE image = ?",
+            (self.cur_img["key"],)
+        )
         cate = ""
         for cat in categories:
             cate += str(cat) + "\n"
@@ -538,6 +543,15 @@ class NucDetect(QMainWindow):
         if categories is not "":
             categories = categories.split('\n')
             self.detector.categorize_image(self.cur_img["key"], categories)
+            self.cursor.execute(
+                "DELETE FROM categories WHERE image = ?",
+                (self.cur_img["key"],)
+            )
+            for cat in categories:
+                self.cursor.execute(
+                    "INSERT INTO categories VALUES(?, ?)",
+                    (self.cur_img["key"], cat)
+                )
 
     def show_settings(self):
         sett = SettingsDialog()
@@ -550,6 +564,10 @@ class NucDetect(QMainWindow):
             if sett.changed:
                 for key, value in sett.changed.items():
                     self.detector.settings[key] = value
+                    self.cursor.execute(
+                        "INSERT INTO settings VALUES(?, ?)",
+                        (key, value)
+                    )
             sett.save_menu_settings()
 
     def show_modification_window(self):
@@ -995,11 +1013,16 @@ class ModificationDialog(QDialog):
     def __init__(self, handler=None, parent=None):
         super(ModificationDialog, self).__init__(parent)
         self.handler = handler
+        self.original = handler.nuclei.copy()
         self.last_index = 0
         self.cur_index = 0
         self.cur_channel = 3
         self.mp = None
         self.initialize_ui()
+
+    def reject(self):
+        self.handler.nuclei = self.original
+        super(ModificationDialog, self).reject()
 
     def initialize_ui(self):
         self.ui = uic.loadUi(ui_modification_dial, self)
@@ -1309,7 +1332,7 @@ class NucView(QGraphicsView):
             mask = np.zeros(shape=cur_nuc.shape)
             rr, cc = ellipse(y_center, x_center, height, width, shape=mask.shape)
             mask[rr, cc] = 1
-            cur_roi = ROI(chan=Channel.RED if self.channel is not 2 else Channel.GREEN)
+            cur_roi = ROI(auto=False, chan=Channel.RED if self.channel is not 2 else Channel.GREEN)
             nuc_dat = self.handler.nuclei[self.index].get_data()["minmax"]
             x_offset = nuc_dat[0]
             y_offset = nuc_dat[2]

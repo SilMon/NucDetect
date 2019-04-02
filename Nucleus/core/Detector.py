@@ -36,7 +36,7 @@ class Detector:
         ".bmp"
     ]
 
-    def __init__(self):
+    def __init__(self, settings):
         """
         Constructor to initialize the detector
 
