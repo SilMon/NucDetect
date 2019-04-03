@@ -20,7 +20,7 @@ Requirements
 * PyQT5 >= 5.11.3
 * Pillow
 * qtawesome
-* exifread
+* piexif
 
 Run the following commands to clone and install from GitHub.
 
