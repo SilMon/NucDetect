@@ -352,8 +352,6 @@ class Detector:
             x = p[1]
             if (x >= 0) and (x < width) and (y >= 0) and (y < height):
                 if region_map[y][x] and not truth_table[y][x]:
-                    if y == 0 | x == 0:
-                        print("Edge")
                     truth_table[y][x] = True
                     nuc.append(p)
                     points.append((y+1, x))

@@ -91,7 +91,6 @@ class ROI_Handler:
         """
         Method to analyse an image according to the given data
         """
-        print("Image analysis")
         # Analysis of the blue channel
         self.nuclei = self.extract_roi_from_channel(
             channel=self.blue_markers,

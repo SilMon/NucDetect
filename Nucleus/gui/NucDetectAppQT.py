@@ -7,6 +7,7 @@ from threading import Thread
 
 import PyQt5
 import numpy as np
+import piexif
 import qtawesome as qta
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -164,9 +165,11 @@ class NucDetect(QMainWindow):
         folder = temp[0].split(sep=os.sep)[-1]
         file = temp[1]
         if os.path.splitext(file)[1] in Detector.FORMATS:
-            t = time.strftime('%d.%m.%Y', time.gmtime(os.path.getctime(name)))
+            tags = piexif.load(name)["0th"]
+
+            t = tags[piexif.ImageIFD.DateTime].decode("ascii").split(" ")
             item = QStandardItem()
-            item_text = "Name: {}\nFolder: {}\nDate: {}".format(file, folder, str(t))
+            item_text = "Name: {}\nFolder: {}\nDate: {}\nTime: {}".format(file, folder, t[0], t[1])
             item.setText(item_text)
             item.setTextAlignment(QtCore.Qt.AlignLeft)
             icon = QIcon()
@@ -175,6 +178,13 @@ class NucDetect(QMainWindow):
             self.img_list_model.appendRow(item)
             self.reg_images[item_text] = name
             self.img_keys[name] = self.detector.load_image(name, self.settings["chan_names"])
+            self.cursor.execute(
+                "INSERT INTO imgIndex VALUES(?, ?, ?, ?, ?, ?, ?)",
+                (self.img_keys[name], tags[piexif.ImageIFD.ImageWidth], tags[piexif.ImageIFD.ImageLength],
+                 str(tags[piexif.ImageIFD.XResolution]), str(tags[piexif.ImageIFD.YResolution]),
+                 tags[piexif.ImageIFD.ResolutionUnit] if piexif.ImageIFD.ResolutionUnit in tags else 2, 0)
+            )
+            self.connection.commit()
 
     def add_images_from_folder(self, url):
         """
@@ -220,7 +230,7 @@ class NucDetect(QMainWindow):
         if not self.sel_images:
             self.ui.list_images.select(self.img_list_model.index(0, 0))
         self.prg_signal.emit("Analysing " + str(self.sel_images[0]),
-                          0, 100, "")
+                             0, 100, "")
         key = self.img_keys[self.sel_images[0]]
         self.cur_img["path"] = self.sel_images[0]
         self.cur_img["key"] = key
@@ -231,15 +241,24 @@ class NucDetect(QMainWindow):
                               100, 100,))
         thread.start()
 
-    def analyze_image(self, key, message, percent, maxi):
+    def analyze_image(self, key, message, percent, maxi, all_=False):
+        if not all_:
+            self.ui.list_images.setEnabled(False)
+            self.ui.btn_analyse.setEnabled(False)
+            self.ui.btn_analyse_all.setEnabled(False)
+            self.ui.btn_clear_list.setEnabled(False)
+            self.ui.btn_delete_from_list.setEnabled(False)
+        self.prg_signal.emit("Connecting to database", 0 if not all_ else percent, maxi, "")
         con = sqlite3.connect(database)
         curs = con.cursor()
         self.unsaved_changes = True
+        self.prg_signal.emit("Analysing image", maxi*0.05 if not all_ else percent, maxi, "")
         self.detector.analyse_image(key)
         data = self.detector.get_output(key)
         self.res_table_model.setRowCount(0)
         self.res_table_model.setHorizontalHeaderLabels(data["header"])
         self.res_table_model.setColumnCount(len(data["data"][0]))
+        self.prg_signal.emit("Checking database", maxi*0.50 if not all_ else percent, maxi, "")
         if not curs.execute(
             "SELECT * FROM imgIndex WHERE md5 = ?",
             (key,)
@@ -264,6 +283,7 @@ class NucDetect(QMainWindow):
                 "DELETE FROM nucStat WHERE image = ?",
                 (key,)
             )
+        self.prg_signal.emit("Analysing nuclei", maxi * 0.65 if not all_ else percent, maxi, "")
         for nucleus in self.detector.snaps[key]["handler"].nuclei:
             nucdat = nucleus.get_data()
             nucstat = nucleus.calculate_statistics()
@@ -307,6 +327,7 @@ class NucDetect(QMainWindow):
                     (focdat["id"], nucdat["id"], 2, focstat["low_int"], focstat["high_int"], focstat["av_int"],
                      focstat["med_int"], focstat["area"], key)
                 )
+        self.prg_signal.emit("Creating result table", maxi * 0.85 if not all_ else percent, maxi, "")
         for x in range(len(data["data"])):
             row = []
             row_cop = data["data"][x].copy()
@@ -327,6 +348,7 @@ class NucDetect(QMainWindow):
             "UPDATE imgIndex SET analysed = ? WHERE md5 = ?",
             (True, key)
         )
+        self.prg_signal.emit("Writing to database", maxi * 0.95 if not all_ else percent, maxi, "")
         con.commit()
         con.close()
         self.prg_signal.emit(message.format(self.detector.snaps[key]["time"]), percent, maxi, "")
@@ -335,6 +357,12 @@ class NucDetect(QMainWindow):
         self.ui.btn_statistics.setEnabled(True)
         self.ui.btn_categories.setEnabled(True)
         self.ui.btn_modify.setEnabled(True)
+        if not all_:
+            self.ui.list_images.setEnabled(True)
+            self.ui.btn_analyse.setEnabled(True)
+            self.ui.btn_analyse_all.setEnabled(True)
+            self.ui.btn_clear_list.setEnabled(True)
+            self.ui.btn_delete_from_list.setEnabled(True)
         '''
         if len(self.sel_images) is not 0:
             self.analyze()
@@ -357,6 +385,11 @@ class NucDetect(QMainWindow):
         self.ui.prg_bar.setValue((progress/maxi)*100)
 
     def analyze_all(self):
+        self.ui.list_images.setEnabled(False)
+        self.ui.btn_analyse.setEnabled(False)
+        self.ui.btn_analyse_all.setEnabled(False)
+        self.ui.btn_clear_list.setEnabled(False)
+        self.ui.btn_delete_from_list.setEnabled(False)
         self.unsaved_changes = True
         self.selec_signal.emit()
         thread = Thread(target=self._analyze_all, args=(
@@ -364,15 +397,25 @@ class NucDetect(QMainWindow):
         thread.start()
 
     def _analyze_all(self, percent=0, maxi=0):
+        self.ui.list_images.setEnabled(False)
+        self.ui.btn_analyse.setEnabled(False)
+        self.ui.btn_analyse_all.setEnabled(False)
+        self.ui.btn_clear_list.setEnabled(False)
+        self.ui.btn_delete_from_list.setEnabled(False)
         self.analyze_image(self.img_keys[self.sel_images[0]],
                            message="Analysing " + self.sel_images[0],
-                           percent=percent, maxi=maxi)
+                           percent=percent, maxi=maxi, all_=True)
         if percent < maxi:
             self.selec_signal.emit()
             # TODO Optimales sleep Intervall herausfinden + Detector Bug fixen -> Löschen von Snaps
             time.sleep(0.3)
             self._analyze_all(percent=percent + 1, maxi=maxi)
         if percent == maxi:
+            self.ui.list_images.setEnabled(True)
+            self.ui.btn_analyse.setEnabled(True)
+            self.ui.btn_analyse_all.setEnabled(True)
+            self.ui.btn_clear_list.setEnabled(True)
+            self.ui.btn_delete_from_list.setEnabled(True)
             self.prg_signal.emit("Analysis finished -- Program ready",
                                 maxi,
                                 maxi, "")

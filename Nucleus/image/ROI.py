@@ -225,8 +225,6 @@ class ROI:
             red_area = []
             green_int = []
             green_area = []
-            xpos = [x for x in self.points[0]]
-            ypos = [y for y in self.points[1]]
             for red in self.red:
                 stat = red.calculate_statistics()
                 t_int = stat["av_int"]
@@ -246,10 +244,10 @@ class ROI:
                 green_int.append(-1)
                 green_area.append(-1)
             self.stat = {
-                "lowest_y": min(ypos),
-                "highest_y": max(ypos),
-                "lowest_x": min(xpos),
-                "highest_x": max(xpos),
+                "lowest_y": min(self.points, key=itemgetter(1))[1],
+                "highest_y": max(self.points, key=itemgetter(1))[1],
+                "lowest_x": min(self.points, key=itemgetter(1))[0],
+                "highest_x": min(self.points, key=itemgetter(1))[0],
                 "area": len(self.points),
                 "red_roi": len(self.red),
                 "green_roi": len(self.green),
@@ -272,7 +270,6 @@ class ROI:
             }
         else:
             int_ = list(self.intensities.values())
-            print(min(int_))
             self.stat = {
                 "low_int": int(min(int_)),
                 "high_int": int(max(int_)),
