@@ -157,7 +157,6 @@ class ROI_Handler:
                     x_coord = nuc_stat["lowest_x"], nuc_stat["highest_x"]
                     if (x_coord[0] == 0 or x_coord[1] == len(self.blue_orig[0]) or
                        y_coord[0] == 0 or y_coord[1] == len(self.blue_orig)):
-
                         rem_list.append(nucleus)
         # Remove foci duplicates
         red_dup = []
@@ -384,8 +383,8 @@ class ROI_Handler:
         for roi in self.nuclei:
             if roi is not None:
                 tex = "<font color=\"white\">In:{0:>6}<br>R:{1:>6}<br>G:{2:>6}</font>".format(str(ind),
-                                                             str(len(roi.red)),
-                                                             str(len(roi.green)))
+                                                                                              str(len(roi.red)),
+                                                                                              str(len(roi.green)))
                 dat = roi.get_data()
                 c = dat["center"]
                 rect = QRectF(c[0]-20, c[1]-20, 40, 40)
@@ -408,9 +407,7 @@ class ROI_Handler:
         Method to calculate statistics about the saved ROIs
         :return: dict -- A dictonary containing the data
         """
-        # TODO aufräumen
         area = []
-        num_nuc = 0
         num_red = []
         num_empty = 0
         int_red = []

@@ -8,6 +8,7 @@ from Nucleus.image import Channel
 from operator import itemgetter
 import numpy as np
 import hashlib
+import json
 
 
 class ROI:
@@ -38,6 +39,7 @@ class ROI:
         self.intensities = {}
         self.min_foc_int = 20
         self.auto = auto
+        self.ident = None
         if points is not None:
             self.points.append(points)
 
@@ -74,6 +76,7 @@ class ROI:
         """
         self.points.append(point)
         self.intensities[point] = intensity
+        self.ident = None
 
     def _calculate_center(self):
         """
@@ -284,5 +287,21 @@ class ROI:
         Returns an unique identifier for this roi
         :return: The id as str
         """
-        m = hashlib.md5("{}{}".format(self.points, self.chan).encode())
-        return m.hexdigest()
+        if self.ident is None:
+            self.ident = hashlib.md5("{}{}".format(self.points, self.chan).encode()).hexdigest()
+        return self.ident
+
+    def convert_to_json(self):
+        """
+        Converts this ROI to a JSON string
+        :return: This ROI as JSON (str)
+        """
+        return json.dump(self.points)
+
+    def initialize_from_json(self, obj):
+        """
+        Initializes this ROI from a JSON string
+        :param obj: The JSON string
+        :return: None
+        """
+        self.points = json.load(obj)

@@ -178,12 +178,16 @@ class NucDetect(QMainWindow):
             self.img_list_model.appendRow(item)
             self.reg_images[item_text] = name
             self.img_keys[name] = self.detector.load_image(name, self.settings["chan_names"])
-            self.cursor.execute(
-                "INSERT INTO imgIndex VALUES(?, ?, ?, ?, ?, ?, ?)",
-                (self.img_keys[name], tags[piexif.ImageIFD.ImageWidth], tags[piexif.ImageIFD.ImageLength],
-                 str(tags[piexif.ImageIFD.XResolution]), str(tags[piexif.ImageIFD.YResolution]),
-                 tags[piexif.ImageIFD.ResolutionUnit] if piexif.ImageIFD.ResolutionUnit in tags else 2, 0)
-            )
+            if not self.cursor.execute(
+                "SELECT * FROM imgIndex WHERE md5 = ?",
+                    (self.img_keys[name], )
+            ).fetchall():
+                self.cursor.execute(
+                    "INSERT INTO imgIndex VALUES(?, ?, ?, ?, ?, ?, ?)",
+                    (self.img_keys[name], tags[piexif.ImageIFD.ImageWidth], tags[piexif.ImageIFD.ImageLength],
+                     str(tags[piexif.ImageIFD.XResolution]), str(tags[piexif.ImageIFD.YResolution]),
+                     tags[piexif.ImageIFD.ResolutionUnit] if piexif.ImageIFD.ResolutionUnit in tags else 2, 0)
+                )
             self.connection.commit()
 
     def add_images_from_folder(self, url):
@@ -259,8 +263,8 @@ class NucDetect(QMainWindow):
         self.res_table_model.setHorizontalHeaderLabels(data["header"])
         self.res_table_model.setColumnCount(len(data["data"][0]))
         self.prg_signal.emit("Checking database", maxi*0.50 if not all_ else percent, maxi, "")
-        if not curs.execute(
-            "SELECT * FROM imgIndex WHERE md5 = ?",
+        if curs.execute(
+            "SELECT analysed FROM imgIndex WHERE md5 = ?",
             (key,)
         ).fetchall():
             curs.execute(
