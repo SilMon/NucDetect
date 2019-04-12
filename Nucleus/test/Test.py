@@ -4,7 +4,10 @@ Created on 02.10.2018
 '''
 
 import os
-from Nucleus.core.Detector import Detector
+from skimage.feature import canny
+import skimage.io as io
+import matplotlib.pyplot as plt
+from skimage.color import rgb2gray
 
 
 def test_func(url):
@@ -13,12 +16,15 @@ def test_func(url):
     keyword arguments:
     url -- URL of the image file
     '''
-    det = Detector()
-    det.load_image(url)
-    det.analyse_images()
-    det.show_result(url)
-    det.show_result_image(url)
+    image = io.imread(url)
+    plt.imshow(image[..., 1], cmap="gray")
+    plt.show()
+    plt.imshow(image[..., 1].astype("float64"), cmap="gray")
+    plt.show()
+    plt.imshow(canny(image[..., 1].astype("float64")), cmap="gray")
+    plt.show()
+
 
 if __name__ == "__main__":
-    file_name = os.path.join(os.path.dirname(__file__), "test_2.tif")
+    file_name = r""
     test_func(file_name)

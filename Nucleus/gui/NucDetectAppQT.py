@@ -29,8 +29,9 @@ from skimage.draw import ellipse, circle
 from Nucleus.core.Detector import Detector
 from Nucleus.gui.settings.Settings import SettingsShowWidget, SettingsSlider, SettingsText, SettingsComboBox, \
     SettingsCheckBox, SettingsDial, SettingsSpinner, SettingsDecimalSpinner
-from Nucleus.image import Channel
-from Nucleus.image.ROI import ROI
+from Nucleus.core.Detector import Detector
+from Nucleus.core.ROI import ROI
+from Nucleus.core.ROIHandler import ROIHandler
 
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, False)
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, False)
@@ -56,14 +57,12 @@ class NucDetect(QMainWindow):
 
     def __init__(self):
         QMainWindow.__init__(self)
-        self.detector = Detector()
         self.connection = sqlite3.connect(database)
         self.cursor = self.connection.cursor()
         self.settings = self.load_settings()
-        self.detector.settings = self.settings
+        self.detector = Detector(settings=None)
         self.reg_images = {}
         self.sel_images = []
-        self.img_keys = {}
         self.cur_img = {}
         self.unsaved_changes = False
         self._setup_ui()
@@ -94,7 +93,7 @@ class NucDetect(QMainWindow):
         self.ui.list_images.setIconSize(QSize(75, 75))
         # Initialization of the result table
         self.res_table_model = QStandardItemModel(self.ui.table_results)
-        self.res_table_model.setHorizontalHeaderLabels(["Index", "Width", "Height", "Center", "Green Foci", "Red Foci"])
+        self.res_table_model.setHorizontalHeaderLabels(["Index", "Width", "Height", "Center", "Foci"])
         self.ui.table_results.setModel(self.res_table_model)
         self.ui.table_results.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         # Addition of on click listeners
@@ -155,28 +154,28 @@ class NucDetect(QMainWindow):
         if file_name:
             self.add_image_to_list(file_name)
 
-    def add_image_to_list(self, name):
+    def add_image_to_list(self, path):
         """
         Method to add an image to the list of loaded files. The image will be processed, added and loaded.
-        :param name: The path leading to the file
+        :param path: The path leading to the file
         :return: None
         """
-        temp = os.path.split(name)
+        temp = os.path.split(path)
         folder = temp[0].split(sep=os.sep)[-1]
         file = temp[1]
         if os.path.splitext(file)[1] in Detector.FORMATS:
-            tags = piexif.load(name)["0th"]
-
+            tags = piexif.load(path)["0th"]
             t = tags[piexif.ImageIFD.DateTime].decode("ascii").split(" ")
             item = QStandardItem()
             item_text = "Name: {}\nFolder: {}\nDate: {}\nTime: {}".format(file, folder, t[0], t[1])
             item.setText(item_text)
             item.setTextAlignment(QtCore.Qt.AlignLeft)
             icon = QIcon()
-            icon.addFile(name)
+            icon.addFile(path)
             item.setIcon(icon)
             self.img_list_model.appendRow(item)
-            self.reg_images[item_text] = name
+            self.reg_images[item_text] = path
+            """
             self.img_keys[name] = self.detector.load_image(name, self.settings["chan_names"])
             if not self.cursor.execute(
                 "SELECT * FROM imgIndex WHERE md5 = ?",
@@ -189,6 +188,7 @@ class NucDetect(QMainWindow):
                      tags[piexif.ImageIFD.ResolutionUnit] if piexif.ImageIFD.ResolutionUnit in tags else 2, 0)
                 )
             self.connection.commit()
+            """
 
     def add_images_from_folder(self, url):
         """
@@ -206,6 +206,7 @@ class NucDetect(QMainWindow):
         :return: None
         """
         cur_ind = self.ui.list_images.currentIndex()
+        del self.reg_images[self.img_list_model.item(cur_ind.row()).text()]
         self.img_list_model.removeRow(cur_ind.row())
         if cur_ind.row() < self.img_list_model.rowCount():
             self.ui.list_images.selectionModel().select(cur_ind, QItemSelectionModel.Select)
@@ -222,7 +223,6 @@ class NucDetect(QMainWindow):
         """
         self.img_list_model.clear()
         self.reg_images.clear()
-        self.img_keys.clear()
         self.detector.clear()
 
     def analyze(self):
@@ -235,17 +235,15 @@ class NucDetect(QMainWindow):
             self.ui.list_images.select(self.img_list_model.index(0, 0))
         self.prg_signal.emit("Analysing " + str(self.sel_images[0]),
                              0, 100, "")
-        key = self.img_keys[self.sel_images[0]]
-        self.cur_img["path"] = self.sel_images[0]
-        self.cur_img["key"] = key
-        del self.sel_images[0]
+        self.cur_img = self.sel_images[0]
+        self.sel_images.remove(self.sel_images[0])
         thread = Thread(target=self.analyze_image,
-                        args=(key,
+                        args=(self.cur_img,
                               "Analysis finished in {} -- Program ready",
                               100, 100,))
         thread.start()
 
-    def analyze_image(self, key, message, percent, maxi, all_=False):
+    def analyze_image(self, path, message, percent, maxi, all_=False):
         if not all_:
             self.ui.list_images.setEnabled(False)
             self.ui.btn_analyse.setEnabled(False)
@@ -253,16 +251,18 @@ class NucDetect(QMainWindow):
             self.ui.btn_clear_list.setEnabled(False)
             self.ui.btn_delete_from_list.setEnabled(False)
         self.prg_signal.emit("Connecting to database", 0 if not all_ else percent, maxi, "")
+        """
         con = sqlite3.connect(database)
         curs = con.cursor()
+        """
         self.unsaved_changes = True
         self.prg_signal.emit("Analysing image", maxi*0.05 if not all_ else percent, maxi, "")
-        self.detector.analyse_image(key)
-        data = self.detector.get_output(key)
+        data = self.detector.analyse_image(path)
         self.res_table_model.setRowCount(0)
         self.res_table_model.setHorizontalHeaderLabels(data["header"])
         self.res_table_model.setColumnCount(len(data["data"][0]))
         self.prg_signal.emit("Checking database", maxi*0.50 if not all_ else percent, maxi, "")
+        """
         if curs.execute(
             "SELECT analysed FROM imgIndex WHERE md5 = ?",
             (key,)
@@ -287,10 +287,15 @@ class NucDetect(QMainWindow):
                 "DELETE FROM nucStat WHERE image = ?",
                 (key,)
             )
+        """
         self.prg_signal.emit("Analysing nuclei", maxi * 0.65 if not all_ else percent, maxi, "")
-        for nucleus in self.detector.snaps[key]["handler"].nuclei:
-            nucdat = nucleus.get_data()
-            nucstat = nucleus.calculate_statistics()
+        for roi in data["handler"].rois:
+            dim = roi.calculate_dimensions()
+            dat = roi.calculate_statistics()
+            if roi.main:
+                pass
+
+            """
             curs.execute(
                 "INSERT INTO nuclei VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (nucdat["id"], key, nucdat["center"][0], nucdat["center"][1], nucdat["width"], nucdat["height"], True)
@@ -305,9 +310,6 @@ class NucDetect(QMainWindow):
                     nucstat["green_high_int"], key
                 )
             )
-            for red in nucleus.red:
-                focdat = red.get_data()
-                focstat = red.calculate_statistics()
                 curs.execute(
                     "INSERT INTO foci VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (focdat["id"], key, nucdat["id"], focdat["center"][0], focdat["center"][1], focdat["width"],
@@ -331,16 +333,20 @@ class NucDetect(QMainWindow):
                     (focdat["id"], nucdat["id"], 2, focstat["low_int"], focstat["high_int"], focstat["av_int"],
                      focstat["med_int"], focstat["area"], key)
                 )
+            """
+        # TODO
         self.prg_signal.emit("Creating result table", maxi * 0.85 if not all_ else percent, maxi, "")
         for x in range(len(data["data"])):
             row = []
             row_cop = data["data"][x].copy()
-            row_cop.insert(0, key)
+            row_cop.insert(0, data["id"])
             row_cop[4] = str(row_cop[4])
+            """
             curs.execute(
                 "INSERT INTO results VALUES (?, ?, ?, ?, ?, ?, ?)",
                 row_cop
             )
+            """
             for text in data["data"][x]:
                 item = QStandardItem()
                 item.setText(str(text))
@@ -348,13 +354,17 @@ class NucDetect(QMainWindow):
                 item.setSelectable(False)
                 row.append(item)
             self.res_table_model.appendRow(row)
+        """    
         curs.execute(
             "UPDATE imgIndex SET analysed = ? WHERE md5 = ?",
             (True, key)
         )
+        """
         self.prg_signal.emit("Writing to database", maxi * 0.95 if not all_ else percent, maxi, "")
+        """
         con.commit()
         con.close()
+        """
         self.prg_signal.emit(message.format(self.detector.snaps[key]["time"]), percent, maxi, "")
         self.ui.btn_save.setEnabled(True)
         self.ui.btn_images.setEnabled(True)
@@ -628,7 +638,6 @@ class NucDetect(QMainWindow):
         mod.exec()
 
     def on_close(self):
-        self.detector.save_all_snaps()
         self.connection.close()
 
 
@@ -1264,7 +1273,7 @@ class NucView(QGraphicsView):
                 x_offset = nuc_dat[0]
                 y_offset = nuc_dat[2]
                 for green in self.handler.nuclei[self.index].green:
-                    foc = QGraphicsFocusItem(channel=Channel.GREEN)
+                    foc = QGraphicsFocusItem(color_index=1)
                     temp = green.get_data()
                     dim = (temp["width"], temp["height"])
                     c = temp["center"]
@@ -1292,7 +1301,7 @@ class NucView(QGraphicsView):
                     self.foc_group.append(foc)
                     self.scene().addItem(foc)
                 for green in self.handler.nuclei[self.index].green:
-                    foc = QGraphicsFocusItem(channel=Channel.GREEN)
+                    foc = QGraphicsFocusItem(color_index=1)
                     temp = green.get_data()
                     dim = (temp["width"], temp["height"])
                     c = temp["center"]
@@ -1399,21 +1408,22 @@ class NucView(QGraphicsView):
 
 
 class QGraphicsFocusItem(QGraphicsEllipseItem):
+    COLORS = [
+        QColor(255, 50, 0),  # Red
+        QColor(50, 255, 0),  # Green
+        QColor(255, 255, 0),  # Yellow
+        QColor(255, 0, 255),  # Magenta
+        QColor(0, 255, 255),  # Cyan
+    ]
 
-    def __init__(self, channel=Channel.RED, parent=None):
+    def __init__(self, color_index=0, parent=None):
         super(QGraphicsFocusItem, self).__init__(parent=parent)
-        if channel is Channel.RED:
-            self.main_color = QColor(255, 50, 0)
-            self.hover_color = QColor(255, 150, 0)
-            self.sel_color = QColor(255, 75, 150)
-        else:
-            self.main_color = QColor(50, 255, 0)
-            self.hover_color = QColor(150, 255, 0)
-            self.sel_color = QColor(75, 255, 150)
+        self.main_color = QGraphicsFocusItem.COLORS[color_index]
+        self.hover_color = self.main_color.lighter(150)
+        self.sel_color = self.main_color.lighter(200)
         self.cur_col = self.main_color
         self.setAcceptHoverEvents(True)
         self.setFlag(QGraphicsItem.ItemIsSelectable)
-        self.channel = channel
 
     def hoverEnterEvent(self, *args, **kwargs):
         self.cur_col = self.hover_color
