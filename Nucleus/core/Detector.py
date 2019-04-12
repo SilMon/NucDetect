@@ -77,20 +77,18 @@ class Detector:
         markers, lab_nums = Detector.perform_labelling(bin_maps)
         rois = []
         for ind in range(len(markers)):
-            print("lab_nums ind: {}".format(lab_nums))
-            temprois = [None] * lab_nums[ind]
-            print("temprois {}".format(len(temprois)))
-            print("channels[ind] {}".format(channels[ind]))
+            temprois = [None] * (lab_nums[ind] + 1)
             for y in range(len(markers[ind])):
                 for x in range(len(markers[ind][0])):
                     lab = markers[ind][y][x]
                     if lab != 0:
                         if temprois[lab] is None:
+                            # TODO
                             roi = ROI(channel=names[ind], main=True if ind == main_map else False)
-                            roi.add_point((x, y), channels[ind][y][x])
+                            roi.add_point((x, y), int(channels[ind][y][x]))
                             temprois[lab] = roi
                         else:
-                            temprois[lab].add_point((x, y), channels[ind][y][x])
+                            temprois[lab].add_point((x, y), int(channels[ind][y][x]))
             rois.extend(temprois)
         # Second round of ROI detection
         markers, lab_nums = Detector.detect_blobs(channels, main_channel=main_map)
@@ -99,14 +97,15 @@ class Detector:
             temprois = [None] * lab_nums[ind]
             for y in range(len(markers[ind])):
                 for x in range(len(markers[ind][0])):
-                    lab = markers[y][x]
+                    lab = markers[ind][y][x]
+                    print(markers[ind].shape)
                     if lab != 0:
                         if temprois[lab] is None:
                             roi = ROI(channel=names[ind], main=False)
-                            roi.add_point((x, y), channels[ind][y][x])
+                            roi.add_point((x, y), int(channels[ind][y][x]))
                             temprois[lab] = roi
                         else:
-                            temprois[lab].add_point((x, y), channels[ind][y][x])
+                            temprois[lab].add_point((x, y), int(channels[ind][y][x]))
             rois.extend(temprois)
         Detector.perform_roi_quality_check(rois)
         Detector.create_roi_associations(rois)
@@ -162,6 +161,7 @@ class Detector:
         :param threshold: The absolute lower bound for scale space maxima
         :return: A tuple of the detected blob-maps and the respective numbers of detected blobs
         """
+        # TODO
         blob_maps = []
         blob_nums = []
         for ind in range(len(channels)):
@@ -174,7 +174,7 @@ class Detector:
                 blob_nums.append(blob_num)
             else:
                 blob_maps.append(None)
-                blob_nums.append(-1)
+                blob_nums.append(-1) # TODO Fehlerquelle, beheben
         return blob_maps, blob_nums
 
 
@@ -207,6 +207,8 @@ class Detector:
             label, lab_num = ndi.label(loc_max)
             labels.append(label)
             label_nums.append(lab_num)
+            plt.imshow(loc_max)
+            plt.show()
         return labels, label_nums
 
     @staticmethod
