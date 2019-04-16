@@ -250,6 +250,7 @@ class NucDetect(QMainWindow):
             self.ui.btn_analyse_all.setEnabled(False)
             self.ui.btn_clear_list.setEnabled(False)
             self.ui.btn_delete_from_list.setEnabled(False)
+        start = time.time()
         self.prg_signal.emit("Connecting to database", 0 if not all_ else percent, maxi, "")
         """
         con = sqlite3.connect(database)
@@ -258,9 +259,6 @@ class NucDetect(QMainWindow):
         self.unsaved_changes = True
         self.prg_signal.emit("Analysing image", maxi*0.05 if not all_ else percent, maxi, "")
         data = self.detector.analyse_image(path)
-        self.res_table_model.setRowCount(0)
-        self.res_table_model.setHorizontalHeaderLabels(data["header"])
-        self.res_table_model.setColumnCount(len(data["data"][0]))
         self.prg_signal.emit("Checking database", maxi*0.50 if not all_ else percent, maxi, "")
         """
         if curs.execute(
@@ -289,13 +287,13 @@ class NucDetect(QMainWindow):
             )
         """
         self.prg_signal.emit("Analysing nuclei", maxi * 0.65 if not all_ else percent, maxi, "")
+        """
         for roi in data["handler"].rois:
             dim = roi.calculate_dimensions()
             dat = roi.calculate_statistics()
             if roi.main:
                 pass
 
-            """
             curs.execute(
                 "INSERT INTO nuclei VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (nucdat["id"], key, nucdat["center"][0], nucdat["center"][1], nucdat["width"], nucdat["height"], True)
@@ -336,18 +334,22 @@ class NucDetect(QMainWindow):
             """
         # TODO
         self.prg_signal.emit("Creating result table", maxi * 0.85 if not all_ else percent, maxi, "")
-        for x in range(len(data["data"])):
+        tabdat = data["handler"].get_data_as_dict()
+        self.res_table_model.setRowCount(0)
+        self.res_table_model.setHorizontalHeaderLabels(tabdat["header"])
+        self.res_table_model.setColumnCount(len(tabdat["data"][0]))
+        for x in range(len(tabdat["data"])):
             row = []
+            """
             row_cop = data["data"][x].copy()
             row_cop.insert(0, data["id"])
             row_cop[4] = str(row_cop[4])
-            """
             curs.execute(
                 "INSERT INTO results VALUES (?, ?, ?, ?, ?, ?, ?)",
                 row_cop
             )
             """
-            for text in data["data"][x]:
+            for text in tabdat["data"][x]:
                 item = QStandardItem()
                 item.setText(str(text))
                 item.setTextAlignment(QtCore.Qt.AlignCenter)
@@ -365,7 +367,7 @@ class NucDetect(QMainWindow):
         con.commit()
         con.close()
         """
-        self.prg_signal.emit(message.format(self.detector.snaps[key]["time"]), percent, maxi, "")
+        self.prg_signal.emit(message.format("{:.2f} secs".format(time.time()-start)), percent, maxi, "")
         self.ui.btn_save.setEnabled(True)
         self.ui.btn_images.setEnabled(True)
         self.ui.btn_statistics.setEnabled(True)

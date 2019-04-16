@@ -15,7 +15,8 @@ from skimage.draw import circle
 from skimage.morphology.binary import binary_opening
 from Nucleus.core.ROIHandler import ROIHandler
 from Nucleus.core.ROI import ROI
-import matplotlib.pyplot as plt
+from skimage.morphology import watershed
+from skimage.feature import peak_local_max
 
 
 class Detector:
@@ -57,6 +58,7 @@ class Detector:
         thresh_chan = Detector.threshold_channels(channels, main_channel)
         # ROI detection
         rois = Detector.extract_rois(channels, thresh_chan, names, main_map=main_channel)
+        Detector.perform_roi_quality_check(rois)
         handler = ROIHandler(ident=imgdat["id"])
         for roi in rois:
             handler.add_roi(roi)
@@ -89,16 +91,16 @@ class Detector:
                             temprois[lab] = roi
                         else:
                             temprois[lab].add_point((x, y), int(channels[ind][y][x]))
+            del temprois[0]
             rois.extend(temprois)
         # Second round of ROI detection
         markers, lab_nums = Detector.detect_blobs(channels, main_channel=main_map)
-        markers = Detector.perform_labelling(markers)
+        # markers = Detector.perform_labelling(markers)
         for ind in range(len(markers)):
-            temprois = [None] * lab_nums[ind]
+            temprois = [None] * (lab_nums[ind] + 1)
             for y in range(len(markers[ind])):
                 for x in range(len(markers[ind][0])):
                     lab = markers[ind][y][x]
-                    print(markers[ind].shape)
                     if lab != 0:
                         if temprois[lab] is None:
                             roi = ROI(channel=names[ind], main=False)
@@ -106,8 +108,9 @@ class Detector:
                             temprois[lab] = roi
                         else:
                             temprois[lab].add_point((x, y), int(channels[ind][y][x]))
+            del temprois[0]
             rois.extend(temprois)
-        Detector.perform_roi_quality_check(rois)
+        # Detector.perform_roi_quality_check(rois)
         Detector.create_roi_associations(rois)
         return rois
 
@@ -123,30 +126,78 @@ class Detector:
             if rois[ind].main:
                 for ind2 in range(ind+1, len(rois)):
                     if not rois[ind2].main:
-                        if rois[ind].calculate_roi_intersection[ind2] >= intersection_threshold:
+                        if rois[ind].calculate_roi_intersection(rois[ind2]) >= intersection_threshold:
                             rois[ind2].associated = rois[ind]
 
     @staticmethod
-    def perform_roi_quality_check(rois, intersection_treshold=.75, min_main_area=500):
+    def perform_roi_quality_check(rois, max_focus_overlapp=.75, min_thresh=25, max_thresh=60):
         """
         Method to check detected rois for their quality.
         :param rois: A list of detected rois
-        :param intersection_treshold: The threshold used to determine if two rois are considered duplicates
-        :param min_main_area: The minimal area of a main ROI
+        :param max_focus_overlapp: The threshold used to determine if two rois are considered duplicates
+        :param min_thresh: The lower percentile to check for oversegmentation
+        :param max_thresh: The upper percentile to check for undersegmentation
         :return: None
         """
         rem_list = []
-        for ind in range(len(rois)):
-            for ind2 in range(ind+1, len(rois)):
-                if not rois[ind].main:
-                    if rois[ind2] not in rem_list:
-                        if rois[ind].calculate_roi_intersection(rois[ind2]) >= intersection_treshold and \
-                                rois[ind].channel == rois[ind2].channel:
-                            rem_list.append(rois[ind2])
-                elif rois[ind].calculate_dimensions()["area"] < min_main_area:
-                    rem_list.append(rois[ind])
-        rois = [roi for roi in rois if roi not in rem_list]
+        temp = []
+        main = []
+        foci = []
+        for roi in rois:
+            if roi.main:
+                main.append(roi)
+                temp.append(len(roi))
+            else:
+                foci.append(roi)
+        print("Calculating percentile")
+        min_main_area = np.percentile(temp, min_thresh)
+        max_main_area = np.percentile(temp, max_thresh)
+        print("checking rois with 25% {} and 60% {}".format(min_main_area, max_main_area))
+        ws_list = []
+        # Nucleus quality check
+        for nucleus in main:
+            if len(nucleus) > max_main_area:
+                index = main.index(nucleus)
+                dims = roi.calculate_dimensions()
+                offset = (dims["minY"], dims["minX"])
+                numpy = nucleus.get_as_numpy()
+                numpy_edm = ndi.distance_transform_edt(numpy)
+                points_loc_max = peak_local_max(numpy_edm, labels=numpy, indices=False,
+                                                footprint=np.ones((91, 91)))
+                points_labels, num_labels = ndi.label(points_loc_max)
+                points_ws = watershed(-numpy_edm, points_labels, mask=numpy)
 
+                nucs = self.extract_roi_from_channel(points_ws, self.blue_orig, num_labels, offset=offset)
+                pass
+                #TODO Watershed einfügen
+        for nucleus in main:
+            if len(nucleus) < min_main_area:
+                rem_list.append(nucleus)
+                print("Nucleus removed")
+        main = [x for x in main if x not in rem_list]
+        for rem in rem_list:
+            rois.remove(rem)
+        rem_list.clear()
+        # Create nucleus-focus associations
+        for nucleus in main:
+            for focus in foci:
+                if focus not in rem_list:
+                    intersect = nucleus.calculate_roi_intersection(focus)
+                    if intersect > 0.95:
+                        focus.associated = nucleus
+                        rem_list.append(focus)
+        rem_list.clear()
+        # Focus quality check
+        for ind in range(len(foci)):
+            if focus not in rem_list:
+                focus = foci[ind]
+                for ind2 in range(ind+1, len(foci)):
+                    focus2 = foci[ind2]
+                    if focus.calculate_roi_intersection(focus2) >= max_focus_overlapp and \
+                            focus.ident == focus2.ident:
+                        rem_list.append(focus2)
+        for rem in rem_list:
+            rois.remove(rem)
 
     @staticmethod
     def detect_blobs(channels, main_channel=-1, min_sigma=1, max_sigma=5, num_sigma=10, threshold=.1):
@@ -167,30 +218,30 @@ class Detector:
         for ind in range(len(channels)):
             if ind != main_channel:
                 blobs = blob_log(channels[ind], min_sigma=min_sigma, max_sigma=max_sigma, num_sigma=num_sigma,
-                                threshold=threshold)
-                blob_map = Detector._create_blob_map(channels[ind].shape, blobs)
+                                 threshold=threshold)
+                blob_map = Detector.create_blob_map(channels[ind].shape, blobs)
                 blob_num = len(blobs)
                 blob_maps.append(blob_map)
                 blob_nums.append(blob_num)
             else:
-                blob_maps.append(None)
-                blob_nums.append(-1) # TODO Fehlerquelle, beheben
+                blob_maps.append(np.zeros(shape=channels[ind].shape))
+                blob_nums.append(0)
         return blob_maps, blob_nums
 
-
     @staticmethod
-    def _create_blob_map(shape, blob_dat):
+    def create_blob_map(shape, blob_dat):
         """
         Method to create a binary map of detected blobs.
         :param shape: The shape of the blob map as tuple
         :param blob_dat: List of all detected blobs
-        :return:
+        :return: The created blob map
         """
-        map = np.zeros(shape, dtype="uint8")
-        for blob in blob_dat:
+        map_ = np.zeros(shape, dtype="uint16")
+        for ind in range(len(blob_dat)):
+            blob = blob_dat[ind]
             rr, cc = circle(blob[0], blob[1], blob[2] * np.sqrt(2) - 0.5, shape=shape)
-            map[rr, cc] = 1
-        return map
+            map_[rr, cc] = ind + 1
+        return map_
 
 
     @staticmethod
@@ -203,12 +254,9 @@ class Detector:
         labels = []
         label_nums = []
         for loc_max in local_maxima:
-            # TODO Derzeit Tuple übergeben, local_maxima überprüfen, fehlerhaft
             label, lab_num = ndi.label(loc_max)
             labels.append(label)
             label_nums.append(lab_num)
-            plt.imshow(loc_max)
-            plt.show()
         return labels, label_nums
 
     @staticmethod

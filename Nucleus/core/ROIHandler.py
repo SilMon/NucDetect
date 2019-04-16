@@ -14,7 +14,6 @@ class ROIHandler:
         "rois",
         "idents",
         "stats",
-        "start"
     ]
 
     def __init__(self, ident=None):
@@ -23,7 +22,6 @@ class ROIHandler:
         self.idents = []
         self.stats = {}
         self.main = ""
-        self.cur_index = 0
 
     def __len__(self):
         return len(self.rois)
@@ -33,10 +31,10 @@ class ROIHandler:
 
     def add_roi(self, roi):
         self.rois.append(roi)
-        if roi.channel not in self.idents:
-            self.idents.append(roi.channel)
+        if roi.ident not in self.idents:
+            self.idents.append(roi.ident)
         if roi.main:
-            self.main = roi.channel
+            self.main = roi.ident
         self.stats.clear()
 
     def calculate_statistics(self):
@@ -106,12 +104,40 @@ class ROIHandler:
             }
         return self.stats
 
-    def get_data_as_list(self):
+    def get_data_as_dict(self):
         """
         Method to retrieve the stored ROI data as list
-        :return: The data as list
+        :return: The data as dict
         """
-        # TODO
+        tempdat = {}
+        header = ["Index", "Width", "Height", "Center"]
+        header.extend(self.idents)
+        header.remove(self.main)
+        tempdat["header"] = header
+        index = 0
+        tempdat["data"] = []
+        for roi in self.rois:
+            if roi.main:
+                tempstat = roi.calculate_dimensions()
+                row = [
+                    index,
+                    tempstat["width"],
+                    tempstat["height"],
+                    tempstat["center"]
+                ]
+                index += 1
+                secstat = {}
+                for roi2 in self.rois:
+                    if roi2.associated is roi:
+                        if roi2.ident in secstat:
+                            secstat[roi2.ident] += 1
+                        else:
+                            secstat[roi2.ident] = 1
+                for chan in self.idents:
+                    if chan in secstat.keys():
+                        row.append(secstat[chan])
+                tempdat["data"].append(row)
+        return tempdat
 
     def export_data_as_csv(self, path, delimiter=";", quotechar="|"):
         """

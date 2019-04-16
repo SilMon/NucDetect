@@ -6,6 +6,8 @@ import numpy as np
 import hashlib
 import json
 
+from math import sqrt
+
 
 class ROI:
     __slots__ = [
@@ -14,6 +16,7 @@ class ROI:
         "auto",
         "dims",
         "points",
+        "inten",
         "stats",
         "associated"
     ]
@@ -23,14 +26,16 @@ class ROI:
         self.ident = channel
         self.auto = auto
         self.dims = {}
-        self.points = {}
+        self.points = []
+        self.inten = {}
         self.stats = {}
         self.associated = associated
 
     def __add__(self, other):
         if isinstance(other, ROI):
             if other.ident == self.ident:
-                self.points.update(other.points)
+                self.points.extend(other.points)
+                self.inten.update(other.inten)
             else:
                 raise Warning("ROIs have different channel IDs!")
         else:
@@ -38,7 +43,7 @@ class ROI:
 
     def __eq__(self, other):
         if isinstance(other, ROI):
-            return self.points == other.points
+            return set(self.points) == set(other.points)
         else:
             return False
 
@@ -47,6 +52,22 @@ class ROI:
             return True
         else:
             return not self.__eq__(other)
+
+    def __gt__(self, other):
+        if not isinstance(other, ROI):
+            return False
+        else:
+            if set(self.points) > set(other.points):
+                return True
+            return False
+
+    def __lt__(self, other):
+        if not isinstance(other, ROI):
+            return False
+        else:
+            if set(self.points) < set(other.points):
+                return True
+            return False
 
     def __len__(self):
         return len(self.points)
@@ -64,7 +85,8 @@ class ROI:
         if not isinstance(point, tuple) or not isinstance(intensity, (int, float)):
             raise ValueError("Type mismatch!")
         else:
-            self.points[point] = intensity
+            self.points.append(point)
+            self.inten[point] = intensity
             self.dims.clear()
             self.stats.clear()
 
@@ -72,15 +94,19 @@ class ROI:
         """
         Method to calculate the intersection ratio to another ROI
         :param roi: The other ROI
-        :return: The degree of intersection in %
+        :return: The degree of intersection as float
         """
-        max_intersection = max(len(self), len(roi))
-        intersection = 0
-        for p in self.points.keys():
-            for p2 in roi.get_points():
-                if p == p2:
-                    intersection += 1
-        return intersection / max_intersection
+        # TODO
+        selfdat = self.calculate_dimensions()
+        otherdat = roi.calculate_dimensions()
+        selfc = selfdat["center"]
+        otherc = otherdat["center"]
+        dist = sqrt((otherc[0] - selfc[0]) ** 2 + (otherc[1] - otherc[1]) ** 2)
+        if dist <= max(selfdat["width"], selfdat["height"])/2 + max(otherdat["width"], otherdat["height"])/2:
+            max_intersection = min(len(self), len(roi))
+            intersection = set(self.points).intersection(set(roi.points))
+            return len(intersection) / max_intersection
+        return 0.0
 
     def get_points(self):
         """
@@ -102,10 +128,10 @@ class ROI:
         :return: The created numpy array
         """
         self.calculate_dimensions()
-        vals = self.points.keys()
+        vals = self.points
         array = np.zeros(shape=(self.dims["height"], self.dims["width"]))
         for point in vals:
-            array[point[1] - self.dims["minY"], point[0] - self.dims["minX"]] = self.points[point]
+            array[point[1] - self.dims["minY"]-1, point[0] - self.dims["minX"]-1] = self.inten[point]
         return array
 
     def calculate_dimensions(self):
@@ -114,16 +140,16 @@ class ROI:
         :return: The calculated dimensions as dict
         """
         if not self.dims:
-            vals = self.points.keys()
-            xvals = [x for x in vals[0]]
-            yvals = [y for y in vals[1]]
+            vals = self.points
+            xvals = [x[0] for x in vals]
+            yvals = [y[1] for y in vals]
             self.dims["minX"] = min(xvals)
             self.dims["maxX"] = max(xvals)
             self.dims["minY"] = min(yvals)
             self.dims["maxY"] = max(yvals)
             self.dims["width"] = self.dims["maxX"] - self.dims["minX"]
             self.dims["height"] = self.dims["maxY"] - self.dims["minY"]
-            self.dims["center"] = (np.average(xvals), np.average(yvals))
+            self.dims["center"] = (round(np.average(xvals), 2), round(np.average(yvals), 2))
         return self.dims
 
     def calculate_statistics(self):
@@ -132,7 +158,7 @@ class ROI:
         :return: The calculated statistics as dict
         """
         if not self.stats:
-            vals = self.points.values()
+            vals = self.points
             self.stats = {
                 "area": len(self.points),
                 "intensity average": np.average(vals),
