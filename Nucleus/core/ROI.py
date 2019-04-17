@@ -90,13 +90,41 @@ class ROI:
             self.dims.clear()
             self.stats.clear()
 
+    def derive_from_roi(self, roi, points, offset=None):
+        """
+        Method to create this roi as subset of roi, defined by points
+        :param roi: The original roi to derive from
+        :param points: The points that define the new roi
+        :param offset: The offset to add to the points
+        :return: None
+        """
+        if offset is not None:
+            for p in points:
+                self.add_point((p[1]+offset[0], p[0]+offset[1]), roi.inten[p[1]+offset[0], p[0]+offset[1]])
+        else:
+            for p in points:
+                self.add_point((p[1], p[0]), roi.inten[(p[1], p[0])])
+
+    def set_points(self, point_list, original):
+        """
+        Method to initialize this roi from a list of points
+        :param point_list: The points to add to this roi
+        :param original: Either the image where the points are derived from or a dict of intensities
+        :return: None
+        """
+        if isinstance(original, np.ndarray):
+            for p in point_list:
+                self.add_point(p, original[p[1]][p[0]])
+        elif isinstance(original, dict):
+            for p in point_list:
+                self.add_point(p, original[p])
+
     def calculate_roi_intersection(self, roi):
         """
         Method to calculate the intersection ratio to another ROI
         :param roi: The other ROI
         :return: The degree of intersection as float
         """
-        # TODO
         selfdat = self.calculate_dimensions()
         otherdat = roi.calculate_dimensions()
         selfc = selfdat["center"]
@@ -108,30 +136,26 @@ class ROI:
             return len(intersection) / max_intersection
         return 0.0
 
-    def get_points(self):
-        """
-        Method to get a list of all stored points
-        :return: The points as list
-        """
-        return self.points.keys()
-
-    def get_intensities(self):
-        """
-        Method to get a list of all stored intensity values
-        :return: The intensity values as list
-        """
-        return self.points.values()
-
     def get_as_numpy(self):
         """
         Method to get this roi as numpy array
         :return: The created numpy array
         """
         self.calculate_dimensions()
-        vals = self.points
         array = np.zeros(shape=(self.dims["height"], self.dims["width"]))
-        for point in vals:
-            array[point[1] - self.dims["minY"]-1, point[0] - self.dims["minX"]-1] = self.inten[point]
+        for point in self.points:
+            array[point[1] - self.dims["minY"], point[0] - self.dims["minX"]] = self.inten[point]
+        return array
+
+    def get_as_binary_map(self):
+        """
+        Method to get this roi as binary map (ndarray)
+        :return: The created binary map
+        """
+        self.calculate_dimensions()
+        array = np.zeros(shape=(self.dims["height"], self.dims["width"]))
+        for point in self.points:
+            array[point[1] - self.dims["minY"], point[0] - self.dims["minX"]] = 1
         return array
 
     def calculate_dimensions(self):
@@ -147,8 +171,8 @@ class ROI:
             self.dims["maxX"] = max(xvals)
             self.dims["minY"] = min(yvals)
             self.dims["maxY"] = max(yvals)
-            self.dims["width"] = self.dims["maxX"] - self.dims["minX"]
-            self.dims["height"] = self.dims["maxY"] - self.dims["minY"]
+            self.dims["width"] = self.dims["maxX"] - self.dims["minX"] + 1
+            self.dims["height"] = self.dims["maxY"] - self.dims["minY"] + 1
             self.dims["center"] = (round(np.average(xvals), 2), round(np.average(yvals), 2))
         return self.dims
 

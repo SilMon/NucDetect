@@ -17,7 +17,7 @@ from Nucleus.core.ROIHandler import ROIHandler
 from Nucleus.core.ROI import ROI
 from skimage.morphology import watershed
 from skimage.feature import peak_local_max
-
+import matplotlib.pyplot as plt
 
 class Detector:
 
@@ -58,7 +58,6 @@ class Detector:
         thresh_chan = Detector.threshold_channels(channels, main_channel)
         # ROI detection
         rois = Detector.extract_rois(channels, thresh_chan, names, main_map=main_channel)
-        Detector.perform_roi_quality_check(rois)
         handler = ROIHandler(ident=imgdat["id"])
         for roi in rois:
             handler.add_roi(roi)
@@ -95,7 +94,6 @@ class Detector:
             rois.extend(temprois)
         # Second round of ROI detection
         markers, lab_nums = Detector.detect_blobs(channels, main_channel=main_map)
-        # markers = Detector.perform_labelling(markers)
         for ind in range(len(markers)):
             temprois = [None] * (lab_nums[ind] + 1)
             for y in range(len(markers[ind])):
@@ -110,31 +108,18 @@ class Detector:
                             temprois[lab].add_point((x, y), int(channels[ind][y][x]))
             del temprois[0]
             rois.extend(temprois)
-        # Detector.perform_roi_quality_check(rois)
-        Detector.create_roi_associations(rois)
+        Detector.perform_roi_quality_check(rois)
         return rois
 
     @staticmethod
-    def create_roi_associations(rois, intersection_threshold=.95):
-        """
-        Method to associate overlapping roi with each other
-        :param rois: A list of ROIs to test for association
-        :param intersection_threshold: The threshold of minimal intersection
-        :return: None
-        """
-        for ind in range(len(rois)):
-            if rois[ind].main:
-                for ind2 in range(ind+1, len(rois)):
-                    if not rois[ind2].main:
-                        if rois[ind].calculate_roi_intersection(rois[ind2]) >= intersection_threshold:
-                            rois[ind2].associated = rois[ind]
-
-    @staticmethod
-    def perform_roi_quality_check(rois, max_focus_overlapp=.75, min_thresh=25, max_thresh=60):
+    def perform_roi_quality_check(rois, max_focus_overlapp=.75, main_threshold=5, min_dist=45,
+                                  min_thresh=25, max_thresh=60):
         """
         Method to check detected rois for their quality.
         :param rois: A list of detected rois
         :param max_focus_overlapp: The threshold used to determine if two rois are considered duplicates
+        :param main_threshold: The threshold for nucleus detection
+        :param min_dist: The minimal distance between 2 nuclei
         :param min_thresh: The lower percentile to check for oversegmentation
         :param max_thresh: The upper percentile to check for undersegmentation
         :return: None
@@ -149,31 +134,51 @@ class Detector:
                 temp.append(len(roi))
             else:
                 foci.append(roi)
-        print("Calculating percentile")
         min_main_area = np.percentile(temp, min_thresh)
         max_main_area = np.percentile(temp, max_thresh)
-        print("checking rois with 25% {} and 60% {}".format(min_main_area, max_main_area))
         ws_list = []
         # Nucleus quality check
         for nucleus in main:
             if len(nucleus) > max_main_area:
-                index = main.index(nucleus)
-                dims = roi.calculate_dimensions()
-                offset = (dims["minY"], dims["minX"])
-                numpy = nucleus.get_as_numpy()
-                numpy_edm = ndi.distance_transform_edt(numpy)
-                points_loc_max = peak_local_max(numpy_edm, labels=numpy, indices=False,
-                                                footprint=np.ones((91, 91)))
+                numpy_bin = nucleus.get_as_binary_map()
+                numpy_edm = ndi.distance_transform_edt(numpy_bin)
+                points_loc_max = peak_local_max(numpy_edm, labels=numpy_bin, indices=False,
+                                                min_distance=min_dist)
                 points_labels, num_labels = ndi.label(points_loc_max)
-                points_ws = watershed(-numpy_edm, points_labels, mask=numpy)
-
-                nucs = self.extract_roi_from_channel(points_ws, self.blue_orig, num_labels, offset=offset)
-                pass
-                #TODO Watershed einfügen
+                if num_labels > 1:
+                    index = main.index(nucleus)
+                    dims = nucleus.calculate_dimensions()
+                    offset = (dims["minX"], dims["minY"])
+                    points_ws = watershed(-numpy_edm, points_labels, mask=numpy_bin)
+                    # Extraction of ROI from watershed
+                    lab_num = np.amax(points_ws)
+                    print(lab_num)
+                    nucs = [None] * lab_num
+                    tmap = np.zeros(shape=points_ws.shape)
+                    # TODO Schleife fixen
+                    for i in range(len(points_ws)):
+                        for ii in range(len(points_ws[0])):
+                            if points_ws[i][ii] and not tmap[i][ii]:
+                                if nucs[points_ws[i][ii]] is not None:
+                                    nucs[points_ws].append((i, ii))
+                                else:
+                                    nucs[points_ws[i][ii]] = [(i, ii)]
+                                nuc = Detector.adjusted_flood_fill((i, ii), points_ws, tmap)
+                    if nuc is not None:
+                        tnuc = ROI(channel=nucleus.ident)
+                        tnuc.derive_from_roi(nucleus, nuc, offset)
+                        nucs.append(tnuc)
+                    print(nucs)
+                    ws_list.append((index, nucleus, nucs))
+        print("Length before: {}".format(len(main)))
+        for t in ws_list:
+            for nuc in t[2]:
+                main.insert(t[0], nuc)
+            main.remove(t[1])
+        print("Length after: {}".format(len(main)))
         for nucleus in main:
             if len(nucleus) < min_main_area:
                 rem_list.append(nucleus)
-                print("Nucleus removed")
         main = [x for x in main if x not in rem_list]
         for rem in rem_list:
             rois.remove(rem)
