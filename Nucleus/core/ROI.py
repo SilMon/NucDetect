@@ -29,7 +29,7 @@ class ROI:
         self.points = []
         self.inten = {}
         self.stats = {}
-        self.associated = associated
+        self.associated = hash(associated)
 
     def __add__(self, other):
         if isinstance(other, ROI):
@@ -73,7 +73,7 @@ class ROI:
         return len(self.points)
 
     def __hash__(self):
-        return hashlib.md5("{}{}".format(self.points, self.ident).encode()).hexdigest()
+        return hash("{}{}".format(self.points, self.ident).encode())
 
     def add_point(self, point, intensity):
         """
@@ -89,21 +89,6 @@ class ROI:
             self.inten[point] = intensity
             self.dims.clear()
             self.stats.clear()
-
-    def derive_from_roi(self, roi, points, offset=None):
-        """
-        Method to create this roi as subset of roi, defined by points
-        :param roi: The original roi to derive from
-        :param points: The points that define the new roi
-        :param offset: The offset to add to the points
-        :return: None
-        """
-        if offset is not None:
-            for p in points:
-                self.add_point((p[1]+offset[0], p[0]+offset[1]), roi.inten[p[1]+offset[0], p[0]+offset[1]])
-        else:
-            for p in points:
-                self.add_point((p[1], p[0]), roi.inten[(p[1], p[0])])
 
     def set_points(self, point_list, original):
         """
@@ -198,7 +183,14 @@ class ROI:
         Method to convert this roi to a json str
         :return: The json str
         """
-        return json.dump(self.__dict__)
+        tempinten = {str(x): value for x, value in self.inten}
+        d = {
+            "channel": self.ident,
+            "points": self.points,
+            "inten": tempinten,
+            "associated": self.associated
+        }
+        return json.dumps(d)
 
     def initialize_from_json(self, json_):
         """
@@ -206,5 +198,10 @@ class ROI:
         :param json_: The json str
         :return: None
         """
-        self.__dict__ = json.loads(json)
+        d = json.loads(json_)
+        tempinten = {tuple(x): value for x, value in d["inten"]}
+        self.ident = d["channel"]
+        self.points = d["points"]
+        self.inten = tempinten
+        self.associated = ["associated"]
 

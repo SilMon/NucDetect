@@ -128,7 +128,7 @@ class ROIHandler:
                 index += 1
                 secstat = {}
                 for roi2 in self.rois:
-                    if roi2.associated is roi:
+                    if roi2.associated is hash(roi):
                         if roi2.ident in secstat:
                             secstat[roi2.ident] += 1
                         else:

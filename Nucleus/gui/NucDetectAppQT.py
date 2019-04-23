@@ -64,6 +64,7 @@ class NucDetect(QMainWindow):
         self.reg_images = {}
         self.sel_images = []
         self.cur_img = {}
+        self.roi_cache = None
         self.unsaved_changes = False
         self._setup_ui()
         self.setWindowTitle("NucDetect")
@@ -164,8 +165,9 @@ class NucDetect(QMainWindow):
         folder = temp[0].split(sep=os.sep)[-1]
         file = temp[1]
         if os.path.splitext(file)[1] in Detector.FORMATS:
+            d = Detector.get_image_data(path)
             tags = piexif.load(path)["0th"]
-            t = tags[piexif.ImageIFD.DateTime].decode("ascii").split(" ")
+            t = d["datetime"].decode("ascii").split(" ")
             item = QStandardItem()
             item_text = "Name: {}\nFolder: {}\nDate: {}\nTime: {}".format(file, folder, t[0], t[1])
             item.setText(item_text)
@@ -175,20 +177,18 @@ class NucDetect(QMainWindow):
             item.setIcon(icon)
             self.img_list_model.appendRow(item)
             self.reg_images[item_text] = path
-            """
-            self.img_keys[name] = self.detector.load_image(name, self.settings["chan_names"])
+            key = Detector.calculate_image_id(path)
             if not self.cursor.execute(
-                "SELECT * FROM imgIndex WHERE md5 = ?",
-                    (self.img_keys[name], )
+                "SELECT * FROM images WHERE md5 = ?",
+                    (key, )
             ).fetchall():
                 self.cursor.execute(
-                    "INSERT INTO imgIndex VALUES(?, ?, ?, ?, ?, ?, ?)",
-                    (self.img_keys[name], tags[piexif.ImageIFD.ImageWidth], tags[piexif.ImageIFD.ImageLength],
-                     str(tags[piexif.ImageIFD.XResolution]), str(tags[piexif.ImageIFD.YResolution]),
-                     tags[piexif.ImageIFD.ResolutionUnit] if piexif.ImageIFD.ResolutionUnit in tags else 2, 0)
+                    "INSERT INTO images VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (key, d["datetime"], d["channels"], d["width"], d["height"],
+                     str(d["x_res"]), str(d["y_res"]), d["unit"], 0)
                 )
             self.connection.commit()
-            """
+
 
     def add_images_from_folder(self, url):
         """
@@ -252,87 +252,34 @@ class NucDetect(QMainWindow):
             self.ui.btn_delete_from_list.setEnabled(False)
         start = time.time()
         self.prg_signal.emit("Connecting to database", 0 if not all_ else percent, maxi, "")
-        """
         con = sqlite3.connect(database)
         curs = con.cursor()
-        """
         self.unsaved_changes = True
         self.prg_signal.emit("Analysing image", maxi*0.05 if not all_ else percent, maxi, "")
         data = self.detector.analyse_image(path)
+        key = data["id"]
         self.prg_signal.emit("Checking database", maxi*0.50 if not all_ else percent, maxi, "")
-        """
         if curs.execute(
-            "SELECT analysed FROM imgIndex WHERE md5 = ?",
+            "SELECT analysed FROM images WHERE md5 = ?",
             (key,)
-        ).fetchall():
+        ).fetchall()[0][0]:
             curs.execute(
-                "DELETE FROM results WHERE md5 = ?",
+                "DELETE FROM roi WHERE image = ?",
                 (key,)
             )
-            curs.execute(
-                "DELETE FROM nuclei WHERE image = ?",
-                (key,)
-            )
-            curs.execute(
-                "DELETE FROM foci WHERE image = ?",
-                (key,)
-            )
-            curs.execute(
-                "DELETE FROM focStat WHERE image = ?",
-                (key,)
-            )
-            curs.execute(
-                "DELETE FROM nucStat WHERE image = ?",
-                (key,)
-            )
-        """
+
         self.prg_signal.emit("Analysing nuclei", maxi * 0.65 if not all_ else percent, maxi, "")
-        """
+        pardir = os.path.dirname(database)
         for roi in data["handler"].rois:
             dim = roi.calculate_dimensions()
-            dat = roi.calculate_statistics()
-            if roi.main:
-                pass
-
+            asso = hash(roi.associated) if roi.associated is not None else None
             curs.execute(
-                "INSERT INTO nuclei VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (nucdat["id"], key, nucdat["center"][0], nucdat["center"][1], nucdat["width"], nucdat["height"], True)
+                "INSERT INTO roi VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (hash(roi), key, roi.ident, str(dim["center"]), dim["width"], dim["height"], asso)
             )
-            curs.execute(
-                "INSERT INTO nucStat VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? , ?, ?, ?, ? ,?)",
-                (
-                    nucdat["id"], nucstat["area"], nucstat["red_roi"], nucstat["green_roi"], nucstat["red_av_int"],
-                    nucstat["red_med_int"], nucstat["green_av_int"], nucstat["green_med_int"], nucstat["red_low_int"],
-                    nucstat["red_high_int"], nucstat["green_low_int"], nucstat["green_high_int"], nucstat["red_av_int"],
-                    nucstat["green_av_int"],nucstat["red_low_int"], nucstat["red_high_int"], nucstat["green_low_int"],
-                    nucstat["green_high_int"], key
-                )
-            )
-                curs.execute(
-                    "INSERT INTO foci VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (focdat["id"], key, nucdat["id"], focdat["center"][0], focdat["center"][1], focdat["width"],
-                     focdat["height"])
-                )
-                curs.execute(
-                    "INSERT INTO focStat VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (focdat["id"], nucdat["id"], 1, focstat["low_int"], focstat["high_int"], focstat["av_int"],
-                     focstat["med_int"], focstat["area"], key)
-                )
-            for green in nucleus.green:
-                focdat = green.get_data()
-                focstat = green.calculate_statistics()
-                curs.execute(
-                    "INSERT INTO foci VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (focdat["id"], key, nucdat["id"], focdat["center"][0], focdat["center"][1], focdat["width"],
-                     focdat["height"])
-                )
-                curs.execute(
-                    "INSERT INTO focStat VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (focdat["id"], nucdat["id"], 2, focstat["low_int"], focstat["high_int"], focstat["av_int"],
-                     focstat["med_int"], focstat["area"], key)
-                )
-            """
-        # TODO
+            # TODO Zu langsam, in eigenen Thread auslagern
+            with open(os.path.join(pardir, "rois{}{}.json".format(os.sep, hash(roi))), "w") as f:
+                f.write(roi.convert_to_json())
         self.prg_signal.emit("Creating result table", maxi * 0.85 if not all_ else percent, maxi, "")
         tabdat = data["handler"].get_data_as_dict()
         self.res_table_model.setRowCount(0)
@@ -340,15 +287,6 @@ class NucDetect(QMainWindow):
         self.res_table_model.setColumnCount(len(tabdat["data"][0]))
         for x in range(len(tabdat["data"])):
             row = []
-            """
-            row_cop = data["data"][x].copy()
-            row_cop.insert(0, data["id"])
-            row_cop[4] = str(row_cop[4])
-            curs.execute(
-                "INSERT INTO results VALUES (?, ?, ?, ?, ?, ?, ?)",
-                row_cop
-            )
-            """
             for text in tabdat["data"][x]:
                 item = QStandardItem()
                 item.setText(str(text))
@@ -356,17 +294,14 @@ class NucDetect(QMainWindow):
                 item.setSelectable(False)
                 row.append(item)
             self.res_table_model.appendRow(row)
-        """    
+
         curs.execute(
-            "UPDATE imgIndex SET analysed = ? WHERE md5 = ?",
+            "UPDATE images SET analysed = ? WHERE md5 = ?",
             (True, key)
         )
-        """
         self.prg_signal.emit("Writing to database", maxi * 0.95 if not all_ else percent, maxi, "")
-        """
         con.commit()
         con.close()
-        """
         self.prg_signal.emit(message.format("{:.2f} secs".format(time.time()-start)), percent, maxi, "")
         self.ui.btn_save.setEnabled(True)
         self.ui.btn_images.setEnabled(True)
@@ -379,7 +314,8 @@ class NucDetect(QMainWindow):
             self.ui.btn_analyse_all.setEnabled(True)
             self.ui.btn_clear_list.setEnabled(True)
             self.ui.btn_delete_from_list.setEnabled(True)
-        '''
+        # TODO Multiselection implementieren
+        ''' 
         if len(self.sel_images) is not 0:
             self.analyze()
             '''
@@ -436,6 +372,10 @@ class NucDetect(QMainWindow):
                                 maxi,
                                 maxi, "")
             self.selec_signal.emit()
+            
+    def load_rois(self, md5):
+        pass
+        # TODO
 
     def show_result_image(self):
         # TODO Zoom implementieren: http://doc.qt.io/qt-5/qtwidgets-widgets-imageviewer-example.html
@@ -783,6 +723,7 @@ class BarChart(MPLPlot):
 
 
 class ImgDialog(QDialog):
+    # TODO Umbauen
 
     def __init__(self, img_data, parent=None):
         super(ImgDialog, self).__init__(parent)

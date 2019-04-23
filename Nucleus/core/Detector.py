@@ -138,6 +138,7 @@ class Detector:
         max_main_area = np.percentile(temp, max_thresh)
         ws_list = []
         # Nucleus quality check
+        print("Nucleus Quality Check")
         for nucleus in main:
             if len(nucleus) > max_main_area:
                 numpy_bin = nucleus.get_as_binary_map()
@@ -152,30 +153,26 @@ class Detector:
                     points_ws = watershed(-numpy_edm, points_labels, mask=numpy_bin)
                     # Extraction of ROI from watershed
                     lab_num = np.amax(points_ws)
-                    print(lab_num)
                     nucs = [None] * lab_num
-                    tmap = np.zeros(shape=points_ws.shape)
-                    # TODO Schleife fixen
                     for i in range(len(points_ws)):
                         for ii in range(len(points_ws[0])):
-                            if points_ws[i][ii] and not tmap[i][ii]:
-                                if nucs[points_ws[i][ii]] is not None:
-                                    nucs[points_ws].append((i, ii))
+                            if points_ws[i][ii] > 0:
+                                if nucs[points_ws[i][ii] - 1] is None:
+                                    nucs[points_ws[i][ii] - 1] = ROI(channel=nucleus.ident)
+                                    p = (ii + offset[0], i + offset[1])
+                                    nucs[points_ws[i][ii] - 1].add_point(p, nucleus.inten[p])
                                 else:
-                                    nucs[points_ws[i][ii]] = [(i, ii)]
-                                nuc = Detector.adjusted_flood_fill((i, ii), points_ws, tmap)
-                    if nuc is not None:
-                        tnuc = ROI(channel=nucleus.ident)
-                        tnuc.derive_from_roi(nucleus, nuc, offset)
-                        nucs.append(tnuc)
-                    print(nucs)
+                                    p = (ii + offset[0], i + offset[1])
+                                    nucs[points_ws[i][ii] - 1].add_point(p, nucleus.inten[p])
                     ws_list.append((index, nucleus, nucs))
-        print("Length before: {}".format(len(main)))
+        print("Add newly found nuclei")
         for t in ws_list:
             for nuc in t[2]:
                 main.insert(t[0], nuc)
+                rois.append(nuc)
+            rois.remove(t[1])
             main.remove(t[1])
-        print("Length after: {}".format(len(main)))
+        print("Checking for very small nuclei")
         for nucleus in main:
             if len(nucleus) < min_main_area:
                 rem_list.append(nucleus)
@@ -184,18 +181,19 @@ class Detector:
             rois.remove(rem)
         rem_list.clear()
         # Create nucleus-focus associations
+        print("Calculate Nucleus-Focus intersections")
         for nucleus in main:
             for focus in foci:
                 if focus not in rem_list:
                     intersect = nucleus.calculate_roi_intersection(focus)
                     if intersect > 0.95:
-                        focus.associated = nucleus
+                        focus.associated = hash(nucleus)
                         rem_list.append(focus)
         rem_list.clear()
         # Focus quality check
         for ind in range(len(foci)):
+            focus = foci[ind]
             if focus not in rem_list:
-                focus = foci[ind]
                 for ind2 in range(ind+1, len(foci)):
                     focus2 = foci[ind2]
                     if focus.calculate_roi_intersection(focus2) >= max_focus_overlapp and \
@@ -217,7 +215,6 @@ class Detector:
         :param threshold: The absolute lower bound for scale space maxima
         :return: A tuple of the detected blob-maps and the respective numbers of detected blobs
         """
-        # TODO
         blob_maps = []
         blob_nums = []
         for ind in range(len(channels)):
@@ -334,6 +331,7 @@ class Detector:
         :param starting_point: The point to start flood fill from
         :param region_map: The region to check
         :param truth_table: The table to indicate already checked points
+        :param labelled: Indicates if the region map is binary or contain labelled areas
         :return: A list of connected points
         """
         points = [
