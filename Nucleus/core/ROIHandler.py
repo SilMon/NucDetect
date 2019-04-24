@@ -110,25 +110,23 @@ class ROIHandler:
         :return: The data as dict
         """
         tempdat = {}
-        header = ["Index", "Width", "Height", "Center"]
+        header = ["Hash", "Width", "Height", "Center"]
         header.extend(self.idents)
         header.remove(self.main)
         tempdat["header"] = header
-        index = 0
         tempdat["data"] = []
         for roi in self.rois:
             if roi.main:
                 tempstat = roi.calculate_dimensions()
                 row = [
-                    index,
+                    hash(roi),
                     tempstat["width"],
                     tempstat["height"],
                     tempstat["center"]
                 ]
-                index += 1
                 secstat = {}
                 for roi2 in self.rois:
-                    if roi2.associated is hash(roi):
+                    if roi2.associated is roi:
                         if roi2.ident in secstat:
                             secstat[roi2.ident] += 1
                         else:

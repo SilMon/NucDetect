@@ -10,6 +10,7 @@ import numpy as np
 import piexif
 import qtawesome as qta
 import matplotlib.pyplot as plt
+import pickle
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PIL import Image
@@ -136,8 +137,16 @@ class NucDetect(QMainWindow):
             self.sel_images.append(self.reg_images[self.img_list_model.item(index.row()).text()])
         if len(self.sel_images) > 0:
             self.ui.btn_analyse.setEnabled(True)
+            """
+            hash_ = Detector.calculate_image_id(self.reg_images[self.img_list_model.item(index.row()).text()])
+            ana = self.cursor.execute(
+                "SELECT analysed FROM images WHERE md5 = ?",
+                (hash_, )
+            )
+            if ana
+            """ # TODO
         else:
-            self.ui.btn_analyse.setEnabled(True)
+            self.ui.btn_analyse.setEnabled(False)
 
     def _show_loading_dialog(self):
         """
@@ -258,18 +267,26 @@ class NucDetect(QMainWindow):
         self.prg_signal.emit("Analysing image", maxi*0.05 if not all_ else percent, maxi, "")
         data = self.detector.analyse_image(path)
         key = data["id"]
-        self.prg_signal.emit("Checking database", maxi*0.50 if not all_ else percent, maxi, "")
+        self.prg_signal.emit("Creating result table", maxi * 0.65 if not all_ else percent, maxi, "")
+        self.create_result_table_from_list(data["handler"])
+        self.prg_signal.emit("Checking database", maxi * 0.75 if not all_ else percent, maxi, "")
         if curs.execute(
-            "SELECT analysed FROM images WHERE md5 = ?",
-            (key,)
+                "SELECT analysed FROM images WHERE md5 = ?",
+                (key,)
         ).fetchall()[0][0]:
+            for h in curs.execute(
+                "SELECT hash FROM roi WHERE image = ?",
+                    (key,)
+            ).fetchall():
+                curs.execute(
+                    "DELETE FROM points where hash = ?",
+                    (h[0],)
+                )
             curs.execute(
                 "DELETE FROM roi WHERE image = ?",
                 (key,)
             )
-
-        self.prg_signal.emit("Analysing nuclei", maxi * 0.65 if not all_ else percent, maxi, "")
-        pardir = os.path.dirname(database)
+        self.prg_signal.emit("Analysing nuclei", maxi * 0.85 if not all_ else percent, maxi, "")
         for roi in data["handler"].rois:
             dim = roi.calculate_dimensions()
             asso = hash(roi.associated) if roi.associated is not None else None
@@ -277,29 +294,16 @@ class NucDetect(QMainWindow):
                 "INSERT INTO roi VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (hash(roi), key, roi.ident, str(dim["center"]), dim["width"], dim["height"], asso)
             )
-            # TODO Zu langsam, in eigenen Thread auslagern
-            with open(os.path.join(pardir, "rois{}{}.json".format(os.sep, hash(roi))), "w") as f:
-                f.write(roi.convert_to_json())
-        self.prg_signal.emit("Creating result table", maxi * 0.85 if not all_ else percent, maxi, "")
-        tabdat = data["handler"].get_data_as_dict()
-        self.res_table_model.setRowCount(0)
-        self.res_table_model.setHorizontalHeaderLabels(tabdat["header"])
-        self.res_table_model.setColumnCount(len(tabdat["data"][0]))
-        for x in range(len(tabdat["data"])):
-            row = []
-            for text in tabdat["data"][x]:
-                item = QStandardItem()
-                item.setText(str(text))
-                item.setTextAlignment(QtCore.Qt.AlignCenter)
-                item.setSelectable(False)
-                row.append(item)
-            self.res_table_model.appendRow(row)
-
+            for p in roi.points:
+                curs.execute(
+                    "INSERT INTO points VALUES (?, ?, ?, ?)",
+                    (hash(roi), p[0], p[1], roi.inten[p])
+                )
+        self.prg_signal.emit("Writing to database", maxi * 0.95 if not all_ else percent, maxi, "")
         curs.execute(
             "UPDATE images SET analysed = ? WHERE md5 = ?",
             (True, key)
         )
-        self.prg_signal.emit("Writing to database", maxi * 0.95 if not all_ else percent, maxi, "")
         con.commit()
         con.close()
         self.prg_signal.emit(message.format("{:.2f} secs".format(time.time()-start)), percent, maxi, "")
@@ -319,6 +323,39 @@ class NucDetect(QMainWindow):
         if len(self.sel_images) is not 0:
             self.analyze()
             '''
+    def create_result_table_from_list(self, handler):
+        """
+        Method to create the result table from a list of rois
+        :param handler: The handler containing the rois
+        :return: None
+        """
+        tabdat = handler.get_data_as_dict()
+        self.res_table_model.setRowCount(0)
+        self.res_table_model.setHorizontalHeaderLabels(tabdat["header"])
+        self.res_table_model.setColumnCount(len(tabdat["header"]))
+        for x in range(len(tabdat["data"])):
+            row = []
+            for text in tabdat["data"][x]:
+                item = QStandardItem()
+                item.setText(str(text))
+                item.setTextAlignment(QtCore.Qt.AlignCenter)
+                item.setSelectable(False)
+                row.append(item)
+            self.res_table_model.appendRow(row)
+
+
+    def get_handler_from_database(self, md5):
+        """
+        Method to load saved rois from the database
+        :param md5: The md5 hash of the image
+        :return: A list of rois assciated with the image
+        """
+        handler = ROIHandler()
+        for h in self.cursor.execute(
+            "SELECT hash FROM roi WHERE image = ?",
+            (md5, )
+        ).fetchall():
+            pass#TODO
 
     def _select_next_image(self):
         max_ind = self.img_list_model.rowCount()

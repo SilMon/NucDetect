@@ -7,6 +7,7 @@ import hashlib
 
 import piexif
 import numpy as np
+import time
 from scipy import ndimage as ndi
 from skimage import io
 from skimage.feature import canny, blob_log
@@ -75,23 +76,44 @@ class Detector:
         :return: A list of all detected roi
         """
         # First round of ROI detection
-        markers, lab_nums = Detector.perform_labelling(bin_maps)
         rois = []
+        markers, lab_nums = Detector.perform_labelling(bin_maps)
+        main_markers = markers[main_map]
+        main = [None] * (lab_nums[main_map] + 1)
+        # Extraction of main rois
+        for y in range(len(main_markers)):
+            for x in range(len(main_markers[0])):
+                lab = main_markers[y][x]
+                if lab != 0:
+                    if main[lab] is None:
+                        roi = ROI(channel=names[main_map])
+                        roi.add_point((x, y), int(channels[main_map][y][x]))
+                        main[lab] = roi
+                    else:
+                        main[lab].add_point((x, y), int(channels[main_map][y][x]))
+
         for ind in range(len(markers)):
-            temprois = [None] * (lab_nums[ind] + 1)
-            for y in range(len(markers[ind])):
-                for x in range(len(markers[ind][0])):
-                    lab = markers[ind][y][x]
-                    if lab != 0:
-                        if temprois[lab] is None:
-                            # TODO
-                            roi = ROI(channel=names[ind], main=True if ind == main_map else False)
-                            roi.add_point((x, y), int(channels[ind][y][x]))
-                            temprois[lab] = roi
-                        else:
-                            temprois[lab].add_point((x, y), int(channels[ind][y][x]))
-            del temprois[0]
-            rois.extend(temprois)
+            if ind != main_map:
+                temprois = [None] * (lab_nums[ind] + 1)
+                for y in range(len(markers[ind])):
+                    for x in range(len(markers[ind][0])):
+                        lab = markers[ind][y][x]
+                        if lab != 0:
+                            if temprois[lab] is None:
+                                roi = ROI(channel=names[ind], main=False)
+                                roi.add_point((x, y), int(channels[ind][y][x]))
+                                temprois[lab] = roi
+                                if main_markers[y][x] != 0:
+                                    roi.associated = main[main_markers[y][x]]
+
+                            else:
+                                if temprois[lab].associated is None:
+                                    if main_markers[y][x] != 0:
+                                        roi.associated = main[main_markers[y][x]]
+                                temprois[lab].add_point((x, y), int(channels[ind][y][x]))
+                del temprois[0]
+                rois.extend(temprois)
+
         # Second round of ROI detection
         markers, lab_nums = Detector.detect_blobs(channels, main_channel=main_map)
         for ind in range(len(markers)):
@@ -104,15 +126,22 @@ class Detector:
                             roi = ROI(channel=names[ind], main=False)
                             roi.add_point((x, y), int(channels[ind][y][x]))
                             temprois[lab] = roi
+                            if main_markers[y][x] != 0:
+                                roi.associated = main[main_markers[y][x]]
                         else:
+                            if temprois[lab].associated is None:
+                                if main_markers[y][x] != 0:
+                                    roi.associated = main[main_markers[y][x]]
                             temprois[lab].add_point((x, y), int(channels[ind][y][x]))
             del temprois[0]
             rois.extend(temprois)
+        del main[0]
+        rois.extend(main)
         Detector.perform_roi_quality_check(rois)
         return rois
 
     @staticmethod
-    def perform_roi_quality_check(rois, max_focus_overlapp=.75, main_threshold=5, min_dist=45,
+    def perform_roi_quality_check(rois, max_focus_overlapp=.75, min_dist=45,
                                   min_thresh=25, max_thresh=60):
         """
         Method to check detected rois for their quality.
@@ -139,6 +168,7 @@ class Detector:
         ws_list = []
         # Nucleus quality check
         print("Nucleus Quality Check")
+        s1 = time.time()
         for nucleus in main:
             if len(nucleus) > max_main_area:
                 numpy_bin = nucleus.get_as_binary_map()
@@ -165,42 +195,71 @@ class Detector:
                                     p = (ii + offset[0], i + offset[1])
                                     nucs[points_ws[i][ii] - 1].add_point(p, nucleus.inten[p])
                     ws_list.append((index, nucleus, nucs))
+        print("Time: {:4f}".format(time.time() - s1))
         print("Add newly found nuclei")
+        s2 = time.time()
+        ass = Detector.create_association_map(foci)
         for t in ws_list:
             for nuc in t[2]:
-                main.insert(t[0], nuc)
+                for focus in ass[t[1]]:
+                    if focus.associated == t[1] and focus not in rem_list:
+                        intersect = nuc.calculate_roi_intersection(focus)
+                        if intersect > 0.50:
+                            focus.associated = nuc
+                            rem_list.append(focus)
                 rois.append(nuc)
             rois.remove(t[1])
-            main.remove(t[1])
+        rem_list.clear()
         print("Checking for very small nuclei")
         for nucleus in main:
             if len(nucleus) < min_main_area:
                 rem_list.append(nucleus)
-        main = [x for x in main if x not in rem_list]
         for rem in rem_list:
             rois.remove(rem)
         rem_list.clear()
-        # Create nucleus-focus associations
-        print("Calculate Nucleus-Focus intersections")
-        for nucleus in main:
-            for focus in foci:
-                if focus not in rem_list:
-                    intersect = nucleus.calculate_roi_intersection(focus)
-                    if intersect > 0.95:
-                        focus.associated = hash(nucleus)
-                        rem_list.append(focus)
-        rem_list.clear()
+        print("Time: {:4f}".format(time.time() - s2))
         # Focus quality check
+        print("Focus quality check")
+        s4 = time.time()
         for ind in range(len(foci)):
             focus = foci[ind]
             if focus not in rem_list:
-                for ind2 in range(ind+1, len(foci)):
+                for ind2 in range(ind + 1, len(foci)):
                     focus2 = foci[ind2]
-                    if focus.calculate_roi_intersection(focus2) >= max_focus_overlapp and \
-                            focus.ident == focus2.ident:
-                        rem_list.append(focus2)
+                    if focus.ident == focus2.ident:
+                        if focus.calculate_roi_intersection(focus2) >= max_focus_overlapp:
+                            rem_list.append(focus2)
+        print("Removed foci: {}".format(len(rem_list)))
         for rem in rem_list:
-            rois.remove(rem)
+            rois.remove(rem) # TODO Check
+        rem_list.clear()
+        print("Time: {:4f}".format(time.time() - s4))
+        """
+        # Create nucleus-focus associations
+        print("Calculate Nucleus-Focus intersections")
+        s3 = time.time()
+        for nucleus in main:
+            for focus in foci:
+                if focus not in rem_list:
+                    s5 = time.time()
+                    intersect = nucleus.calculate_roi_intersection(focus)
+                    if intersect > 0.95:
+                        focus.associated = nucleus
+                        s6 = time.time()
+                        rem_list.append(focus)
+        rem_list.clear()
+        print("Time: {:4f}".format(time.time() - s3))
+        """
+    @staticmethod
+    def create_association_map(rois):
+        ass = {}
+        for roi in rois:
+            if roi.associated is not None:
+                if roi.associated in ass:
+                    ass[roi.associated].append(roi)
+                else:
+                    ass[roi.associated] = [roi]
+        return ass
 
     @staticmethod
     def detect_blobs(channels, main_channel=-1, min_sigma=1, max_sigma=5, num_sigma=10, threshold=.1):

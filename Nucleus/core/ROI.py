@@ -18,7 +18,8 @@ class ROI:
         "points",
         "inten",
         "stats",
-        "associated"
+        "associated",
+        "id"
     ]
 
     def __init__(self, main=True, channel="DAPI", auto=True, associated=None):
@@ -29,13 +30,17 @@ class ROI:
         self.points = []
         self.inten = {}
         self.stats = {}
-        self.associated = hash(associated)
+        self.associated = associated
+        self.id = None
 
     def __add__(self, other):
         if isinstance(other, ROI):
             if other.ident == self.ident:
                 self.points.extend(other.points)
                 self.inten.update(other.inten)
+                self.id = None
+                self.dims.clear()
+                self.stats.clear()
             else:
                 raise Warning("ROIs have different channel IDs!")
         else:
@@ -73,7 +78,9 @@ class ROI:
         return len(self.points)
 
     def __hash__(self):
-        return hash("{}{}".format(self.points, self.ident).encode())
+        if self.id is None:
+            self.id = hash("{}{}".format(self.points, self.ident).encode())
+        return self.id
 
     def add_point(self, point, intensity):
         """
@@ -87,6 +94,7 @@ class ROI:
         else:
             self.points.append(point)
             self.inten[point] = intensity
+            self.id = None
             self.dims.clear()
             self.stats.clear()
 
