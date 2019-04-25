@@ -136,15 +136,19 @@ class NucDetect(QMainWindow):
         for index in self.ui.list_images.selectionModel().selectedIndexes():
             self.sel_images.append(self.reg_images[self.img_list_model.item(index.row()).text()])
         if len(self.sel_images) > 0:
-            self.ui.btn_analyse.setEnabled(True)
-            """
             hash_ = Detector.calculate_image_id(self.reg_images[self.img_list_model.item(index.row()).text()])
+            # TODO Settings mit einbeziehen
             ana = self.cursor.execute(
                 "SELECT analysed FROM images WHERE md5 = ?",
                 (hash_, )
-            )
-            if ana
-            """ # TODO
+            ).fetchall()[0][0]
+            if ana:
+                self.roi_cache = self.load_rois_from_database(hash_)
+                self.create_result_table_from_list(self.roi_cache)
+                self.ui.btn_analyse.setEnabled(False)
+            else:
+                self.ui.btn_analyse.setEnabled(True)
+
         else:
             self.ui.btn_analyse.setEnabled(False)
 
@@ -175,7 +179,6 @@ class NucDetect(QMainWindow):
         file = temp[1]
         if os.path.splitext(file)[1] in Detector.FORMATS:
             d = Detector.get_image_data(path)
-            tags = piexif.load(path)["0th"]
             t = d["datetime"].decode("ascii").split(" ")
             item = QStandardItem()
             item_text = "Name: {}\nFolder: {}\nDate: {}\nTime: {}".format(file, folder, t[0], t[1])
@@ -192,12 +195,11 @@ class NucDetect(QMainWindow):
                     (key, )
             ).fetchall():
                 self.cursor.execute(
-                    "INSERT INTO images VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO images VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (key, d["datetime"], d["channels"], d["width"], d["height"],
-                     str(d["x_res"]), str(d["y_res"]), d["unit"], 0)
+                     str(d["x_res"]), str(d["y_res"]), d["unit"], 0, -1) # TODO settngs hashen
                 )
             self.connection.commit()
-
 
     def add_images_from_folder(self, url):
         """
@@ -232,7 +234,6 @@ class NucDetect(QMainWindow):
         """
         self.img_list_model.clear()
         self.reg_images.clear()
-        self.detector.clear()
 
     def analyze(self):
         """
@@ -343,20 +344,6 @@ class NucDetect(QMainWindow):
                 row.append(item)
             self.res_table_model.appendRow(row)
 
-
-    def get_handler_from_database(self, md5):
-        """
-        Method to load saved rois from the database
-        :param md5: The md5 hash of the image
-        :return: A list of rois assciated with the image
-        """
-        handler = ROIHandler()
-        for h in self.cursor.execute(
-            "SELECT hash FROM roi WHERE image = ?",
-            (md5, )
-        ).fetchall():
-            pass#TODO
-
     def _select_next_image(self):
         max_ind = self.img_list_model.rowCount()
         cur_ind = self.ui.list_images.currentIndex()
@@ -410,9 +397,27 @@ class NucDetect(QMainWindow):
                                 maxi, "")
             self.selec_signal.emit()
             
-    def load_rois(self, md5):
-        pass
-        # TODO
+    def load_rois_from_database(self, md5):
+        """
+        Method to load all rois associated with this image
+        :param md5: The md5 hash of the image
+        :return: A ROIHandler containing all roi
+        """
+        rois = ROIHandler(ident=md5)
+        entries = self.cursor.execute(
+            "SELECT * FROM roi WHERE image = ?",
+            (md5, )
+        ).fetchall()
+        for entry in entries:
+            temproi = ROI(channel=entry[2], main=entry[6] is None, associated=entry[6]) # TODO associated != hash
+            for p in self.cursor.execute(
+                "SELECT * FROM points WHERE hash = ?",
+                    (entry[0], )
+            ).fetchall():
+                temproi.add_point((p[1], p[2]), p[3])
+            temproi.id = entry[0]
+            rois.add_roi(temproi)
+        return rois
 
     def show_result_image(self):
         # TODO Zoom implementieren: http://doc.qt.io/qt-5/qtwidgets-widgets-imageviewer-example.html

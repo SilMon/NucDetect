@@ -231,25 +231,10 @@ class Detector:
                             rem_list.append(focus2)
         print("Removed foci: {}".format(len(rem_list)))
         for rem in rem_list:
-            rois.remove(rem) # TODO Check
+            rois.remove(rem)
         rem_list.clear()
         print("Time: {:4f}".format(time.time() - s4))
-        """
-        # Create nucleus-focus associations
-        print("Calculate Nucleus-Focus intersections")
-        s3 = time.time()
-        for nucleus in main:
-            for focus in foci:
-                if focus not in rem_list:
-                    s5 = time.time()
-                    intersect = nucleus.calculate_roi_intersection(focus)
-                    if intersect > 0.95:
-                        focus.associated = nucleus
-                        s6 = time.time()
-                        rem_list.append(focus)
-        rem_list.clear()
-        print("Time: {:4f}".format(time.time() - s3))
-        """
+
     @staticmethod
     def create_association_map(rois):
         ass = {}
