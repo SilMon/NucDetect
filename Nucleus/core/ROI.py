@@ -22,7 +22,7 @@ class ROI:
         "id"
     ]
 
-    def __init__(self, main=True, channel="DAPI", auto=True, associated=None):
+    def __init__(self, main=True, channel="Blue", auto=True, associated=None):
         self.main = main
         self.ident = channel
         self.auto = auto
@@ -79,7 +79,10 @@ class ROI:
 
     def __hash__(self):
         if self.id is None:
-            self.id = hash("{}{}".format(self.points, self.ident).encode())
+            md5 = hashlib.md5()
+            ident = "{}{}".format(sorted(self.points, key=lambda k: [k[0], k[1]]), self.ident).encode()
+            md5.update(ident)
+            self.id = int("0x" + md5.hexdigest(), 0)
         return self.id
 
     def add_point(self, point, intensity):

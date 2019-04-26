@@ -123,7 +123,7 @@ QDialog{
              <string>Load an image</string>
             </property>
             <property name="text">
-             <string>Load</string>
+             <string>Load Image</string>
             </property>
            </widget>
           </item>
@@ -136,7 +136,7 @@ QDialog{
              <string>Save the results of the analysis</string>
             </property>
             <property name="text">
-             <string>Save</string>
+             <string>CSV</string>
             </property>
            </widget>
           </item>

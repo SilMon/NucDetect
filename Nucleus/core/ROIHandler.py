@@ -5,7 +5,7 @@ Created on 09.04.2019
 import numpy as np
 import csv
 import datetime
-
+import os
 
 class ROIHandler:
     __slots__ = [
@@ -140,40 +140,40 @@ class ROIHandler:
     def export_data_as_csv(self, path, delimiter=";", quotechar="|"):
         """
         Method to save the roi data to a csv table
-        :param path: The path leading to the file
+        :param path: The folder to save the file in
         :param delimiter: The char used to separate cells
         :param quotechar: The char used as a substitute for \"\" or \'\'
         :return: True if the csv could be exported
         """
-        with open(path, 'w', newline='') as file:
+        with open(os.path.join(path, "{}.csv".format(self.ident)), 'w', newline='') as file:
             writer = csv.writer(file, delimiter=delimiter,
                                 quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
             writer.writerow(["File id:", self.ident])
-            writer.writerow(["Date:", datetime.now().strftime("%d.%m.%Y, %H:%M:%S")])
+            writer.writerow(["Date:", datetime.datetime.now().strftime("%d.%m.%Y, %H:%M:%S")])
             writer.writerow(["Channels:", self.idents])
             writer.writerow(["Main Channel:", self.main])
             row = ["Index", "Width", "Height", "Center"]
             row.extend(self.idents)
             row.remove(self.main)
             writer.writerow(row)
-            index = 0
             for roi in self.rois:
                 if roi.main:
-                    tempstat = roi.calculate_statistics()
+                    tempstat = roi.calculate_dimensions()
                     row = [
-                        index,
+                        hash(roi),
                         tempstat["width"],
                         tempstat["height"],
                         tempstat["center"]
                     ]
                     secstat = {}
-                    for roi2 in roi:
-                        if roi2 != roi and not roi2.main:
-                            if roi2.channel in secstat:
-                                secstat[roi2.channel] += 1
+                    for roi2 in self.rois:
+                        if roi2.associated is roi:
+                            if roi2.ident in secstat:
+                                secstat[roi2.ident] += 1
                             else:
-                                secstat[roi2.channel] = 1
+                                secstat[roi2.ident] = 1
                     for chan in self.idents:
-                        row.append(secstat[chan])
+                        if chan in secstat.keys():
+                            row.append(secstat[chan])
                     writer.writerow(row)
         return True

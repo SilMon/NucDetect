@@ -10,7 +10,7 @@ import numpy as np
 import piexif
 import qtawesome as qta
 import matplotlib.pyplot as plt
-import pickle
+import copy
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from PIL import Image
@@ -44,6 +44,7 @@ ui_stat_dial = os.path.join(os.getcwd(), "statistics_dialog.ui")
 ui_settings_dial = os.path.join(os.getcwd(), "settings_dialog.ui")
 ui_modification_dial = os.path.join(os.getcwd(), "modification_dialog.ui")
 database = os.path.join(os.pardir, "database{}nucdetect.db".format(os.sep))
+result_path = os.path.join(os.pardir, "results")
 
 
 class NucDetect(QMainWindow):
@@ -146,7 +147,10 @@ class NucDetect(QMainWindow):
                 self.roi_cache = self.load_rois_from_database(hash_)
                 self.create_result_table_from_list(self.roi_cache)
                 self.ui.btn_analyse.setEnabled(False)
+                self.ui.lbl_status.setText("Loaded analysis results from database")
             else:
+                self.ui.lbl_status.setText("Program ready")
+                self.res_table_model.setRowCount(0)
                 self.ui.btn_analyse.setEnabled(True)
 
         else:
@@ -162,7 +166,7 @@ class NucDetect(QMainWindow):
         pardir = os.getcwd()
         imgdir = os.path.join(os.path.dirname(pardir),
                               r"images")
-        file_name, _ = QFileDialog.getOpenFileName(self, "QFileDialog.getOpenFileName()", imgdir,
+        file_name, _ = QFileDialog.getOpenFileName(self, "Load images..", imgdir,
                                                    "Image Files (*.tif *.tiff *.png *.jpg *.jpeg *.bmp)",
                                                    options=options)
         if file_name:
@@ -268,6 +272,7 @@ class NucDetect(QMainWindow):
         self.prg_signal.emit("Analysing image", maxi*0.05 if not all_ else percent, maxi, "")
         data = self.detector.analyse_image(path)
         key = data["id"]
+        self.roi_cache = data["handler"]
         self.prg_signal.emit("Creating result table", maxi * 0.65 if not all_ else percent, maxi, "")
         self.create_result_table_from_list(data["handler"])
         self.prg_signal.emit("Checking database", maxi * 0.75 if not all_ else percent, maxi, "")
@@ -408,15 +413,30 @@ class NucDetect(QMainWindow):
             "SELECT * FROM roi WHERE image = ?",
             (md5, )
         ).fetchall()
+        print("loading from db")
+        main = []
+        sec = []
         for entry in entries:
-            temproi = ROI(channel=entry[2], main=entry[6] is None, associated=entry[6]) # TODO associated != hash
+            temproi = ROI(channel=entry[2], main=entry[6] is None, associated=entry[6])
+            if temproi.main:
+                main.append(temproi)
+            else:
+                sec.append(temproi)
             for p in self.cursor.execute(
                 "SELECT * FROM points WHERE hash = ?",
                     (entry[0], )
             ).fetchall():
                 temproi.add_point((p[1], p[2]), p[3])
-            temproi.id = entry[0]
+            if entry[0] == -7975285254840398560:
+                d = temproi.calculate_dimensions()
+                print("Old hash: {} New hash: {} Len: {} Width: {} Height: {}".format(
+                    entry[0], hash(temproi), len(temproi), d["width"], d["height"]
+                ))
             rois.add_roi(temproi)
+        for m in main:
+            for s in sec:
+                if s.associated == hash(m):
+                    s.associated = m
         return rois
 
     def show_result_image(self):
@@ -432,13 +452,12 @@ class NucDetect(QMainWindow):
         image_dialog.exec_()
 
     def save_results(self):
-        key = self.cur_img["key"]
-        save = Thread(target=self._save_results, args=(key,))
+        save = Thread(target=self._save_results)
         self.prg_signal.emit("Saving Results", 0, 100, "")
         save.start()
 
-    def _save_results(self, key):
-        self.detector.create_ouput(key)
+    def _save_results(self):
+        self.roi_cache.export_data_as_csv(path=result_path)
         self.prg_signal.emit("Saving Results", 50, 100, "")
         self.prg_signal.emit("Results saved -- Program ready", 100, 100, "")
         self.unsaved_changes = False
@@ -1054,11 +1073,16 @@ class ModificationDialog(QDialog):
     def __init__(self, handler=None, parent=None):
         super(ModificationDialog, self).__init__(parent)
         self.handler = handler
-        self.original = handler.nuclei.copy()
+        self.original = copy.copy(handler)
+        self.show = True
         self.last_index = 0
         self.cur_index = 0
         self.cur_channel = 3
+        self.max = 3
         self.mp = None
+        self.ui = None
+        self.view = None
+        self.lst_nuc_model = None
         self.initialize_ui()
 
     def reject(self):
@@ -1074,6 +1098,10 @@ class ModificationDialog(QDialog):
         self.ui.lst_nuc.setIconSize(QSize(75, 75))
         self.ui.lst_nuc.selectionModel().selectionChanged.connect(self.on_selection_change)
         self.set_list_images(self.view.images)
+        # Initialize channel selector
+        chan_num = len(self.handler.idents)
+        self.max = chan_num
+        self.ui.sb_channel.setMaximum(chan_num)
         # Initialize buttons
         self.ui.btn_comp.clicked.connect(self.on_button_click)
         self.ui.btn_blue.clicked.connect(self.on_button_click)
@@ -1093,7 +1121,7 @@ class ModificationDialog(QDialog):
             item.setText(item_text)
             item.setTextAlignment(QtCore.Qt.AlignLeft)
             pmap = QPixmap()
-            pmap.convertFromImage(self.get_qimage_from_numpy(image[0]))
+            pmap.convertFromImage(NucView.get_qimage_from_numpy(image[0]))
             ic = QIcon(pmap)
             item.setIcon(ic)
             self.lst_nuc_model.appendRow(item)
@@ -1111,22 +1139,17 @@ class ModificationDialog(QDialog):
                 item.setTextAlignment(QtCore.Qt.AlignLeft)
                 item.setFlag(QGraphicsItem.ItemIsSelectable)
                 pmap = QPixmap()
-                pmap.convertFromImage(self.get_qimage_from_numpy(image[0]))
+                pmap.convertFromImage(NucView.get_qimage_from_numpy(image[0]))
                 ic = QIcon(pmap)
                 item.setIcon(ic)
                 self.lst_nuc_model.appendRow(item)
 
+    def on_selection_change(self):
+        self.cur_channel = self.ui.sb_channel.value()
+
     def on_button_click(self):
         ident = self.sender().objectName()
-        if ident == "btn_comp":
-            self.cur_channel = 3
-        elif ident == "btn_blue":
-            self.cur_channel = 0
-        elif ident == "btn_red":
-            self.cur_channel = 1
-        elif ident == "btn_green":
-            self.cur_channel = 2
-        elif ident == "btn_show":
+        if ident == "btn_show":
             self.show = self.ui.btn_show.isChecked()
             self.view.show = self.show
         elif ident == "btn_edit":
@@ -1180,11 +1203,6 @@ class ModificationDialog(QDialog):
             if len(index) > 1:
                 self.ui.btn_merge.setEnabled(True)
 
-    def get_qimage_from_numpy(self, numpy):
-        img = Image.fromarray(numpy)
-        qimg = ImageQt(img)
-        return qimg
-
     def set_current_image(self):
         self.view.show_nucleus(self.cur_index, self.cur_channel)
 
@@ -1226,7 +1244,7 @@ class NucView(QGraphicsView):
         self.channel = channel
         self.scene().setSceneRect(0, 0, self.width() - 5, self.height() - 5)
         pmap = QPixmap()
-        pmap.convertFromImage(self.get_qimage_from_numpy(self.images[self.index][self.channel]))
+        pmap.convertFromImage(NucView.get_qimage_from_numpy(self.images[self.index][self.channel]))
         tempmap = pmap.scaled(self.width(), self.height(), Qt.KeepAspectRatio)
         self.sc_bckg.setPixmap(tempmap)
         x_scale = tempmap.width() / pmap.width()
@@ -1298,7 +1316,8 @@ class NucView(QGraphicsView):
                     self.foc_group.append(foc)
                     self.scene().addItem(foc)
 
-    def get_qimage_from_numpy(self, numpy):
+    @staticmethod
+    def get_qimage_from_numpy(numpy):
         img = Image.fromarray(numpy)
         qimg = ImageQt(img)
         return qimg
@@ -1401,9 +1420,10 @@ class QGraphicsFocusItem(QGraphicsEllipseItem):
         QColor(0, 255, 255),  # Cyan
     ]
 
-    def __init__(self, color_index=0, parent=None):
-        super(QGraphicsFocusItem, self).__init__(parent=parent)
-        self.main_color = QGraphicsFocusItem.COLORS[color_index]
+    def __init__(self, color_index=0):
+        super(QGraphicsFocusItem, self).__init__()
+        col_num = len(QGraphicsFocusItem.COLORS)
+        self.main_color = QGraphicsFocusItem.COLORS[color_index if color_index < col_num else col_num % color_index]
         self.hover_color = self.main_color.lighter(150)
         self.sel_color = self.main_color.lighter(200)
         self.cur_col = self.main_color

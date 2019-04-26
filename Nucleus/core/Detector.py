@@ -34,7 +34,8 @@ class Detector:
         self.settings = settings if settings is not None else {
             "ass_qual": True,
             "names": "Red;Green;Blue",
-            "main_channel": 2
+            "main_channel": 2,
+            "min_foc_area": 9
         }
 
     def analyse_image(self, path, main_channel=2):
@@ -142,7 +143,7 @@ class Detector:
 
     @staticmethod
     def perform_roi_quality_check(rois, max_focus_overlapp=.75, min_dist=45,
-                                  min_thresh=25, max_thresh=60):
+                                  min_thresh=25, max_thresh=60,  min_foc_area = 9):
         """
         Method to check detected rois for their quality.
         :param rois: A list of detected rois
@@ -166,6 +167,13 @@ class Detector:
         min_main_area = np.percentile(temp, min_thresh)
         max_main_area = np.percentile(temp, max_thresh)
         ws_list = []
+        print("Remove not associated foci")
+        for focus in foci:
+            if focus.associated is None:
+                rem_list.append(focus)
+        for rem in rem_list:
+            rois.remove(rem)
+            foci.remove(rem)
         # Nucleus quality check
         print("Nucleus Quality Check")
         s1 = time.time()
@@ -204,7 +212,7 @@ class Detector:
                 for focus in ass[t[1]]:
                     if focus.associated == t[1] and focus not in rem_list:
                         intersect = nuc.calculate_roi_intersection(focus)
-                        if intersect > 0.50:
+                        if intersect >= 0.50:
                             focus.associated = nuc
                             rem_list.append(focus)
                 rois.append(nuc)
