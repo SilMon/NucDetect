@@ -7,6 +7,7 @@ import csv
 import datetime
 import os
 
+
 class ROIHandler:
     __slots__ = [
         "ident",
@@ -56,14 +57,14 @@ class ROIHandler:
                     main["num"] += 1
                     main["area"].append(temp_stat["area"])
                 else:
-                    if roi.channel not in sec:
-                        sec[roi.channel] = {
+                    if roi.ident not in sec:
+                        sec[roi.ident] = {
                             "num": 1,
                             "area": [temp_stat["area"]],
                             "intensity": [temp_stat["intensity"]]
                         }
                     else:
-                        sec[roi.channel]["num"] += 1
+                        sec[roi.ident]["num"] += 1
                         sec[roi.ident]["area"].append(temp_stat["area"])
                         sec[roi.ident]["intensity"].append(temp_stat["intensity"])
                         if roi.ident not in sec_ass:

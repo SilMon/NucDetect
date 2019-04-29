@@ -33,19 +33,6 @@ class ROI:
         self.associated = associated
         self.id = None
 
-    def __add__(self, other):
-        if isinstance(other, ROI):
-            if other.ident == self.ident:
-                self.points.extend(other.points)
-                self.inten.update(other.inten)
-                self.id = None
-                self.dims.clear()
-                self.stats.clear()
-            else:
-                raise Warning("ROIs have different channel IDs!")
-        else:
-            raise ValueError("Not an ROI")
-
     def __eq__(self, other):
         if isinstance(other, ROI):
             return set(self.points) == set(other.points)
@@ -84,6 +71,25 @@ class ROI:
             md5.update(ident)
             self.id = int("0x" + md5.hexdigest(), 0)
         return self.id
+
+    def merge(self, roi):
+        """
+        Method to merge this roi with another ROI
+        :param roi: The roi to merge with this
+        :return: None
+        """
+        if isinstance(roi, ROI):
+            if roi.ident == self.ident:
+                self.points.extend(roi.points)
+                self.inten.update(roi.inten)
+                self.id = None
+                self.dims.clear()
+                self.stats.clear()
+            else:
+                raise Warning("ROIs have different channel IDs!")
+        else:
+            raise ValueError("Not an ROI")
+
 
     def add_point(self, point, intensity):
         """

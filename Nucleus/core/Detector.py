@@ -92,7 +92,6 @@ class Detector:
                         main[lab] = roi
                     else:
                         main[lab].add_point((x, y), int(channels[main_map][y][x]))
-
         for ind in range(len(markers)):
             if ind != main_map:
                 temprois = [None] * (lab_nums[ind] + 1)
@@ -106,7 +105,6 @@ class Detector:
                                 temprois[lab] = roi
                                 if main_markers[y][x] != 0:
                                     roi.associated = main[main_markers[y][x]]
-
                             else:
                                 if temprois[lab].associated is None:
                                     if main_markers[y][x] != 0:
@@ -114,7 +112,7 @@ class Detector:
                                 temprois[lab].add_point((x, y), int(channels[ind][y][x]))
                 del temprois[0]
                 rois.extend(temprois)
-
+        # TODO Foci werden falschen Kanal zugeordnet -> fixen
         # Second round of ROI detection
         markers, lab_nums = Detector.detect_blobs(channels, main_channel=main_map)
         for ind in range(len(markers)):
@@ -167,13 +165,38 @@ class Detector:
         min_main_area = np.percentile(temp, min_thresh)
         max_main_area = np.percentile(temp, max_thresh)
         ws_list = []
+        print("Checking for very small nuclei")
+        for nucleus in main:
+            if len(nucleus) < min_main_area:
+                rem_list.append(nucleus)
         print("Remove not associated foci")
         for focus in foci:
-            if focus.associated is None:
+            if focus.associated in rem_list or focus.associated is None:
+                print("Associated in rem")
                 rem_list.append(focus)
         for rem in rem_list:
             rois.remove(rem)
-            foci.remove(rem)
+            if rem.main:
+                main.remove(rem)
+            else:
+                foci.remove(rem)
+        rem_list.clear()
+        # Focus quality check
+        print("Focus quality check")
+        s4 = time.time()
+        for ind in range(len(foci)):
+            focus = foci[ind]
+            if focus not in rem_list:
+                for ind2 in range(ind + 1, len(foci)):
+                    focus2 = foci[ind2]
+                    if focus.ident == focus2.ident:
+                        if focus.calculate_roi_intersection(focus2) >= max_focus_overlapp:
+                            rem_list.append(focus2)
+        print("Removed foci: {}".format(len(rem_list)))
+        for rem in rem_list:
+            rois.remove(rem)
+        rem_list.clear()
+        print("Time: {:4f}".format(time.time() - s4))
         # Nucleus quality check
         print("Nucleus Quality Check")
         s1 = time.time()
@@ -218,30 +241,7 @@ class Detector:
                 rois.append(nuc)
             rois.remove(t[1])
         rem_list.clear()
-        print("Checking for very small nuclei")
-        for nucleus in main:
-            if len(nucleus) < min_main_area:
-                rem_list.append(nucleus)
-        for rem in rem_list:
-            rois.remove(rem)
-        rem_list.clear()
         print("Time: {:4f}".format(time.time() - s2))
-        # Focus quality check
-        print("Focus quality check")
-        s4 = time.time()
-        for ind in range(len(foci)):
-            focus = foci[ind]
-            if focus not in rem_list:
-                for ind2 in range(ind + 1, len(foci)):
-                    focus2 = foci[ind2]
-                    if focus.ident == focus2.ident:
-                        if focus.calculate_roi_intersection(focus2) >= max_focus_overlapp:
-                            rem_list.append(focus2)
-        print("Removed foci: {}".format(len(rem_list)))
-        for rem in rem_list:
-            rois.remove(rem)
-        rem_list.clear()
-        print("Time: {:4f}".format(time.time() - s4))
 
     @staticmethod
     def create_association_map(rois):
