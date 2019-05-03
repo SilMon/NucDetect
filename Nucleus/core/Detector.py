@@ -77,6 +77,7 @@ class Detector:
         :return: A list of all detected roi
         """
         # First round of ROI detection
+        s0 = time.time()
         rois = []
         markers, lab_nums = Detector.perform_labelling(bin_maps)
         main_markers = markers[main_map]
@@ -112,7 +113,6 @@ class Detector:
                                 temprois[lab].add_point((x, y), int(channels[ind][y][x]))
                 del temprois[0]
                 rois.extend(temprois)
-        # TODO Foci werden falschen Kanal zugeordnet -> fixen
         # Second round of ROI detection
         markers, lab_nums = Detector.detect_blobs(channels, main_channel=main_map)
         for ind in range(len(markers)):
@@ -136,6 +136,7 @@ class Detector:
             rois.extend(temprois)
         del main[0]
         rois.extend(main)
+        print("Analysis time: {:.4f}".format(time.time() - s0))
         Detector.perform_roi_quality_check(rois)
         return rois
 
@@ -146,7 +147,6 @@ class Detector:
         Method to check detected rois for their quality.
         :param rois: A list of detected rois
         :param max_focus_overlapp: The threshold used to determine if two rois are considered duplicates
-        :param main_threshold: The threshold for nucleus detection
         :param min_dist: The minimal distance between 2 nuclei
         :param min_thresh: The lower percentile to check for oversegmentation
         :param max_thresh: The upper percentile to check for undersegmentation
@@ -164,15 +164,18 @@ class Detector:
                 foci.append(roi)
         min_main_area = np.percentile(temp, min_thresh)
         max_main_area = np.percentile(temp, max_thresh)
+        print("Detected nuclei:{}\nDetected foci: {}".format(len(main), len(foci)))
         ws_list = []
+        s7 = time.time()
         print("Checking for very small nuclei")
         for nucleus in main:
             if len(nucleus) < min_main_area:
                 rem_list.append(nucleus)
+        print("Time: {:4f}".format(time.time() - s7))
         print("Remove not associated foci")
+        s8 = time.time()
         for focus in foci:
             if focus.associated in rem_list or focus.associated is None:
-                print("Associated in rem")
                 rem_list.append(focus)
         for rem in rem_list:
             rois.remove(rem)
@@ -181,6 +184,7 @@ class Detector:
             else:
                 foci.remove(rem)
         rem_list.clear()
+        print("Time: {:4f}".format(time.time() - s8))
         # Focus quality check
         print("Focus quality check")
         s4 = time.time()
@@ -194,6 +198,7 @@ class Detector:
                             rem_list.append(focus2)
         print("Removed foci: {}".format(len(rem_list)))
         for rem in rem_list:
+            foci.remove(rem)
             rois.remove(rem)
         rem_list.clear()
         print("Time: {:4f}".format(time.time() - s4))
@@ -239,6 +244,11 @@ class Detector:
                             focus.associated = nuc
                             rem_list.append(focus)
                 rois.append(nuc)
+            for focus in ass[t[1]]:
+                if focus.associated == t[1] and focus not in rem_list:
+                    print("Removed unassociated focus: {}".format(hash(t[1])))
+                    rois.remove(focus)
+                    rem_list.append(focus)
             rois.remove(t[1])
         rem_list.clear()
         print("Time: {:4f}".format(time.time() - s2))
@@ -296,7 +306,6 @@ class Detector:
             rr, cc = circle(blob[0], blob[1], blob[2] * np.sqrt(2) - 0.5, shape=shape)
             map_[rr, cc] = ind + 1
         return map_
-
 
     @staticmethod
     def perform_labelling(local_maxima):

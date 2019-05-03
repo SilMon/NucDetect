@@ -166,16 +166,19 @@ class ROI:
         :return: The calculated dimensions as dict
         """
         if not self.dims:
-            vals = self.points
-            xvals = [x[0] for x in vals]
-            yvals = [y[1] for y in vals]
-            self.dims["minX"] = min(xvals)
-            self.dims["maxX"] = max(xvals)
-            self.dims["minY"] = min(yvals)
-            self.dims["maxY"] = max(yvals)
-            self.dims["width"] = self.dims["maxX"] - self.dims["minX"] + 1
-            self.dims["height"] = self.dims["maxY"] - self.dims["minY"] + 1
-            self.dims["center"] = (round(np.average(xvals), 2), round(np.average(yvals), 2))
+            if self.points:
+                vals = self.points
+                xvals = [x[0] for x in vals]
+                yvals = [y[1] for y in vals]
+                self.dims["minX"] = min(xvals)
+                self.dims["maxX"] = max(xvals)
+                self.dims["minY"] = min(yvals)
+                self.dims["maxY"] = max(yvals)
+                self.dims["width"] = self.dims["maxX"] - self.dims["minX"] + 1
+                self.dims["height"] = self.dims["maxY"] - self.dims["minY"] + 1
+                self.dims["center"] = (round(np.average(xvals), 2), round(np.average(yvals), 2))
+            else:
+                raise Exception("ROI does not contain any points!")
         return self.dims
 
     def calculate_statistics(self):

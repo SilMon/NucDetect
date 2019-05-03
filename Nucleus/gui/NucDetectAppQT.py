@@ -283,9 +283,12 @@ class NucDetect(QMainWindow):
         data = self.detector.analyse_image(path)
         key = data["id"]
         self.roi_cache = data["handler"]
+        s0 = time.time()
         self.prg_signal.emit("Creating result table", maxi * 0.65 if not all_ else percent, maxi, "")
         self.create_result_table_from_list(data["handler"])
+        print("Creation result table: {:.4f}".format(time.time()-s0))
         self.prg_signal.emit("Checking database", maxi * 0.75 if not all_ else percent, maxi, "")
+        s1 = time.time()
         if curs.execute(
                 "SELECT analysed FROM images WHERE md5 = ?",
                 (key,)
@@ -303,6 +306,11 @@ class NucDetect(QMainWindow):
                 (key,)
             )
         self.prg_signal.emit("Analysing nuclei", maxi * 0.85 if not all_ else percent, maxi, "")
+        for name in data["handler"].idents:
+            curs.execute(
+                "INSERT INTO channels VALUES (?, ?, ?)",
+                (key, data["handler"].idents.index(name), name)
+            )
         for roi in data["handler"].rois:
             dim = roi.calculate_dimensions()
             asso = hash(roi.associated) if roi.associated is not None else None
@@ -322,6 +330,7 @@ class NucDetect(QMainWindow):
         )
         con.commit()
         con.close()
+        print("Writing to database: {:.4f}".format(time.time() - s1))
         self.prg_signal.emit(message.format("{:.2f} secs".format(time.time()-start)), percent, maxi, "")
         self.ui.btn_save.setEnabled(True)
         self.ui.btn_images.setEnabled(True)
@@ -399,8 +408,6 @@ class NucDetect(QMainWindow):
                            percent=percent, maxi=maxi, all_=True)
         if percent < maxi:
             self.selec_signal.emit()
-            # TODO Optimales sleep Intervall herausfinden + Detector Bug fixen -> Löschen von Snaps
-            time.sleep(0.3)
             self._analyze_all(percent=percent + 1, maxi=maxi)
         if percent == maxi:
             self.ui.list_images.setEnabled(True)
@@ -419,11 +426,18 @@ class NucDetect(QMainWindow):
         :param md5: The md5 hash of the image
         :return: A ROIHandler containing all roi
         """
+        # TODO
         rois = ROIHandler(ident=md5)
         entries = self.cursor.execute(
             "SELECT * FROM roi WHERE image = ?",
             (md5, )
         ).fetchall()
+        names = self.cursor.execute(
+            "SELECT * FROM channels WHERE md5 = ?",
+            (md5, )
+        ).fetchall()
+        for name in names:
+            rois.idents.insert(name[1], name[2])
         main = []
         sec = []
         for entry in entries:
@@ -1090,10 +1104,18 @@ class ModificationDialog(QDialog):
         self.ui = None
         self.view = None
         self.lst_nuc_model = None
+        self.conn = sqlite3.connect(database)
+        self.curs = self.conn.cursor()
         self.initialize_ui()
 
+    def accept(self):
+        self.conn.commit()
+        self.conn.close()
+        super(ModificationDialog, self).accept()
+
     def reject(self):
-        # TODO
+        self.conn.rollback()
+        self.conn.close()
         self.handler = self.original
         super(ModificationDialog, self).reject()
 
@@ -1103,7 +1125,7 @@ class ModificationDialog(QDialog):
         chan_num = len(self.handler.idents)
         self.max = chan_num - 1
         self.ui.sb_channel.setMaximum(chan_num)
-        self.view = NucView(self.image, self.handler, self.cur_channel, self.show, True, self.max)
+        self.view = NucView(self.image, self.handler, self.cur_channel, self.show, True, self.max, self.curs)
         self.ui.graph_par.insertWidget(0, self.view, 3)
         self.lst_nuc_model = QStandardItemModel(self.ui.lst_nuc)
         self.ui.lst_nuc.setModel(self.lst_nuc_model)
@@ -1126,7 +1148,9 @@ class ModificationDialog(QDialog):
             item.setText(item_text)
             item.setTextAlignment(QtCore.Qt.AlignLeft)
             pmap = QPixmap()
-            pmap.convertFromImage(NucView.get_qimage_from_numpy(image))
+            pmap.convertFromImage(NucView.get_qimage_from_numpy(image[...,
+                                                                      self.handler.idents.index(self.handler.main)]
+                                                                ))
             ic = QIcon(pmap)
             item.setIcon(ic)
             self.lst_nuc_model.appendRow(item)
@@ -1178,6 +1202,15 @@ class ModificationDialog(QDialog):
                         del self.view.images[ind + offset]
                         del self.view.handler.nuclei[ind + offset]
                         offset -= 1
+                        print(hash(nuc)) # TODO test
+                        self.curs.execute(
+                            "DELETE FROM rois WHERE hash = ? OR associated = ?",
+                            (hash(nuc), hash(nuc))
+                        )
+                        self.curs.execute(
+                            "DELETE FROM points WHERE hash = ?",
+                            (hash(nuc),)
+                        )
                     self.cur_index = 0
                     self.set_current_image()
         elif ident == "btn_merge":
@@ -1186,14 +1219,15 @@ class ModificationDialog(QDialog):
             code = QMessageBox.question(self, "Merge Nuclei...",
                                         "Do you really want to merge following nuclei: {}".format(sel),
                                         QMessageBox.Yes | QMessageBox.No)
-            # TODO Associations neu setzen
             if code == QMessageBox.Yes:
                 seed = self.view.main[sel[0]]
                 offset = 0
                 ass_list = []
+                mergehash = [hash(seed)]
                 for x in range(1, len(sel)):
                     ind = sel[x]
                     merger = self.view.main[ind + offset]
+                    mergehash.append(hash(merger))
                     seed.merge(merger)
                     ass_list.append(merger)
                     self.lst_nuc_model.removeRow(ind + offset)
@@ -1204,6 +1238,11 @@ class ModificationDialog(QDialog):
                 for nuc in ass_list:
                     for foc in self.view.assmap[nuc]:
                         foc.associated = seed
+                for h in mergehash:
+                    self.curs.execute(
+                        "UPDATE roi SET associated = ? WHERE associated = ?",
+                        (hash(seed), h)
+                    )
                 self.set_list_images(self.view.images)
                 self.ui.lst_nuc.selectionModel().select(selection[0], QItemSelectionModel.Select)
         self.set_current_image()
@@ -1219,12 +1258,13 @@ class ModificationDialog(QDialog):
                 self.ui.btn_merge.setEnabled(True)
 
     def set_current_image(self):
-        self.view.show_nucleus(self.view.main[self.cur_index], self.cur_channel)
+        self.view.show_nucleus(self.cur_index, self.cur_channel)
 
 
 class NucView(QGraphicsView):
 
-    def __init__(self, image, handler, cur_channel=None, show=True, edit=False, max_channel=None, parent=None):
+    def __init__(self, image, handler, cur_channel=None, show=True, edit=False, max_channel=None, db_curs=None,
+                 parent=None):
         super(NucView, self).__init__(parent)
         self.setMouseTracking(True)
         self.setSizePolicy(
@@ -1240,9 +1280,11 @@ class NucView(QGraphicsView):
         self.assmap = Detector.create_association_map(handler.rois)
         self.main = list(self.assmap.keys())
         self.main_channel = self.handler.idents.index(self.main[0].ident)
+        self.cur_ind = 0
         self.cur_nuc = self.main[0]
         self.channel = cur_channel
         self.max_channel = max_channel
+        self.curs = db_curs
         self.show = show
         self.edit = edit
         self.pos = None
@@ -1257,13 +1299,11 @@ class NucView(QGraphicsView):
             self.images.append(self.convert_roi_to_numpy(nuc))
         # Initialization of the background image
         self.sc_bckg = self.scene().addPixmap(QPixmap())
-        self.show_nucleus(self.cur_nuc, self.channel)
+        self.show_nucleus(self.cur_ind, self.channel)
 
-    def remove_nucleus(self, index):
-        pass
-
-    def show_nucleus(self, cur_nuc, channel):
-        self.cur_nuc = cur_nuc
+    def show_nucleus(self, cur_ind, channel):
+        self.cur_ind = cur_ind
+        self.cur_nuc = self.main[cur_ind]
         self.channel = channel
         self.scene().setSceneRect(0, 0, self.width() - 5, self.height() - 5)
         pmap = QPixmap()
@@ -1281,8 +1321,7 @@ class NucView(QGraphicsView):
             nuc_dat = self.cur_nuc.calculate_dimensions()
             x_offset = nuc_dat["minX"]
             y_offset = nuc_dat["minY"]
-            for focus in self.assmap[cur_nuc]:
-                # TODO Separation einfügen
+            for focus in self.assmap[self.cur_nuc]:
                 c_ind = self.handler.idents.index(focus.ident)
                 if c_ind == self.channel:
                     foc = QGraphicsFocusItem(color_index=self.handler.idents.index(focus.ident))
@@ -1309,7 +1348,7 @@ class NucView(QGraphicsView):
         self.foc_group.clear()
 
     def resizeEvent(self, event):
-        self.show_nucleus(self.cur_nuc, self.channel)
+        self.show_nucleus(self.cur_ind, self.channel)
 
     def keyPressEvent(self, event):
         super(NucView, self).keyPressEvent(event)
@@ -1317,12 +1356,21 @@ class NucView(QGraphicsView):
             for item in self.foc_group:
                 if item.isSelected():
                     self.handler.rois.remove(self.map[item])
+                    self.curs.execute(
+                        "DELETE FROM roi WHERE hash=?",
+                        (hash(self.map[item]),)
+                    )
+                    self.curs.execute(
+                        "DELETE FROM points WHERE hash=?",
+                        (hash(self.map[item]),)
+                    )
                     del self.map[item]
                     self.scene().removeItem(item)
 
     def mousePressEvent(self, event):
         super(NucView, self).mousePressEvent(event)
-        if self.edit and event.button() == Qt.LeftButton and 0 < self.channel < 3:
+        if self.edit and event.button() == Qt.LeftButton and \
+                self.channel < self.handler.idents.index(self.handler.main):
             point = self.mapToScene(event.pos())
             p = self.itemAt(point.x(), point.y())
             if isinstance(p, QGraphicsPixmapItem):
@@ -1354,8 +1402,8 @@ class NucView(QGraphicsView):
     def mouseReleaseEvent(self, event):
         super(NucView, self).mouseReleaseEvent(event)
         if self.temp_foc is not None:
-            cur_nuc = self.images[self.main.index(self.c)][self.channel] # TODO
-            offset_factor = self.sc_bckg.boundingRect().height() / len(cur_nuc)
+            cur_nump = self.main[self.cur_ind].get_as_numpy()
+            offset_factor = self.sc_bckg.boundingRect().height() / len(cur_nump)
             hard_offset = self.sc_bckg.pos()
             bbox = self.temp_foc.boundingRect()
             tx = bbox.x() + 1/2 * bbox.width()
@@ -1364,19 +1412,38 @@ class NucView(QGraphicsView):
             y_center = (ty - hard_offset.y()) / offset_factor
             height = bbox.height() / offset_factor / 2
             width = bbox.width() / offset_factor / 2
-            mask = np.zeros(shape=cur_nuc.shape)
+            mask = np.zeros(shape=cur_nump.shape)
             rr, cc = ellipse(y_center, x_center, height, width, shape=mask.shape)
             mask[rr, cc] = 1
-            cur_roi = ROI(auto=False, channel=self.channel, associated=self.cur_nuc)
+            cur_roi = ROI(auto=False, channel=self.handler.idents[self.channel], associated=self.cur_nuc)
             nuc_dat = self.cur_nuc.calculate_dimensions()
             x_offset = nuc_dat["minX"]
             y_offset = nuc_dat["maxX"]
+            # TODO in eigenen Thread auslagern
             for y in range(len(mask)):
                 for x in range(len(mask[0])):
                     if mask[y][x] > 0:
-                        inten = cur_nuc[y][x]
+                        inten = cur_nump[y][x]
                         cur_roi.add_point((x + x_offset, y + y_offset), inten)
+                        self.curs.execute(
+                            "INSERT INTO points VALUES(?, ?, ?, ?)",
+                            (-1, x+x_offset, y+y_offset, inten)
+                        )
             self.handler.rois.append(cur_roi)
+            roidat = cur_roi.calculate_dimensions()
+            imghash = self.curs.execute(
+                "SELECT image FROM roi WHERE hash=?",
+                (hash(self.cur_nuc), )
+            )
+            self.curs.execute(
+                "INSERT INTO roi VALUES(?, ?, ?, ?, ?, ?, ?)",
+                (hash(self.temp_foc), imghash, False, self.temp_foc.ident, roidat["center"], roidat["width"],
+                 roidat["height"], hash(self.cur_nuc))
+            )
+            self.curs.execute(
+                "UPDATE points SET hash=? WHERE hash=-1",
+                (hash(self.temp_foc),)
+            )
             self.foc_group.append(self.temp_foc)
             self.pos = None
             self.temp_foc = None
