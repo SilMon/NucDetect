@@ -92,29 +92,7 @@ Line{
     </widget>
    </item>
    <item>
-    <layout class="QHBoxLayout" name="horizontalLayout">
-     <item>
-      <widget class="QLabel" name="image_view">
-       <property name="sizePolicy">
-        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-         <horstretch>0</horstretch>
-         <verstretch>0</verstretch>
-        </sizepolicy>
-       </property>
-       <property name="toolTip">
-        <string>The currently loaded image</string>
-       </property>
-       <property name="text">
-        <string/>
-       </property>
-       <property name="scaledContents">
-        <bool>false</bool>
-       </property>
-       <property name="alignment">
-        <set>Qt::AlignCenter</set>
-       </property>
-      </widget>
-     </item>
+    <layout class="QHBoxLayout" name="image_view">
      <item>
       <layout class="QVBoxLayout" name="verticalLayout_2">
        <property name="spacing">
@@ -151,6 +129,9 @@ Line{
           <set>Qt::AlignCenter</set>
          </property>
         </widget>
+       </item>
+       <item>
+        <widget class="QComboBox" name="cbx_channels"/>
        </item>
        <item>
         <layout class="QHBoxLayout" name="channelbox">

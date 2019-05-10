@@ -90,7 +90,6 @@ class ROI:
         else:
             raise ValueError("Not an ROI")
 
-
     def add_point(self, point, intensity):
         """
         Method to add a point to this ROI
@@ -144,7 +143,7 @@ class ROI:
         :return: The created numpy array
         """
         self.calculate_dimensions()
-        array = np.zeros(shape=(self.dims["height"], self.dims["width"]))
+        array = np.zeros(shape=(self.dims["height"], self.dims["width"]), dtype="uint8")
         for point in self.points:
             array[point[1] - self.dims["minY"], point[0] - self.dims["minX"]] = self.inten[point]
         return array

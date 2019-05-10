@@ -460,8 +460,8 @@ class NucDetect(QMainWindow):
 
     def show_result_image(self):
         # TODO Zoom implementieren: http://doc.qt.io/qt-5/qtwidgets-widgets-imageviewer-example.html
-        image_dialog = ImgDialog(img_data=self.detector.get_snapshot(self.cur_img["key"]))
-        image_dialog.setWindowTitle("Result Images for " + self.cur_img["path"])
+        image_dialog = ImgDialog(image=Detector.load_image(self.cur_img), handler=self.roi_cache)
+        image_dialog.setWindowTitle("Result Images for " + self.cur_img)
         image_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
         image_dialog.setWindowFlags(image_dialog.windowFlags() |
                                     QtCore.Qt.WindowSystemMenuHint |
@@ -805,78 +805,82 @@ class BarChart(MPLPlot):
 class ImgDialog(QDialog):
     # TODO Umbauen
 
-    def __init__(self, img_data, parent=None):
+    def __init__(self, image, handler, parent=None):
         super(ImgDialog, self).__init__(parent)
+        self.image = image
+        self.handler = handler
         self.ui = uic.loadUi(ui_result_image_dialog, self)
+        self.view = QGraphicsView()
         self.initialize_ui()
-        self.img_data = img_data
-        c_img = self.img_data["result_qt"]
-        pmap = QPixmap()
-        pmap.convertFromImage(c_img)
-        self.ui.image_view.setPixmap(pmap.scaled(self.width(), self.height(), QtCore.Qt.KeepAspectRatio))
-        self.img = None
         self.setAttribute(QtCore.Qt.WA_DeleteOnClose)
+        scene = QGraphicsScene(self)
+        scene.setSceneRect(0, 0, self.view.width(), self.view.height())
+        self.view.setScene(scene)
+        # Initialization of the background image
+        self.sc_bckg = self.view.scene().addPixmap(QPixmap())
+        self.pmap = QPixmap()
+        self.pmap.convertFromImage(self.convert_numpy_to_qimage(self.image))
 
     def initialize_ui(self):
-        self.ui.btn_original.clicked.connect(self.on_button_click)
-        self.ui.btn_ch_blue.clicked.connect(self.on_button_click)
-        self.ui.btn_ch_red.clicked.connect(self.on_button_click)
-        self.ui.btn_ch_green.clicked.connect(self.on_button_click)
-        self.ui.btn_thr_blue.clicked.connect(self.on_button_click)
-        self.ui.btn_thr_red.clicked.connect(self.on_button_click)
-        self.ui.btn_thr_green.clicked.connect(self.on_button_click)
-        self.ui.btn_result.clicked.connect(self.on_button_click)
-        self.ui.btn_edge_red.clicked.connect(self.on_button_click)
-        self.ui.btn_edge_green.clicked.connect(self.on_button_click)
-        self.ui.btn_edge_blue.clicked.connect(self.on_button_click)
+        self.view.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding
+        )
+        self.view.setMinimumSize(
+            400,
+            400
+        )
+        for ident in self.handler.idents:
+            self.ui.cbx_channels.addItem(ident)
+        self.ui.cbx_channels.addItem("Composite")
+        self.ui.cbx_channels.setCurrentText("Composite")
+        self.ui.cbx_channels.currentIndexChanged.connect(self.on_channel_selection_change)
         self.ui.btn_save.clicked.connect(self.on_button_click)
+        self.ui.image_view.insertWidget(0, self.view, 3)
 
     def resizeEvent(self, event):
         super(ImgDialog, self).resizeEvent(event)
-        self.set_current_image(self.img)
+        self.set_current_image()
+
+    def on_channel_selection_change(self):
+        self.pmap = self.pmap.convertFromImage(self.convert_numpy_to_qimage(self.image))
+        self.set_current_image()
 
     def on_button_click(self):
-        ident = self.sender().objectName()
-        c_img = None
-        if ident == "btn_original":
-            c_img = self.img_data["original"]
-        elif ident == "btn_ch_blue":
-            c_img = self.img_data["channel"][0]
-        elif ident == "btn_ch_red":
-            c_img = self.img_data["channel"][1]
-        elif ident == "btn_ch_green":
-            c_img = self.img_data["channel"][2]
-        elif ident == "btn_edge_blue":
-            c_img = img_as_ubyte(self.img_data["edges"][0])
-        elif ident == "btn_edge_red":
-            c_img = img_as_ubyte(self.img_data["edges"][1])
-        elif ident == "btn_edge_green":
-            c_img = img_as_ubyte(self.img_data["edges"][2])
-        elif ident == "btn_thr_blue":
-            c_img = img_as_ubyte(self.img_data["binarized"][0])
-        elif ident == "btn_thr_red":
-            c_img = img_as_ubyte(self.img_data["binarized"][1])
-        elif ident == "btn_thr_green":
-            c_img = img_as_ubyte(self.img_data["binarized"][2])
-        elif ident == "btn_save":
-            self.save_image()
-            return
-        self.set_current_image(c_img)
+        self.save_image()
 
-    def set_current_image(self, c_img):
-        self.img = c_img
-        if c_img is not None:
-            qimg = self.convert_numpy_to_qimage(c_img)
-            pmap = QPixmap()
-            pmap.convertFromImage(qimg)
-            self.ui.image_view.setPixmap(pmap.scaled(self.width(), self.height(), QtCore.Qt.KeepAspectRatio))
+    def set_current_image(self):
+        # TODO fertigstellen
+        cur_ind = self.ui.cbx_channels.currentIndex()
+        if cur_ind > len(self.handler.idents):
+
+            pass
         else:
-            c_img = self.img_data["result_qt"]
-            pmap = QPixmap()
-            pmap.convertFromImage(c_img)
-            self.ui.image_view.setPixmap(pmap.scaled(self.width(), self.height(), QtCore.Qt.KeepAspectRatio))
+            pass
+        self.view.scene().setSceneRect(0, 0, self.view.width() - 5, self.view.height() - 5)
+        tempmap = self.pmap.scaled(self.view.width(), self.view.height(), Qt.KeepAspectRatio)
+        self.sc_bckg.setPixmap(tempmap)
+        x_scale = tempmap.width() / self.pmap.width()
+        y_scale = tempmap.height() / self.pmap.height()
+        x_trans = self.view.scene().width() / 2 - tempmap.width() / 2
+        y_trans = self.view.scene().height() / 2 - tempmap.height() / 2
+        self.sc_bckg.setPos(self.scene().width() / 2 - tempmap.width() / 2,
+                            self.scene().height() / 2 - tempmap.height() / 2)
+        self.view.clear_scene()
+        for roi in self.handler.rois:
+            roiI = QGraphicsFocusItem(color_index=self.handler.idents.index(roi.ident))
+            temp = roi.calculate_dimensions()
+            dim = (temp["width"], temp["height"])
+            c = temp["center"]
+            ulp = ((c[0] - dim[0] / 2) * x_scale + x_trans,
+                   (c[1] - dim[1] / 2) * y_scale + y_trans)
+            bbox = QRectF(ulp[0], ulp[1], dim[0] * x_scale, dim[1] * y_scale)
+            roiI.setRect(bbox)
+            self.view.scene().addItem(roiI)
 
     def convert_numpy_to_qimage(self, numpy):
+        plt.imshow(numpy)
+        plt.show()
         img = Image.fromarray(numpy)
         qimg = ImageQt(img)
         return qimg
@@ -1104,18 +1108,22 @@ class ModificationDialog(QDialog):
         self.ui = None
         self.view = None
         self.lst_nuc_model = None
+        self.commands = []
         self.conn = sqlite3.connect(database)
         self.curs = self.conn.cursor()
         self.initialize_ui()
 
     def accept(self):
+        for comm in self.commands:
+            self.curs.execute(
+                comm[0],
+                comm[1]
+            )
         self.conn.commit()
         self.conn.close()
         super(ModificationDialog, self).accept()
 
     def reject(self):
-        self.conn.rollback()
-        self.conn.close()
         self.handler = self.original
         super(ModificationDialog, self).reject()
 
@@ -1125,7 +1133,8 @@ class ModificationDialog(QDialog):
         chan_num = len(self.handler.idents)
         self.max = chan_num - 1
         self.ui.sb_channel.setMaximum(chan_num)
-        self.view = NucView(self.image, self.handler, self.cur_channel, self.show, True, self.max, self.curs)
+        self.view = NucView(self.image, self.handler, self.commands,
+                            self.cur_channel, self.show, True, self.max, self.curs)
         self.ui.graph_par.insertWidget(0, self.view, 3)
         self.lst_nuc_model = QStandardItemModel(self.ui.lst_nuc)
         self.ui.lst_nuc.setModel(self.lst_nuc_model)
@@ -1142,6 +1151,7 @@ class ModificationDialog(QDialog):
         self.set_current_image()
 
     def set_list_images(self, images):
+        self.lst_nuc_model.clear()
         for image in images:
             item = QStandardItem()
             item_text = "Index: {}".format(images.index(image))
@@ -1200,16 +1210,12 @@ class ModificationDialog(QDialog):
                         self.lst_nuc_model.removeRow(ind + offset)
                         del self.view.main[ind]
                         del self.view.images[ind + offset]
-                        del self.view.handler.nuclei[ind + offset]
                         offset -= 1
-                        print(hash(nuc)) # TODO test
-                        self.curs.execute(
-                            "DELETE FROM rois WHERE hash = ? OR associated = ?",
-                            (hash(nuc), hash(nuc))
-                        )
-                        self.curs.execute(
-                            "DELETE FROM points WHERE hash = ?",
-                            (hash(nuc),)
+                        self.commands.extend(
+                            ("DELETE FROM rois WHERE hash = ? OR associated = ?",
+                             (hash(nuc), hash(nuc))),
+                            ("DELETE FROM points WHERE hash = ?",
+                             (hash(nuc),))
                         )
                     self.cur_index = 0
                     self.set_current_image()
@@ -1224,13 +1230,14 @@ class ModificationDialog(QDialog):
                 offset = 0
                 ass_list = []
                 mergehash = [hash(seed)]
+                rem_list = []
                 for x in range(1, len(sel)):
                     ind = sel[x]
                     merger = self.view.main[ind + offset]
                     mergehash.append(hash(merger))
                     seed.merge(merger)
                     ass_list.append(merger)
-                    self.lst_nuc_model.removeRow(ind + offset)
+                    rem_list.append(ind + offset)
                     self.handler.rois.remove(merger)
                     del self.view.images[ind + offset]
                     del self.view.main[ind + offset]
@@ -1239,13 +1246,25 @@ class ModificationDialog(QDialog):
                     for foc in self.view.assmap[nuc]:
                         foc.associated = seed
                 for h in mergehash:
-                    self.curs.execute(
-                        "UPDATE roi SET associated = ? WHERE associated = ?",
-                        (hash(seed), h)
+                    self.commands.append(
+                        ("UPDATE roi SET associated = ? WHERE associated = ?",
+                         (hash(seed), h))
                     )
-                self.set_list_images(self.view.images)
+                self.view.assmap = Detector.create_association_map(self.handler.rois)
+                for rem in rem_list:
+                    self.lst_nuc_model.removeRow(rem)
                 self.ui.lst_nuc.selectionModel().select(selection[0], QItemSelectionModel.Select)
+                pmap = QPixmap()
+                pmap.convertFromImage(NucView.get_qimage_from_numpy(seed.get_as_numpy()
+                                                                    ))
+                ic = QIcon(pmap)
+                self.lst_nuc_model.itemFromIndex(selection[0]).setIcon(ic)
+                self.update_list_indices()
         self.set_current_image()
+
+    def update_list_indices(self):
+        for a in range(len(self.view.main)):
+            self.lst_nuc_model.item(a, 0).setText("Index: {}".format(a))
 
     def on_selection_change(self):
         index = self.ui.lst_nuc.selectionModel().selectedIndexes()
@@ -1263,8 +1282,8 @@ class ModificationDialog(QDialog):
 
 class NucView(QGraphicsView):
 
-    def __init__(self, image, handler, cur_channel=None, show=True, edit=False, max_channel=None, db_curs=None,
-                 parent=None):
+    def __init__(self, image, handler, commands, cur_channel=None, show=True, edit=False, max_channel=None,
+                 db_curs=None, parent=None):
         super(NucView, self).__init__(parent)
         self.setMouseTracking(True)
         self.setSizePolicy(
@@ -1292,6 +1311,7 @@ class NucView(QGraphicsView):
         self.images = []
         self.foc_group = []
         self.map = {}
+        self.commands = commands
         scene = QGraphicsScene(self)
         scene.setSceneRect(0, 0, self.width(), self.height())
         self.setScene(scene)
@@ -1323,7 +1343,7 @@ class NucView(QGraphicsView):
             y_offset = nuc_dat["minY"]
             for focus in self.assmap[self.cur_nuc]:
                 c_ind = self.handler.idents.index(focus.ident)
-                if c_ind == self.channel:
+                if c_ind == self.channel or self.channel > len(self.handler.idents) - 1:
                     foc = QGraphicsFocusItem(color_index=self.handler.idents.index(focus.ident))
                     temp = focus.calculate_dimensions()
                     dim = (temp["width"], temp["height"])
@@ -1356,14 +1376,10 @@ class NucView(QGraphicsView):
             for item in self.foc_group:
                 if item.isSelected():
                     self.handler.rois.remove(self.map[item])
-                    self.curs.execute(
-                        "DELETE FROM roi WHERE hash=?",
-                        (hash(self.map[item]),)
-                    )
-                    self.curs.execute(
-                        "DELETE FROM points WHERE hash=?",
-                        (hash(self.map[item]),)
-                    )
+                    self.commands.extend((("DELETE FROM roi WHERE hash=?",
+                                          (hash(self.map[item]),)),
+                                         ("DELETE FROM points WHERE hash=?",
+                                          (hash(self.map[item]),))))
                     del self.map[item]
                     self.scene().removeItem(item)
 
@@ -1418,16 +1434,15 @@ class NucView(QGraphicsView):
             cur_roi = ROI(auto=False, channel=self.handler.idents[self.channel], associated=self.cur_nuc)
             nuc_dat = self.cur_nuc.calculate_dimensions()
             x_offset = nuc_dat["minX"]
-            y_offset = nuc_dat["maxX"]
-            # TODO in eigenen Thread auslagern
+            y_offset = nuc_dat["minY"]
             for y in range(len(mask)):
                 for x in range(len(mask[0])):
                     if mask[y][x] > 0:
                         inten = cur_nump[y][x]
                         cur_roi.add_point((x + x_offset, y + y_offset), inten)
-                        self.curs.execute(
-                            "INSERT INTO points VALUES(?, ?, ?, ?)",
-                            (-1, x+x_offset, y+y_offset, inten)
+                        self.commands.append(
+                            ("INSERT INTO points VALUES(?, ?, ?, ?)",
+                            (-1, x + x_offset, y + y_offset, inten))
                         )
             self.handler.rois.append(cur_roi)
             roidat = cur_roi.calculate_dimensions()
@@ -1435,19 +1450,19 @@ class NucView(QGraphicsView):
                 "SELECT image FROM roi WHERE hash=?",
                 (hash(self.cur_nuc), )
             )
-            self.curs.execute(
-                "INSERT INTO roi VALUES(?, ?, ?, ?, ?, ?, ?)",
-                (hash(self.temp_foc), imghash, False, self.temp_foc.ident, roidat["center"], roidat["width"],
-                 roidat["height"], hash(self.cur_nuc))
-            )
-            self.curs.execute(
-                "UPDATE points SET hash=? WHERE hash=-1",
-                (hash(self.temp_foc),)
+            self.commands.extend(
+                (("INSERT INTO roi VALUES(?, ?, ?, ?, ?, ?, ?)",
+                (hash(cur_roi), imghash, False, cur_roi.ident, roidat["center"], roidat["width"],
+                 roidat["height"], hash(self.cur_nuc))),
+                ("UPDATE points SET hash=? WHERE hash=-1",
+                (hash(cur_roi),)))
             )
             self.foc_group.append(self.temp_foc)
+            self.map[self.temp_foc] = cur_roi
             self.pos = None
             self.temp_foc = None
             self.scene().update()
+            self.assmap = Detector.create_association_map(self.handler.rois)
 
     def convert_roi_to_numpy(self, roi):
         dims = roi.calculate_dimensions()
@@ -1460,7 +1475,6 @@ class NucView(QGraphicsView):
             channel = self.image[..., self.channel]
             numpy = np.zeros((y_dist, x_dist), dtype=np.uint8)
         for p in roi.points:
-
             numpy[p[1] - dims["minY"], p[0] - dims["minX"]] = channel[p[1]][p[0]]
         return numpy
 
