@@ -17,7 +17,7 @@ from PIL import Image
 from PIL.ImageQt import ImageQt
 from PyQt5 import QtCore, QtWidgets
 from PyQt5 import uic
-from PyQt5.QtCore import QSize, Qt, pyqtSignal, pyqtProperty, QRectF, QItemSelectionModel
+from PyQt5.QtCore import QSize, Qt, pyqtSignal, pyqtProperty, QRectF, QItemSelectionModel, QModelIndex
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon, QPixmap, QColor, QTransform, QPainter, QBrush, QPen, \
     QImage
 from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, QSizePolicy, QWidget, \
@@ -1212,13 +1212,14 @@ class ModificationDialog(QDialog):
                         del self.view.images[ind + offset]
                         offset -= 1
                         self.commands.extend(
-                            ("DELETE FROM rois WHERE hash = ? OR associated = ?",
+                            (("DELETE FROM roi WHERE hash = ? OR associated = ?",
                              (hash(nuc), hash(nuc))),
-                            ("DELETE FROM points WHERE hash = ?",
-                             (hash(nuc),))
+                             ("DELETE FROM points WHERE hash = ?",
+                             (hash(nuc),)))
                         )
-                    self.cur_index = 0
-                    self.set_current_image()
+                    self.ui.lst_nuc.selectionModel().select(self.lst_nuc_model.createIndex(0, 0),
+                                                            QItemSelectionModel.ClearAndSelect)
+                    self.update_list_indices()
         elif ident == "btn_merge":
             selection = self.ui.lst_nuc.selectionModel().selectedIndexes()
             sel = [x.row() for x in selection]
@@ -1245,10 +1246,19 @@ class ModificationDialog(QDialog):
                 for nuc in ass_list:
                     for foc in self.view.assmap[nuc]:
                         foc.associated = seed
+                nuc_stat = seed.calculate_dimensions()
+                self.commands.append(
+                     ("UPDATE roi SET hash = ?, auto = ?, center = ?, width = ?, height = ? WHERE hash = ?",
+                      (hash(seed), False, str(nuc_stat["center"]), nuc_stat["width"], nuc_stat["height"], mergehash[0]))
+                )
                 for h in mergehash:
-                    self.commands.append(
-                        ("UPDATE roi SET associated = ? WHERE associated = ?",
-                         (hash(seed), h))
+                    self.commands.extend(
+                        (("UPDATE roi SET associated = ? WHERE associated = ?",
+                         (hash(seed), h)),
+                         ("UPDATE points SET hash = ? WHERE hash = ?",
+                         (hash(seed), h)),
+                         ("DELETE FROM roi WHERE hash = ?",
+                         (h, )))
                     )
                 self.view.assmap = Detector.create_association_map(self.handler.rois)
                 for rem in rem_list:
@@ -1439,23 +1449,24 @@ class NucView(QGraphicsView):
                 for x in range(len(mask[0])):
                     if mask[y][x] > 0:
                         inten = cur_nump[y][x]
+                        print(type(np.int(inten)))
                         cur_roi.add_point((x + x_offset, y + y_offset), inten)
                         self.commands.append(
                             ("INSERT INTO points VALUES(?, ?, ?, ?)",
-                            (-1, x + x_offset, y + y_offset, inten))
+                             (-1, x + x_offset, y + y_offset, np.int(inten)))
                         )
             self.handler.rois.append(cur_roi)
             roidat = cur_roi.calculate_dimensions()
             imghash = self.curs.execute(
                 "SELECT image FROM roi WHERE hash=?",
                 (hash(self.cur_nuc), )
-            )
+            ).fetchall()[0][0]
             self.commands.extend(
-                (("INSERT INTO roi VALUES(?, ?, ?, ?, ?, ?, ?)",
-                (hash(cur_roi), imghash, False, cur_roi.ident, roidat["center"], roidat["width"],
-                 roidat["height"], hash(self.cur_nuc))),
-                ("UPDATE points SET hash=? WHERE hash=-1",
-                (hash(cur_roi),)))
+                (("INSERT INTO roi VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+                 (hash(cur_roi), imghash, False, cur_roi.ident, str(roidat["center"]), roidat["width"],
+                  roidat["height"], hash(self.cur_nuc))),
+                 ("UPDATE points SET hash=? WHERE hash=-1",
+                 (hash(cur_roi),)))
             )
             self.foc_group.append(self.temp_foc)
             self.map[self.temp_foc] = cur_roi

@@ -97,14 +97,11 @@ class ROI:
         :param intensity: The intensity of the image associated with this point (int or float)
         :return: None
         """
-        if not isinstance(point, tuple) or not isinstance(intensity, (int, float)):
-            raise ValueError("Type mismatch!")
-        else:
-            self.points.append(point)
-            self.inten[point] = intensity
-            self.id = None
-            self.dims.clear()
-            self.stats.clear()
+        self.points.append(point)
+        self.inten[point] = intensity
+        self.id = None
+        self.dims.clear()
+        self.stats.clear()
 
     def set_points(self, point_list, original):
         """
