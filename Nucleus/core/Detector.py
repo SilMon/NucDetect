@@ -162,7 +162,7 @@ class Detector:
                 temp.append(len(roi))
             else:
                 foci.append(roi)
-        min_main_area = np.percentile(temp, min_thresh)
+        min_main_area = max(np.percentile(temp, min_thresh), 400)
         max_main_area = np.percentile(temp, max_thresh)
         print("Detected nuclei:{}\nDetected foci: {}".format(len(main), len(foci)))
         ws_list = []

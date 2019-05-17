@@ -493,6 +493,7 @@ class NucDetect(QMainWindow):
         # Add statistics to list
         key = self.cur_img["key"]
         stat = self.detector.get_statistics(key)
+        # TODO Create stat array to fill charts
         stat_dialog.ui.lbl_num_nuc.setText(
             "Detected nuclei: {:>}".format(stat["number"]))
         stat_dialog.ui.lbl_num_nuc_empt.setText(
@@ -819,7 +820,6 @@ class ImgDialog(QDialog):
         # Initialization of the background image
         self.sc_bckg = self.view.scene().addPixmap(QPixmap())
         self.pmap = QPixmap()
-        self.pmap.convertFromImage(self.convert_numpy_to_qimage(self.image))
 
     def initialize_ui(self):
         self.view.setSizePolicy(
@@ -843,7 +843,12 @@ class ImgDialog(QDialog):
         self.set_current_image()
 
     def on_channel_selection_change(self):
-        self.pmap = self.pmap.convertFromImage(self.convert_numpy_to_qimage(self.image))
+        if self.ui.cbx_channels.currentIndex() < len(self.handler.idents):
+            nump = img_as_ubyte(self.image[..., self.ui.cbx_channels.currentIndex()])
+            tempImg = NucView.get_qimage_from_numpy(nump, mode="L")
+        else:
+            tempImg = NucView.get_qimage_from_numpy(self.image, "RGB")
+        self.pmap.convertFromImage(tempImg)
         self.set_current_image()
 
     def on_button_click(self):
@@ -853,20 +858,21 @@ class ImgDialog(QDialog):
         # TODO fertigstellen
         cur_ind = self.ui.cbx_channels.currentIndex()
         if cur_ind > len(self.handler.idents):
-
             pass
         else:
             pass
         self.view.scene().setSceneRect(0, 0, self.view.width() - 5, self.view.height() - 5)
         tempmap = self.pmap.scaled(self.view.width(), self.view.height(), Qt.KeepAspectRatio)
         self.sc_bckg.setPixmap(tempmap)
+        # TODO
+        """ 
         x_scale = tempmap.width() / self.pmap.width()
         y_scale = tempmap.height() / self.pmap.height()
         x_trans = self.view.scene().width() / 2 - tempmap.width() / 2
         y_trans = self.view.scene().height() / 2 - tempmap.height() / 2
-        self.sc_bckg.setPos(self.scene().width() / 2 - tempmap.width() / 2,
-                            self.scene().height() / 2 - tempmap.height() / 2)
-        self.view.clear_scene()
+        self.sc_bckg.setPos(self.view.scene().width() / 2 - tempmap.width() / 2,
+                            self.view.scene().height() / 2 - tempmap.height() / 2)
+        #self.view.clear_scene()
         for roi in self.handler.rois:
             roiI = QGraphicsFocusItem(color_index=self.handler.idents.index(roi.ident))
             temp = roi.calculate_dimensions()
@@ -877,13 +883,7 @@ class ImgDialog(QDialog):
             bbox = QRectF(ulp[0], ulp[1], dim[0] * x_scale, dim[1] * y_scale)
             roiI.setRect(bbox)
             self.view.scene().addItem(roiI)
-
-    def convert_numpy_to_qimage(self, numpy):
-        plt.imshow(numpy)
-        plt.show()
-        img = Image.fromarray(numpy)
-        qimg = ImageQt(img)
-        return qimg
+        """
 
     def save_image(self):
         pardir = os.getcwd()
@@ -1092,7 +1092,6 @@ class SettingsDialog(QDialog):
 
 
 class ModificationDialog(QDialog):
-    # TODO Änderungen in Datenbank übertragen
 
     def __init__(self, image=None, handler=None, parent=None):
         super(ModificationDialog, self).__init__(parent)
@@ -1337,7 +1336,8 @@ class NucView(QGraphicsView):
         self.channel = channel
         self.scene().setSceneRect(0, 0, self.width() - 5, self.height() - 5)
         pmap = QPixmap()
-        pmap.convertFromImage(NucView.get_qimage_from_numpy(self.convert_roi_to_numpy(self.cur_nuc)))
+        pmap.convertFromImage(NucView.get_qimage_from_numpy(
+            self.convert_roi_to_numpy(self.cur_nuc), mode="RGB" if self.channel > self.max_channel else "L"))
         tempmap = pmap.scaled(self.width(), self.height(), Qt.KeepAspectRatio)
         self.sc_bckg.setPixmap(tempmap)
         x_scale = tempmap.width() / pmap.width()
@@ -1367,8 +1367,14 @@ class NucView(QGraphicsView):
                     self.scene().addItem(foc)
 
     @staticmethod
-    def get_qimage_from_numpy(numpy):
-        img = Image.fromarray(numpy)
+    def get_qimage_from_numpy(numpy, mode=None):
+        """
+        Method to convert a numpy array to an QImage
+        :param numpy: The array to convert
+        :param mode: The mode to use for conversion
+        :return: The QImage
+        """
+        img = Image.fromarray(numpy, mode)
         qimg = ImageQt(img)
         return qimg
 
@@ -1449,7 +1455,6 @@ class NucView(QGraphicsView):
                 for x in range(len(mask[0])):
                     if mask[y][x] > 0:
                         inten = cur_nump[y][x]
-                        print(type(np.int(inten)))
                         cur_roi.add_point((x + x_offset, y + y_offset), inten)
                         self.commands.append(
                             ("INSERT INTO points VALUES(?, ?, ?, ?)",
