@@ -6,3 +6,4 @@ pyqt5>=5.11.3
 pillow
 qtawesome
 piexif>=1.1.2 
+tensorflow=1.13.1
