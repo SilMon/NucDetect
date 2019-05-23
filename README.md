@@ -29,7 +29,7 @@ Run the following commands to clone and install from GitHub.
 $ git clone https://github.com/SilMon/NucDetect.git
 ```
 ### Supported Image Formats
-Following images are supported by NucDetect:
+Following image formats are supported by NucDetect:
 * TIFF
 * PNG
 * JPG
