@@ -21,6 +21,7 @@ Requirements
 * Pillow
 * qtawesome
 * piexif
+* tensorflow = 1.13.1
 
 Run the following commands to clone and install from GitHub.
 
