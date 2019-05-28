@@ -103,7 +103,7 @@ QHLine, QVLine, Line{
    <item>
     <widget class="QTabWidget" name="tabWidget">
      <property name="currentIndex">
-      <number>0</number>
+      <number>2</number>
      </property>
      <widget class="QWidget" name="tab_dist">
       <attribute name="title">
@@ -140,64 +140,10 @@ QHLine, QVLine, Line{
         </layout>
        </item>
        <item>
-        <layout class="QVBoxLayout" name="verticalLayout">
+        <layout class="QVBoxLayout" name="dist_par">
          <property name="sizeConstraint">
           <enum>QLayout::SetDefaultConstraint</enum>
          </property>
-         <item>
-          <widget class="QLabel" name="lbl_num_nuc">
-           <property name="text">
-            <string>Detected nuclei: </string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="lbl_num_nuc_empt">
-           <property name="minimumSize">
-            <size>
-             <width>0</width>
-             <height>30</height>
-            </size>
-           </property>
-           <property name="maximumSize">
-            <size>
-             <width>16777215</width>
-             <height>30</height>
-            </size>
-           </property>
-           <property name="text">
-            <string>Thereof empty: </string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="lbl_num_red">
-           <property name="text">
-            <string>Detected red foci: </string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="lbl_num_red_std">
-           <property name="text">
-            <string>Std. dev. red foci number: </string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="lbl_num_green">
-           <property name="text">
-            <string>Detected green foci: </string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="lbl_num_green_std">
-           <property name="text">
-            <string>Std. dev. green foci number: </string>
-           </property>
-          </widget>
-         </item>
          <item>
           <spacer name="verticalSpacer">
            <property name="orientation">
@@ -254,41 +200,7 @@ QHLine, QVLine, Line{
         </layout>
        </item>
        <item>
-        <layout class="QVBoxLayout" name="verticalLayout_4">
-         <item>
-          <widget class="QLabel" name="lbl_int_red">
-           <property name="sizePolicy">
-            <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-             <horstretch>0</horstretch>
-             <verstretch>0</verstretch>
-            </sizepolicy>
-           </property>
-           <property name="text">
-            <string>Average red intensity:</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="lbl_std_red">
-           <property name="text">
-            <string>Red std. dev:</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="lbl_int_green">
-           <property name="text">
-            <string>Average green intensity:</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="lbl_std_green">
-           <property name="text">
-            <string>Green std. dev: </string>
-           </property>
-          </widget>
-         </item>
+        <layout class="QVBoxLayout" name="int_par">
          <item>
           <spacer name="verticalSpacer_2">
            <property name="orientation">
@@ -345,63 +257,7 @@ QHLine, QVLine, Line{
         </layout>
        </item>
        <item>
-        <layout class="QVBoxLayout" name="verticalLayout_5">
-         <item>
-          <widget class="QLabel" name="lbl_num_red_max">
-           <property name="text">
-            <string>Max. Red Number: </string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="lbl_num_green_max">
-           <property name="text">
-            <string>Max. Green Number:</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="lbl_num_red_min">
-           <property name="text">
-            <string>Min. Red Number:</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="lbl_num_green_min">
-           <property name="text">
-            <string>Min. Green Number: </string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="lbl_int_red_max">
-           <property name="text">
-            <string>Max. Red Intensity: </string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="lbl_int_green_max">
-           <property name="text">
-            <string>Max. Green Intensity:</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="lbl_int_red_min">
-           <property name="text">
-            <string>Min. Red Intensity: </string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QLabel" name="lbl_int_green_min">
-           <property name="text">
-            <string>Min. Green Intensity: </string>
-           </property>
-          </widget>
-         </item>
+        <layout class="QVBoxLayout" name="val_par">
          <item>
           <spacer name="verticalSpacer_3">
            <property name="orientation">

@@ -47,30 +47,29 @@ class ROIHandler:
             main = {
                 "num": 0,
                 "num empty": 0,
-                "area": []
+                "area": [],
+                "intensity": []
             }
-            sec_ass = []
             sec = {}
             for roi in self.rois:
                 temp_stat = roi.calculate_statistics()
                 if roi.main:
                     main["num"] += 1
                     main["area"].append(temp_stat["area"])
+                    main["intensity"].append(temp_stat["intensity average"])
                 else:
                     if roi.ident not in sec:
                         sec[roi.ident] = {
                             "num": 1,
                             "area": [temp_stat["area"]],
-                            "intensity": [temp_stat["intensity"]]
+                            "intensity": [temp_stat["intensity average"]]
                         }
                     else:
                         sec[roi.ident]["num"] += 1
                         sec[roi.ident]["area"].append(temp_stat["area"])
-                        sec[roi.ident]["intensity"].append(temp_stat["intensity"])
-                        if roi.ident not in sec_ass:
-                            sec_ass.append(roi.ident)
+                        sec[roi.ident]["intensity"].append(temp_stat["intensity average"])
             sec_stat = {}
-            for key, inf in sec:
+            for key, inf in sec.items():
                 inten = inf["intensity"]
                 area = inf["area"]
                 sec_stat[key] = {
@@ -93,6 +92,7 @@ class ROIHandler:
             self.stats = {
                 "number": main["num"],
                 "empty": main["num"] - len(sec),
+                "number stats": sec_stat,
                 "area list": area,
                 "area average": np.average(area),
                 "area median": np.median(area),
@@ -101,7 +101,7 @@ class ROIHandler:
                 "area maximum": max(area),
                 "intensity list": inten,
                 "sec idents": sec_stat.keys(),
-                "sec statistics": sec_stat
+                "sec stats": sec_stat
             }
         return self.stats
 

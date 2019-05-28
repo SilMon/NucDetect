@@ -22,7 +22,7 @@ from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon, QPixmap, QColo
     QImage
 from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, QSizePolicy, QWidget, \
     QVBoxLayout, QSpacerItem, QScrollArea, QMessageBox, QGraphicsScene, QGraphicsEllipseItem, QGraphicsItemGroup, \
-    QGraphicsView, QGraphicsItem, QGraphicsPixmapItem
+    QGraphicsView, QGraphicsItem, QGraphicsPixmapItem, QLabel
 from qtconsole.qt import QtGui
 from skimage import img_as_ubyte
 from skimage.draw import ellipse, circle
@@ -482,8 +482,9 @@ class NucDetect(QMainWindow):
         self.unsaved_changes = False
 
     def on_config_change(self, config, section, key, value):
+        # TODO
         if section == "Analysis":
-            self.detector.settings["key"] = value
+            self.detector.settings[key] = value
 
     def show_statistics(self):
         stat_dialog = QDialog()
@@ -491,79 +492,80 @@ class NucDetect(QMainWindow):
         stat_dialog.setWindowTitle("Statistics")
         stat_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
         # Add statistics to list
-        key = self.cur_img["key"]
-        stat = self.detector.get_statistics(key)
-        # TODO Create stat array to fill charts
-        stat_dialog.ui.lbl_num_nuc.setText(
-            "Detected nuclei: {:>}".format(stat["number"]))
-        stat_dialog.ui.lbl_num_nuc_empt.setText(
-            "Thereof empty: {:>}".format(stat["empty"]))
-        stat_dialog.ui.lbl_num_red.setText(
-            "Detected red foci: {:>}".format(np.sum(stat["number red"])))
-        stat_dialog.ui.lbl_num_green.setText(
-            "Detected green foci: {:>}".format(np.sum(stat["number green"])))
-        stat_dialog.ui.lbl_num_red_std.setText(
-            "Std. dev. red foci number: {:>}".format(str(round(stat["number red std"], 2))))
-        stat_dialog.ui.lbl_num_green_std.setText(
-            "Std. dev. green foci number: {:.2f}".format(stat["number green std"]))
-        stat_dialog.ui.lbl_int_red.setText(
-            "Average red intensity: {:>10.2f}".format(stat["intensity red average"]))
-        stat_dialog.ui.lbl_std_red.setText(
-            "Std. dev. red: {:>10.2f}".format(stat["intensity red std"]))
-        stat_dialog.ui.lbl_int_green.setText(
-            "Average green intensity: {:>10.2f}".format(stat["intensity green average"]))
-        stat_dialog.ui.lbl_std_green.setText(
-            "Std. dev. green: {:>.2f}".format(stat["intensity green std"]))
-        stat_dialog.ui.lbl_num_red_max.setText(
-            "Max. Red Number: {:>}".format(max(stat["number red"])))
-        stat_dialog.ui.lbl_num_red_min.setText(
-            "Min. Red Number: {:>}".format(min([x for x in stat["number red"] if x > 0])))
-        stat_dialog.ui.lbl_num_green_max.setText(
-            "Max. Green Number: {:>}".format(max(stat["number green"])))
-        stat_dialog.ui.lbl_num_green_min.setText(
-            "Min. Green Number: {:>}".format(min([x for x in stat["number green"] if x > 0])))
-        stat_dialog.ui.lbl_int_red_max.setText(
-            "Max. Red Intensity: {:>.2f}".format(max(stat["intensity red"])))
-        stat_dialog.ui.lbl_int_red_min.setText(
-            "Min. Red Intensity: {:>.2f}".format(min([x for x in stat["intensity red"] if x > 0])))
-        stat_dialog.ui.lbl_int_green_max.setText(
-            "Max. Green Intensity: {:>.2f}".format(max(stat["intensity green"])))
-        stat_dialog.ui.lbl_int_green_min.setText(
-            "Min. Green Intensity: {:>.2f}".format(min([x for x in stat["intensity green"] if x > 0])))
-        cnvs_red_poisson = PoissonCanvas(stat["number red average"],
-                                         max(stat["number red"])+1,
-                                         stat["number red"], name="red channel poisson - {}".format(key),
-                                         title="Red Channel",)
-        cnvs_green_poisson = PoissonCanvas(stat["number red average"],
-                                           max(stat["number green"]) + 1,
-                                           stat["number green"], name="green channel poisson - {}".format(key),
-                                           title="Green Channel")
-        cnvs_red_int = BarChart(name="red channel int - {}".format(key), title="Red Channel - Average Focus Intensity",
-                                y_title="Average Intensity", x_title="Nucleus Index", x_label_rotation=45,
-                                values=[stat["intensity red"]], labels=[np.arange(len(stat["intensity red"]))])
-        cnvs_red_int.setToolTip(("Shows the average red foci intensity for the nucleus with the given index.\n"
-                                 "255 is the maximal possible value. If no intensity is shown, no red foci were\n"
-                                 "detected in the respective nucleus"))
-        cnvs_green_int = BarChart(name="green channel int - {}".format(key),
-                                  title="Green Channel - Average Focus Intensity", y_title="Average Intensity",
-                                  x_title="Nucleus Index", x_label_rotation=45, values=[stat["intensity red"]],
-                                  labels=[np.arange(len(stat["intensity red"]))])
-        cnvs_green_int.setToolTip(("Shows the average green foci intensity for the nucleus with the given index.\n" 
-                                   "255 is the maximal possible value. If no intensity is shown, no green foci were\n"
-                                   "detected in the respective nucleus"))
-        x_val = []
-        x_val.append(np.arange(len(stat["number red"])))
-        x_val.append(np.arange(len(stat["number green"])))
-        y_val = []
-        y_val.append(stat["number red"])
-        y_val.append(stat["number green"])
-        cnvs_num = XYChart(x_values=x_val, y_values=y_val, col_marks=["ro", "go"],
-                           dat_labels=["Green Channel", "Red Channel"], name="numbers - {}".format(key),
+        stat = self.roi_cache.calculate_statistics()
+        assmap = self.detector.create_association_map(self.roi_cache)
+        # Add labels to first tab
+        stat_dialog.ui.dist_par.addWidget(QLabel("Detected nuclei: {}".format(len(assmap))))
+        stat_dialog.ui.dist_par.addWidget(QLabel("Thereof empty: {}".format(stat["empty"])))
+        colmarks = ["ro", "go", "co", "mo", "yo", "ko"]
+        roinum = {}
+        poiss_plots = []
+        int_plots = []
+        val_plots = [[], []]
+        valint_plots = []
+        # Add foci related labels
+        for roi in self.roi_cache:
+            if not roi.main:
+                if roi.ident not in roinum:
+                    roinum[roi.ident] = {roi.associated: 1}
+                elif roi.associated in roinum[roi.ident]:
+                    roinum[roi.ident][roi.associated] += 1
+                else:
+                    roinum[roi.ident][roi.associated] = 1
+        for x in self.roi_cache.idents:
+            if x != self.roi_cache.main:
+                stat_dialog.ui.dist_par.addWidget(QLabel("Detected foci ({}): {}".format(x,
+                                                                                         stat["sec stats"][x]["number"])
+                                                         ))
+                # TODO
+                """
+                stat_dialog.ui.dist_par.addWidget(QLabel("Std. Dev. ({}): {}".format(x,
+                                                                                     np.std(stat["number stats"].values())
+                                                                                     )))
+                """
+                stat_dialog.ui.int_par.addWidget(QLabel("Average Intensity ({}): {}".format(x,
+                                                                                            stat["sec stats"][x]["intensity average"])))
+                stat_dialog.ui.int_par.addWidget(QLabel("Std. Intensity ({}): {}".format(x,
+                                                                                         stat["sec stats"][x]["intensity std"])))
+                stat_dialog.ui.val_par.addWidget(QLabel("Max. number ({}): {}".format(x,
+                                                                                      max(roinum[x].values()))))
+                stat_dialog.ui.val_par.addWidget(QLabel("Min. number ({}): {}".format(x,
+                                                                                      min(roinum[x].values()))))
+                stat_dialog.ui.val_par.addWidget(QLabel("Max. intensity ({}): {}".format(x,
+                                                                                         stat["sec stats"][x]["intensity maximum"])))
+                stat_dialog.ui.val_par.addWidget(QLabel("Min. intensity ({}): {}".format(x,
+                                                                                         stat["sec stats"][x]["intensity minimum"])))
+                # Preparation of plots
+                poiss_plots.append(PoissonCanvas(list(roinum[x].values()),
+                                                 max(roinum[x].values()),
+                                                 list(roinum[x].values()),
+                                                 name="{} channel poisson - {}".format(x, self.cur_img),
+                                                 title="{} Channel".format(x)))
+                int = BarChart(name="r{} channel int - {}".format(x, self.cur_img),
+                               title="{} Channel - Average Focus Intensity".format(x),
+                               y_title="Average Intensity", x_title="Nucleus Index", x_label_rotation=45,
+                               values=[stat["sec stats"][x]["intensity list"]],
+                               labels=[np.arange(len(stat["intensity red"]))])
+                int.setToolTip(("Shows the average red foci intensity for the nucleus with the given index.\n"
+                                "255 is the maximal possible value. If no intensity is shown, no red foci were\n"
+                                "detected in the respective nucleus"))
+                int_plots.append(int)
+                val_plots[0].append((np.arange(len(roinum[x].values()))))
+                val_plots[1].append(roinum[x].values())
+                valint_plots.append(stat["sec stats"][x]["intensity list"])
+
+        chans = self.roi_cache.channels.copy()
+        chans.remove(self.roi_cache.main)
+        cnvs_num = XYChart(x_values=val_plots[0], y_values=val_plots[1], col_marks=colmarks[:len(chans)],
+                           dat_labels=chans, name="numbers - {}".format(self.cur_img),
                            title="Foci Number", x_title="Nucleus Index", y_title="Foci")
+        # TODO
+        """
         ind_red = 0
         x_values = []
         y_values = []
         colmarks = []
+        # TODO create gen int plot
         for inten in stat["intensity red total"]:
             x_t = np.zeros(len(inten))
             x_t.fill(ind_red)
@@ -583,23 +585,28 @@ class NucDetect(QMainWindow):
                            dat_labels=["Green Channel", "Red Channel"],
                            name="intensities - {}".format(key), title="Foci Intensities", x_title="Nucleus Index",
                            y_title="Average Intensity")
-        stat_dialog.ui.vl_poisson.addWidget(cnvs_red_poisson)
-        stat_dialog.ui.vl_poisson.addWidget(cnvs_green_poisson)
-        stat_dialog.ui.vl_int.addWidget(cnvs_red_int)
-        stat_dialog.ui.vl_int.addWidget(cnvs_green_int)
+        """
         stat_dialog.ui.vl_vals.addWidget(cnvs_num)
-        stat_dialog.ui.vl_vals.addWidget(cnvs_int)
+        # stat_dialog.ui.vl_vals.addWidget(cnvs_int)
+        for plot in poiss_plots:
+            stat_dialog.ui.dist_par.addWidget(plot)
+        for plot in int_plots:
+            stat_dialog.ui.int_par.addWidget(plot)
         stat_dialog.setWindowFlags(stat_dialog.windowFlags() |
                                    QtCore.Qt.WindowSystemMenuHint |
                                    QtCore.Qt.WindowMinMaxButtonsHint)
         code = stat_dialog.exec()
         if code == QDialog.Accepted:
+            # TODO Save routine einführen
+            pass
+            """
             cnvs_red_poisson.save()
             cnvs_green_poisson.save()
             cnvs_red_int.save()
             cnvs_green_int.save()
             cnvs_num.save()
             cnvs_int.save()
+            """
 
     def show_categorization(self):
         cl_dialog = QDialog()
