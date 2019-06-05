@@ -29,14 +29,22 @@
    <string>Dialog</string>
   </property>
   <property name="styleSheet">
-   <string notr="true">QPushButton{
+   <string notr="true">
+FigureCanvasQTAgg{
+	background-color:rgba(0,0,0,0)
+}
+
+QPushButton{
 	color: White;
 	background-color: rgba(22, 42, 75 , 255);
 	border: none;
 	font-size: 14px;
  	text-align: center;
-    display: inline-block;
-	width: 50%;
+     display: inline-block;
+	min-height: 25;
+	min-width: 40;
+	padding-left: 4px;
+	padding-right: 4px;
 }
 
 QPushButton:hover{
@@ -47,23 +55,55 @@ QPushButton:pressed{
 	background-color:  rgba(8, 28, 61 , 255);
 }
 
+QPushButton:disabled{
+	background-color:  rgba(40, 60, 100 , 255);
+}
+
 QLabel{
 	font-size: 12px;
 	color: White;
+	min-height: 30px;
+	max-height: 30px;
 }
 
 QDialog{
 	background-color: rgb(0, 51, 102);
 }
 
-QGraphicsView{
-	background-color: rgba(0,0,0,0);
-	border: none;
+QTabWidget::pane{
+	background-color:  rgba(32, 52, 85 , 255);
+	border-style: solid;
+  	border-width: 1px;
 }
 
-Line{
-	background-color:#2fa7d4
-}</string>
+QTabWidget QTabBar::tab{
+	background-color:  rgba(32, 52, 85 , 255);
+	border-top: rgba(42, 62, 95 , 255);
+	border-left: rgba(42, 62, 95 , 255);
+	border-right: rgba(42, 62, 95 , 255);
+	border-bottom: rgba(32, 52, 85 , 255);
+	border-style: solid;
+  	border-width: 1px;
+	margin-right: 1px;
+	margin-leftt: 1px;
+	margin-top: 1px;
+	padding: 2px;
+	height: 25px; 
+	color: White;
+}
+
+QTabBar::tab:selected{
+	background-color:  rgba(39, 59, 89 , 255);
+}
+
+QTabBar::tab:!selected {
+	margin-top: 2px; 
+}
+
+QTabBar::tab:hover{
+	background-color: rgba(52, 72, 105 , 255);
+}
+</string>
   </property>
   <property name="sizeGripEnabled">
    <bool>false</bool>
@@ -85,51 +125,9 @@ Line{
     </widget>
    </item>
    <item>
-    <widget class="Line" name="line">
-     <property name="orientation">
-      <enum>Qt::Horizontal</enum>
-     </property>
-    </widget>
-   </item>
-   <item>
-    <layout class="QHBoxLayout" name="horizontalLayout">
+    <layout class="QHBoxLayout" name="navbar">
      <item>
-      <widget class="QLabel" name="image_view">
-       <property name="sizePolicy">
-        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
-         <horstretch>0</horstretch>
-         <verstretch>0</verstretch>
-        </sizepolicy>
-       </property>
-       <property name="toolTip">
-        <string>The currently loaded image</string>
-       </property>
-       <property name="text">
-        <string/>
-       </property>
-       <property name="scaledContents">
-        <bool>false</bool>
-       </property>
-       <property name="alignment">
-        <set>Qt::AlignCenter</set>
-       </property>
-      </widget>
-     </item>
-     <item>
-      <layout class="QVBoxLayout" name="verticalLayout_2">
-       <property name="spacing">
-        <number>5</number>
-       </property>
-       <item>
-        <widget class="QPushButton" name="btn_original">
-         <property name="toolTip">
-          <string>Opens the analysed image</string>
-         </property>
-         <property name="text">
-          <string>Original</string>
-         </property>
-        </widget>
-       </item>
+      <layout class="QVBoxLayout" name="channel_selector">
        <item>
         <widget class="QLabel" name="label_2">
          <property name="sizePolicy">
@@ -153,178 +151,18 @@ Line{
         </widget>
        </item>
        <item>
-        <layout class="QHBoxLayout" name="horizontalLayout_3">
-         <property name="spacing">
-          <number>1</number>
-         </property>
-         <property name="sizeConstraint">
-          <enum>QLayout::SetFixedSize</enum>
-         </property>
-         <item>
-          <widget class="QPushButton" name="btn_ch_red">
-           <property name="toolTip">
-            <string>Opens the red channel of the analysed image</string>
-           </property>
-           <property name="text">
-            <string>R</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QPushButton" name="btn_ch_green">
-           <property name="toolTip">
-            <string>Opens the green channel of the anaylsed image</string>
-           </property>
-           <property name="text">
-            <string>G</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QPushButton" name="btn_ch_blue">
-           <property name="toolTip">
-            <string>Opens the blue channel of the analysed image</string>
-           </property>
-           <property name="text">
-            <string>B</string>
-           </property>
-          </widget>
-         </item>
-        </layout>
-       </item>
-       <item>
-        <widget class="QLabel" name="label_3">
-         <property name="sizePolicy">
-          <sizepolicy hsizetype="Preferred" vsizetype="Minimum">
-           <horstretch>0</horstretch>
-           <verstretch>0</verstretch>
-          </sizepolicy>
-         </property>
-         <property name="minimumSize">
-          <size>
-           <width>0</width>
-           <height>30</height>
-          </size>
-         </property>
-         <property name="text">
-          <string>Thresholds</string>
-         </property>
-         <property name="alignment">
-          <set>Qt::AlignCenter</set>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <layout class="QHBoxLayout" name="horizontalLayout_2">
-         <property name="spacing">
-          <number>1</number>
-         </property>
-         <property name="sizeConstraint">
-          <enum>QLayout::SetFixedSize</enum>
-         </property>
-         <item>
-          <widget class="QPushButton" name="btn_thr_red">
-           <property name="toolTip">
-            <string>Opens the threshold image of the red channel of the analysed image, which is used for red foci identification.</string>
-           </property>
-           <property name="text">
-            <string>R</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QPushButton" name="btn_thr_green">
-           <property name="toolTip">
-            <string>Opens the threshold image of the green channel of the analysed image, which is used for green foci identification.</string>
-           </property>
-           <property name="text">
-            <string>G</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QPushButton" name="btn_thr_blue">
-           <property name="toolTip">
-            <string>Opens the threshold image of the blue channel of the analysed image, which is used for nucleus identification.</string>
-           </property>
-           <property name="text">
-            <string>B</string>
-           </property>
-          </widget>
-         </item>
-        </layout>
-       </item>
-       <item>
-        <widget class="QLabel" name="label">
-         <property name="text">
-          <string>Edges</string>
-         </property>
-         <property name="alignment">
-          <set>Qt::AlignCenter</set>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <layout class="QHBoxLayout" name="horizontalLayout_5">
-         <property name="spacing">
-          <number>0</number>
-         </property>
-         <item>
-          <widget class="QPushButton" name="btn_edge_red">
-           <property name="text">
-            <string>R</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QPushButton" name="btn_edge_green">
-           <property name="text">
-            <string>G</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QPushButton" name="btn_edge_blue">
-           <property name="text">
-            <string>B</string>
-           </property>
-          </widget>
-         </item>
-        </layout>
-       </item>
-       <item>
-        <widget class="QPushButton" name="btn_result">
-         <property name="toolTip">
-          <string>Opens the analysed image with marked nuclei and foci</string>
-         </property>
-         <property name="text">
-          <string>Result</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <spacer name="verticalSpacer">
-         <property name="orientation">
-          <enum>Qt::Vertical</enum>
-         </property>
-         <property name="sizeHint" stdset="0">
-          <size>
-           <width>20</width>
-           <height>40</height>
-          </size>
-         </property>
-        </spacer>
-       </item>
-       <item>
-        <widget class="QPushButton" name="btn_save">
-         <property name="text">
-          <string>Save</string>
-         </property>
-        </widget>
+        <widget class="QComboBox" name="cbx_channels"/>
        </item>
       </layout>
      </item>
     </layout>
+   </item>
+   <item>
+    <widget class="Line" name="line">
+     <property name="orientation">
+      <enum>Qt::Horizontal</enum>
+     </property>
+    </widget>
    </item>
   </layout>
  </widget>
