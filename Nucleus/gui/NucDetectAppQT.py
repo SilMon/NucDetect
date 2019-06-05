@@ -1,4 +1,5 @@
 import os
+import random
 import sqlite3
 import sys
 import time
@@ -6,12 +7,14 @@ import json
 from threading import Thread
 
 import PyQt5
+import matplotlib
 import numpy as np
 import piexif
 import qtawesome as qta
 import matplotlib.pyplot as plt
 import copy
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 from PIL import Image
 from PIL.ImageQt import ImageQt
@@ -22,12 +25,10 @@ from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon, QPixmap, QColo
     QImage
 from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, QSizePolicy, QWidget, \
     QVBoxLayout, QSpacerItem, QScrollArea, QMessageBox, QGraphicsScene, QGraphicsEllipseItem, QGraphicsItemGroup, \
-    QGraphicsView, QGraphicsItem, QGraphicsPixmapItem, QLabel
+    QGraphicsView, QGraphicsItem, QGraphicsPixmapItem, QLabel, QHBoxLayout
 from qtconsole.qt import QtGui
 from skimage import img_as_ubyte
-from skimage.draw import ellipse, circle
-
-from Nucleus.core.Detector import Detector
+from skimage.draw import ellipse
 from Nucleus.gui.settings.Settings import SettingsShowWidget, SettingsSlider, SettingsText, SettingsComboBox, \
     SettingsCheckBox, SettingsDial, SettingsSpinner, SettingsDecimalSpinner
 from Nucleus.core.Detector import Detector
@@ -503,6 +504,7 @@ class NucDetect(QMainWindow):
         int_plots = []
         val_plots = [[], []]
         valint_plots = []
+        colors = ["red", "green", "blue", "cyan", "magenta", "yellow", "black", "white"]
         # Add foci related labels
         for roi in self.roi_cache:
             if not roi.main:
@@ -519,13 +521,13 @@ class NucDetect(QMainWindow):
                                                          ))
                 # TODO
                 """
-                stat_dialog.ui.dist_par.addWidget(QLabel("Std. Dev. ({}): {}".format(x,
+                stat_dialog.ui.dist_par.addWidget(QLabel("Std. Dev. ({}): {:.2f}".format(x,
                                                                                      np.std(stat["number stats"].values())
                                                                                      )))
                 """
-                stat_dialog.ui.int_par.addWidget(QLabel("Average Intensity ({}): {}".format(x,
+                stat_dialog.ui.int_par.addWidget(QLabel("Average Intensity ({}): {:.2f}".format(x,
                                                                                             stat["sec stats"][x]["intensity average"])))
-                stat_dialog.ui.int_par.addWidget(QLabel("Std. Intensity ({}): {}".format(x,
+                stat_dialog.ui.int_par.addWidget(QLabel("Std. Intensity ({}): {:.2f}".format(x,
                                                                                          stat["sec stats"][x]["intensity std"])))
                 stat_dialog.ui.val_par.addWidget(QLabel("Max. number ({}): {}".format(x,
                                                                                       max(roinum[x].values()))))
@@ -536,25 +538,34 @@ class NucDetect(QMainWindow):
                 stat_dialog.ui.val_par.addWidget(QLabel("Min. intensity ({}): {}".format(x,
                                                                                          stat["sec stats"][x]["intensity minimum"])))
                 # Preparation of plots
-                poiss_plots.append(PoissonCanvas(list(roinum[x].values()),
+                poiss_plots.append(PoissonCanvas(np.average(list(roinum[x].values())),
                                                  max(roinum[x].values()),
                                                  list(roinum[x].values()),
                                                  name="{} channel poisson - {}".format(x, self.cur_img),
                                                  title="{} Channel".format(x)))
+                vals = []
+                for key, value in assmap.items():
+                    temp = []
+                    for val in value:
+                        if val.ident == x:
+                            tempstats = val.calculate_statistics()
+                            temp.append(tempstats["intensity average"])
+                    vals.append(sum(temp)/len(temp))
                 int = BarChart(name="r{} channel int - {}".format(x, self.cur_img),
                                title="{} Channel - Average Focus Intensity".format(x),
                                y_title="Average Intensity", x_title="Nucleus Index", x_label_rotation=45,
-                               values=[stat["sec stats"][x]["intensity list"]],
-                               labels=[np.arange(len(stat["intensity red"]))])
-                int.setToolTip(("Shows the average red foci intensity for the nucleus with the given index.\n"
-                                "255 is the maximal possible value. If no intensity is shown, no red foci were\n"
-                                "detected in the respective nucleus"))
+                               values=[vals],
+                               colors=[colors[self.roi_cache.idents.index(x)]]*len(vals),
+                               labels=[np.arange(len(vals))])
+                int.setToolTip(("Shows the average {} foci intensity for the nucleus with the given index.\n"
+                                "255 is the maximal possible value. If no intensity is shown, no {} foci were\n"
+                                "detected in the respective nucleus".format(x, x)))
                 int_plots.append(int)
                 val_plots[0].append((np.arange(len(roinum[x].values()))))
                 val_plots[1].append(roinum[x].values())
                 valint_plots.append(stat["sec stats"][x]["intensity list"])
 
-        chans = self.roi_cache.channels.copy()
+        chans = self.roi_cache.idents.copy()
         chans.remove(self.roi_cache.main)
         cnvs_num = XYChart(x_values=val_plots[0], y_values=val_plots[1], col_marks=colmarks[:len(chans)],
                            dat_labels=chans, name="numbers - {}".format(self.cur_img),
@@ -589,9 +600,9 @@ class NucDetect(QMainWindow):
         stat_dialog.ui.vl_vals.addWidget(cnvs_num)
         # stat_dialog.ui.vl_vals.addWidget(cnvs_int)
         for plot in poiss_plots:
-            stat_dialog.ui.dist_par.addWidget(plot)
+            stat_dialog.ui.vl_poisson.addWidget(plot)
         for plot in int_plots:
-            stat_dialog.ui.int_par.addWidget(plot)
+            stat_dialog.ui.vl_int.addWidget(plot)
         stat_dialog.setWindowFlags(stat_dialog.windowFlags() |
                                    QtCore.Qt.WindowSystemMenuHint |
                                    QtCore.Qt.WindowMinMaxButtonsHint)
@@ -671,6 +682,51 @@ class NucDetect(QMainWindow):
         self.connection.close()
 
 
+class ResultFigure(FigureCanvas):
+
+    def __init__(self, name, width=4, height=4, dpi=65, parent=None):
+        self.fig = Figure(figsize=(width, height), dpi=dpi)
+        self.name = name
+        self.setParent(parent)
+        self.axes = self.fig.add_subplot(111)
+        FigureCanvas.__init__(self, self.fig)
+        FigureCanvas.setSizePolicy(self,
+                                   QSizePolicy.Expanding,
+                                   QSizePolicy.Expanding)
+
+    def show_image(self, image, image_title="", show_axis="On"):
+        """
+        Method to show an image in the ResultFigure
+        :param image: The image to show as numpy array
+        :param image_title: The title to display for the image
+
+        :return: None
+        """
+        ax = self.figure.add_subplot(111)
+        ax.imshow(image)
+        ax.axis(show_axis)
+        ax.set_title(image_title)
+        ax.set_ylabel("Height")
+        ax.set_xlabel("Width")
+        self.draw()
+
+
+    def save(self):
+        """
+        Method to save the figure to file
+        :return: None
+        """
+        pardir = os.getcwd()
+        pathpardir = os.path.join(os.path.dirname(pardir),
+                                  r"results/images/statistics")
+        os.makedirs(pathpardir, exist_ok=True)
+        pathresult = os.path.join(pathpardir,
+                                  "result - {}.png".format(self.name))
+        self.fig.set_size_inches(30, 15)
+        self.fig.set_dpi(450)
+        self.fig.savefig(pathresult)
+
+
 class MPLPlot(FigureCanvas):
 
     def __init__(self, name, width=4, height=4, dpi=65, parent=None):
@@ -684,6 +740,10 @@ class MPLPlot(FigureCanvas):
                                    QSizePolicy.Expanding)
 
     def save(self):
+        """
+        Method to save the plot as image
+        :return: None
+        """
         pardir = os.getcwd()
         pathpardir = os.path.join(os.path.dirname(pardir),
                                   r"results/images/statistics")
@@ -703,20 +763,24 @@ class PoissonCanvas(MPLPlot):
         self.plot(_lambda, k, values)
 
     def plot(self, _lambda, k, values):
+        # TODO Poisson derzeit inkorrekt -> überarbeiten
         poisson = np.random.poisson(_lambda, k)
         ax = self.figure.add_subplot(111)
         objects = np.arange(k)
-        x_pos = np.arange(len(poisson))
-        conv_values = np.zeros(len(poisson))
+        x_pos = np.arange(max(values))
+        conv_values = np.zeros(max(values))
         for val in values:
-            conv_values[val] += 1
+            conv_values[val - 1] += 1
+        s = sum(conv_values)
+        conv_values = [(x/s)*100 for x in conv_values]
         ax.set_title("Poisson Distribution - " + self.title)
-        ax.bar(x_pos, poisson, align="center", alpha=0.5)
-        ax.bar(x_pos, conv_values, align="center", alpha=0.5)
+        ax.bar(x_pos, poisson, align="center", alpha=0.5, label="Poisson Distribution")
+        ax.bar(x_pos, conv_values, align="center", alpha=0.5, label="Actual Distribution")
         ax.set_xticks(x_pos)
         ax.set_xticklabels(objects, rotation=45)
         ax.set_ylabel("Probability [%]")
         ax.set_xlabel("Foci number [N]")
+        ax.legend()
         self.draw()
 
 
@@ -800,7 +864,7 @@ class BarChart(MPLPlot):
             alph = max(1/len(self.values), 0.2)
             x_pos = np.arange(len(self.values[0]))
             for lst in self.values:
-                ax.bar(x_pos, lst, width=bar_width, align="center", alpha=alph)
+                ax.bar(x_pos, lst, width=bar_width, align="center", alpha=alph, color=self.colors)
         if len(self.values) > 1:
             x_ticks_lst = [r + bar_width for r in range(len(self.values[0]))]
         else:
@@ -811,39 +875,42 @@ class BarChart(MPLPlot):
 
 
 class ImgDialog(QDialog):
-    # TODO Umbauen
+    MARKERS = [
+        "ro",  # Red
+        "go",  # Green
+        "bo",  # Blue
+        "co",  # Cyan
+        "mo",  # Magenta
+        "yo",  # Yellow
+        "ko",  # Black
+        "wo"   # White
+    ]
 
     def __init__(self, image, handler, parent=None):
         super(ImgDialog, self).__init__(parent)
+        self.orig = image.copy()
         self.image = image
         self.handler = handler
         self.ui = uic.loadUi(ui_result_image_dialog, self)
-        self.view = QGraphicsView()
+        self.figure = Figure()
+        self.figure.patch.set_alpha(0.1)
+        self.canvas = FigureCanvas(self.figure)
+        self.nav = NavigationToolbar(self.canvas, self)
         self.initialize_ui()
         self.setAttribute(QtCore.Qt.WA_DeleteOnClose)
-        scene = QGraphicsScene(self)
-        scene.setSceneRect(0, 0, self.view.width(), self.view.height())
-        self.view.setScene(scene)
-        # Initialization of the background image
-        self.sc_bckg = self.view.scene().addPixmap(QPixmap())
-        self.pmap = QPixmap()
 
     def initialize_ui(self):
-        self.view.setSizePolicy(
+        self.canvas.setSizePolicy(
             QSizePolicy.Expanding,
             QSizePolicy.Expanding
-        )
-        self.view.setMinimumSize(
-            400,
-            400
         )
         for ident in self.handler.idents:
             self.ui.cbx_channels.addItem(ident)
         self.ui.cbx_channels.addItem("Composite")
         self.ui.cbx_channels.setCurrentText("Composite")
         self.ui.cbx_channels.currentIndexChanged.connect(self.on_channel_selection_change)
-        self.ui.btn_save.clicked.connect(self.on_button_click)
-        self.ui.image_view.insertWidget(0, self.view, 3)
+        self.ui.navbar.insertWidget(0, self.nav, 3)
+        self.layout().addWidget(self.canvas)
 
     def resizeEvent(self, event):
         super(ImgDialog, self).resizeEvent(event)
@@ -851,57 +918,44 @@ class ImgDialog(QDialog):
 
     def on_channel_selection_change(self):
         if self.ui.cbx_channels.currentIndex() < len(self.handler.idents):
-            nump = img_as_ubyte(self.image[..., self.ui.cbx_channels.currentIndex()])
-            tempImg = NucView.get_qimage_from_numpy(nump, mode="L")
+            self.image = self.orig[..., self.ui.cbx_channels.currentIndex()]
         else:
-            tempImg = NucView.get_qimage_from_numpy(self.image, "RGB")
-        self.pmap.convertFromImage(tempImg)
+            self.image = self.orig.copy()
         self.set_current_image()
 
     def on_button_click(self):
         self.save_image()
 
     def set_current_image(self):
-        # TODO fertigstellen
         cur_ind = self.ui.cbx_channels.currentIndex()
-        if cur_ind > len(self.handler.idents):
-            pass
-        else:
-            pass
-        self.view.scene().setSceneRect(0, 0, self.view.width() - 5, self.view.height() - 5)
-        tempmap = self.pmap.scaled(self.view.width(), self.view.height(), Qt.KeepAspectRatio)
-        self.sc_bckg.setPixmap(tempmap)
-        # TODO
-        """ 
-        x_scale = tempmap.width() / self.pmap.width()
-        y_scale = tempmap.height() / self.pmap.height()
-        x_trans = self.view.scene().width() / 2 - tempmap.width() / 2
-        y_trans = self.view.scene().height() / 2 - tempmap.height() / 2
-        self.sc_bckg.setPos(self.view.scene().width() / 2 - tempmap.width() / 2,
-                            self.view.scene().height() / 2 - tempmap.height() / 2)
-        #self.view.clear_scene()
+        # create an axis
+        ax = self.figure.add_subplot(111)
+        # discards the old graph
+        ax.clear()
+        ax.imshow(self.image, cmap="gray" if cur_ind < len(self.handler.idents) else matplotlib.rcParams["image.cmap"])
+        dots_x = []
+        dots_y = []
         for roi in self.handler.rois:
-            roiI = QGraphicsFocusItem(color_index=self.handler.idents.index(roi.ident))
-            temp = roi.calculate_dimensions()
-            dim = (temp["width"], temp["height"])
-            c = temp["center"]
-            ulp = ((c[0] - dim[0] / 2) * x_scale + x_trans,
-                   (c[1] - dim[1] / 2) * y_scale + y_trans)
-            bbox = QRectF(ulp[0], ulp[1], dim[0] * x_scale, dim[1] * y_scale)
-            roiI.setRect(bbox)
-            self.view.scene().addItem(roiI)
-        """
-
-    def save_image(self):
-        pardir = os.getcwd()
-        pathpardir = os.path.join(os.path.dirname(pardir),
-                                  r"results/images")
-        os.makedirs(pathpardir, exist_ok=True)
-        pathresult = os.path.join(pathpardir,
-                                  "result - {}.png".format(self.img_data["id"]))
-        self.img_data["result_qt"].save(pathresult)
-        # TODO
-
+            center = roi.calculate_dimensions()["center"]
+            ind = self.handler.idents.index(roi.ident)
+            if ind == cur_ind:
+                dots_x.append(center[0])
+                dots_y.append(center[1])
+            elif cur_ind == len(self.handler.idents):
+                if len(dots_x)-1 < ind:
+                    dots_x.append([center[0]])
+                    dots_y.append([center[1]])
+                else:
+                    dots_x[ind].append(center[0])
+                    dots_y[ind].append(center[1])
+        if cur_ind == len(self.handler.idents):
+            for x in range(len(self.handler.idents)):
+                ax.plot(dots_x[x], dots_y[x], self.MARKERS[x] if x != self.handler.idents.index(self.handler.main) else
+                self.MARKERS[7], markersize=4, label=self.handler.idents[x])
+        else:
+            ax.plot(dots_x, dots_y, self.MARKERS[cur_ind], markersize=4)
+        self.figure.tight_layout()
+        self.canvas.draw()
 
 class SettingsDialog(QDialog):
     """

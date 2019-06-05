@@ -183,7 +183,7 @@ class ROI:
         :return: The calculated statistics as dict
         """
         if not self.stats:
-            vals = self.points
+            vals = list(self.inten.values())
             self.stats = {
                 "area": len(self.points),
                 "intensity average": np.average(vals),
