@@ -6,7 +6,7 @@ NucDetect is a Python package to detect and quantify intranuclear DNA repair pro
 The current release is a very early alpha version. Please report report any detected bugs and/or improvement suggestions.
 
 ### Warning
-NucDetect currently does not support screen resolutions higher than 1920 × 1080 pixels. If you are using a monitor with a higher resolution, you might encounter visual bugs.
+NucDetect is currently not adapted for screens with a resolution over full HD.
 
 Requirements
 ============
