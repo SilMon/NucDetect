@@ -15,13 +15,13 @@ Requirements
 
 * scipy>=0.19.0
 * numpy>=1.13.3
-* scikit-image>=0.15.dev0
+* scikit-image>=0.15
 * matplotlib >= 3.0.2
 * PyQT5 >= 5.11.3
 * Pillow
 * qtawesome
 * piexif
-* tensorflow = 1.13.1
+* tensorflow == 1.13.1
 
 Run the following commands to clone and install from GitHub.
 
