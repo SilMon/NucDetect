@@ -1,39 +1,38 @@
+import copy
+import json
 import os
-import random
 import sqlite3
 import sys
 import time
-import json
 from threading import Thread
+from concurrent.futures import ProcessPoolExecutor
 
 import PyQt5
+import math
 import matplotlib
-import numpy as np
-import piexif
-import qtawesome as qta
 import matplotlib.pyplot as plt
-import copy
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
-from matplotlib.figure import Figure
+import numpy as np
+import qtawesome as qta
 from PIL import Image
 from PIL.ImageQt import ImageQt
 from PyQt5 import QtCore, QtWidgets
 from PyQt5 import uic
-from PyQt5.QtCore import QSize, Qt, pyqtSignal, pyqtProperty, QRectF, QItemSelectionModel, QModelIndex
-from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon, QPixmap, QColor, QTransform, QPainter, QBrush, QPen, \
-    QImage
+from PyQt5.QtCore import QSize, Qt, pyqtSignal, QRectF, QItemSelectionModel
+from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon, QPixmap, QColor, QBrush, QPen
 from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, QSizePolicy, QWidget, \
-    QVBoxLayout, QSpacerItem, QScrollArea, QMessageBox, QGraphicsScene, QGraphicsEllipseItem, QGraphicsItemGroup, \
-    QGraphicsView, QGraphicsItem, QGraphicsPixmapItem, QLabel, QHBoxLayout
+    QVBoxLayout, QScrollArea, QMessageBox, QGraphicsScene, QGraphicsEllipseItem, QGraphicsView, QGraphicsItem, \
+    QGraphicsPixmapItem, QLabel, QGraphicsLineItem
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
+from matplotlib.figure import Figure
 from qtconsole.qt import QtGui
-from skimage import img_as_ubyte
 from skimage.draw import ellipse
-from Nucleus.gui.settings.Settings import SettingsShowWidget, SettingsSlider, SettingsText, SettingsComboBox, \
-    SettingsCheckBox, SettingsDial, SettingsSpinner, SettingsDecimalSpinner
+
 from Nucleus.core.Detector import Detector
 from Nucleus.core.ROI import ROI
 from Nucleus.core.ROIHandler import ROIHandler
+from Nucleus.gui.settings.Settings import SettingsShowWidget, SettingsSlider, SettingsText, SettingsComboBox, \
+    SettingsCheckBox, SettingsDial, SettingsSpinner, SettingsDecimalSpinner
 
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, False)
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, False)
@@ -59,11 +58,14 @@ class NucDetect(QMainWindow):
     executor = Thread()
 
     def __init__(self):
+        """
+        Constructor of the main window
+        """
         QMainWindow.__init__(self)
         self.connection = sqlite3.connect(database)
         self.cursor = self.connection.cursor()
         self.settings = self.load_settings()
-        self.detector = Detector(settings=None)
+        self.detector = Detector(settings=[].extend(list(self.settings.values())))
         self.reg_images = {}
         self.sel_images = []
         self.cur_img = None
@@ -74,12 +76,21 @@ class NucDetect(QMainWindow):
         self.setWindowIcon(QtGui.QIcon('logo.png'))
 
     def load_settings(self):
+        """
+        Method to load the saved
+        :return:
+        """
         self.cursor.execute(
             "SELECT key_, value FROM settings"
         )
         return dict(self.cursor.fetchall())
 
     def closeEvent(self, event):
+        """
+        Will be called if the program window closes
+        :param event: The closing event
+        :return: None
+        """
         self.on_close()
         event.accept()
 
@@ -134,6 +145,10 @@ class NucDetect(QMainWindow):
         self.add_images_from_folder(imgdir)
 
     def on_image_selection_change(self):
+        """
+        Will be called if a new image is selected
+        :return: None
+        """
         self.sel_images.clear()
         for index in self.ui.list_images.selectionModel().selectedIndexes():
             self.sel_images.append(self.reg_images[self.img_list_model.item(index.row()).text()])
@@ -147,23 +162,15 @@ class NucDetect(QMainWindow):
             if ana:
                 self.roi_cache = self.load_rois_from_database(hash_)
                 self.create_result_table_from_list(self.roi_cache)
+                self.enable_buttons()
                 self.ui.btn_analyse.setEnabled(False)
-                self.ui.btn_statistics.setEnabled(True)
-                self.ui.btn_images.setEnabled(True)
-                self.ui.btn_save.setEnabled(True)
-                self.ui.btn_modify.setEnabled(True)
-                self.ui.btn_categories.setEnabled(True)
                 self.cur_img = self.sel_images[0]
                 self.ui.lbl_status.setText("Loaded analysis results from database")
             else:
                 self.ui.lbl_status.setText("Program ready")
                 self.res_table_model.setRowCount(0)
+                self.enable_buttons(False, ana_buttons=False)
                 self.ui.btn_analyse.setEnabled(True)
-                self.ui.btn_statistics.setEnabled(False)
-                self.ui.btn_images.setEnabled(False)
-                self.ui.btn_save.setEnabled(False)
-                self.ui.btn_modify.setEnabled(False)
-                self.ui.btn_categories.setEnabled(False)
         else:
             self.ui.btn_analyse.setEnabled(False)
 
@@ -181,7 +188,7 @@ class NucDetect(QMainWindow):
                                                    "Image Files (*.tif *.tiff *.png *.jpg *.jpeg *.bmp)",
                                                    options=options)
         if file_name:
-            self.add_image_to_list(file_name)
+            self.add_image_to_list(file_name.replace("/", os.sep))
 
     def add_image_to_list(self, path):
         """
@@ -268,34 +275,53 @@ class NucDetect(QMainWindow):
                               100, 100,))
         thread.start()
 
-    def analyze_image(self, path, message, percent, maxi, all_=False):
-        if not all_:
-            self.ui.list_images.setEnabled(False)
-            self.ui.btn_analyse.setEnabled(False)
-            self.ui.btn_analyse_all.setEnabled(False)
-            self.ui.btn_clear_list.setEnabled(False)
-            self.ui.btn_delete_from_list.setEnabled(False)
+    def analyze_image(self, path, message, percent, maxi):
+        """
+        Method to analyse the image given by path
+        :param path: The path leading to the image
+        :param message: The message to display above the progress bar
+        :param percent: The value of the progress bar
+        :param maxi: The maximum of the progress bar
+        :return:
+        """
+        self.enable_buttons(False)
+        self.ui.list_images.setEnabled(False)
         start = time.time()
-        self.prg_signal.emit("Connecting to database", 0 if not all_ else percent, maxi, "")
-        con = sqlite3.connect(database)
-        curs = con.cursor()
+        self.prg_signal.emit("Starting analysis", 0, maxi, "")
         self.unsaved_changes = True
-        self.prg_signal.emit("Analysing image", maxi*0.05 if not all_ else percent, maxi, "")
+        self.prg_signal.emit("Analysing image", maxi*0.05, maxi, "")
         data = self.detector.analyse_image(path)
-        key = data["id"]
         self.roi_cache = data["handler"]
         s0 = time.time()
-        self.prg_signal.emit("Creating result table", maxi * 0.65 if not all_ else percent, maxi, "")
+        self.prg_signal.emit("Creating result table", maxi * 0.65, maxi, "")
         self.create_result_table_from_list(data["handler"])
         print("Creation result table: {:.4f}".format(time.time()-s0))
-        self.prg_signal.emit("Checking database", maxi * 0.75 if not all_ else percent, maxi, "")
+        self.prg_signal.emit("Checking database", maxi * 0.75, maxi, "")
         s1 = time.time()
+        self.save_rois_to_database(data)
+        print("Writing to database: {:.4f}".format(time.time() - s1))
+        self.prg_signal.emit(message.format("{:.2f} secs".format(time.time()-start)), percent, maxi, "")
+        self.enable_buttons()
+        self.ui.btn_analyse.setEnabled(False)
+        self.ui.list_images.setEnabled(True)
+
+    def save_rois_to_database(self, data):
+        """
+        Method to save the data stored in the ROIHandler rois to the database
+        :param data: The data dict returned by the Detector class
+        :return: None
+        """
+        con = sqlite3.connect(database)
+        curs = con.cursor()
+        key = data["id"]
+        self.roi_cache = data["handler"]
+        self.create_result_table_from_list(data["handler"])
         if curs.execute(
                 "SELECT analysed FROM images WHERE md5 = ?",
                 (key,)
         ).fetchall()[0][0]:
             for h in curs.execute(
-                "SELECT hash FROM roi WHERE image = ?",
+                    "SELECT hash FROM roi WHERE image = ?",
                     (key,)
             ).fetchall():
                 curs.execute(
@@ -306,7 +332,6 @@ class NucDetect(QMainWindow):
                 "DELETE FROM roi WHERE image = ?",
                 (key,)
             )
-        self.prg_signal.emit("Analysing nuclei", maxi * 0.85 if not all_ else percent, maxi, "")
         for name in data["handler"].idents:
             curs.execute(
                 "INSERT INTO channels VALUES (?, ?, ?)",
@@ -324,31 +349,12 @@ class NucDetect(QMainWindow):
                     "INSERT INTO points VALUES (?, ?, ?, ?)",
                     (hash(roi), p[0], p[1], roi.inten[p])
                 )
-        self.prg_signal.emit("Writing to database", maxi * 0.95 if not all_ else percent, maxi, "")
         curs.execute(
             "UPDATE images SET analysed = ? WHERE md5 = ?",
             (True, key)
         )
         con.commit()
         con.close()
-        print("Writing to database: {:.4f}".format(time.time() - s1))
-        self.prg_signal.emit(message.format("{:.2f} secs".format(time.time()-start)), percent, maxi, "")
-        self.ui.btn_save.setEnabled(True)
-        self.ui.btn_images.setEnabled(True)
-        self.ui.btn_statistics.setEnabled(True)
-        self.ui.btn_categories.setEnabled(True)
-        self.ui.btn_modify.setEnabled(True)
-        if not all_:
-            self.ui.list_images.setEnabled(True)
-            self.ui.btn_analyse.setEnabled(True)
-            self.ui.btn_analyse_all.setEnabled(True)
-            self.ui.btn_clear_list.setEnabled(True)
-            self.ui.btn_delete_from_list.setEnabled(True)
-        # TODO Multiselection implementieren
-        ''' 
-        if len(self.sel_images) is not 0:
-            self.analyze()
-            '''
 
     def create_result_table_from_list(self, handler):
         """
@@ -370,7 +376,29 @@ class NucDetect(QMainWindow):
                 row.append(item)
             self.res_table_model.appendRow(row)
 
+    def enable_buttons(self, state=True, ana_buttons=True):
+        """
+        Method to disable or enable the GUI buttons
+        :param state: The state the buttons will set into
+        :param ana_buttons: Indicates if the status of the analysis buttons also should be changed
+        :return: None
+        """
+        if ana_buttons:
+            self.ui.btn_analyse.setEnabled(state)
+            self.ui.btn_analyse_all.setEnabled(state)
+            self.ui.btn_clear_list.setEnabled(state)
+            self.ui.btn_delete_from_list.setEnabled(state)
+        self.ui.btn_save.setEnabled(state)
+        self.ui.btn_images.setEnabled(state)
+        self.ui.btn_statistics.setEnabled(state)
+        self.ui.btn_categories.setEnabled(state)
+        self.ui.btn_modify.setEnabled(state)
+
     def _select_next_image(self):
+        """
+        Method to select the next image in the list of loaded images. Selects the first image if no image is selected
+        :return: None
+        """
         max_ind = self.img_list_model.rowCount()
         cur_ind = self.ui.list_images.currentIndex()
         if cur_ind.row() < max_ind:
@@ -383,43 +411,54 @@ class NucDetect(QMainWindow):
             self.ui.list_images.setCurrentIndex(first)
 
     def _set_progress(self, text, progress, maxi, symbol):
-        self.ui.lbl_status.setText("{} -- {:.2f}% {}".format(text, progress, symbol))
-        self.ui.prg_bar.setValue((progress/maxi)*100)
+        """
+        Method to control the progress bar. Should not be called directly, emit the progress signal instead
+        :param text: The text to show above the bar
+        :param progress: The value of the bar
+        :param maxi: The max value of the bar
+        :param symbol: The symbol printed after the displayed values
+        :return: None
+        """
+        self.ui.lbl_status.setText("{} -- {:.2f}% {}".format(text, (progress/maxi)*100, symbol))
+        self.ui.prg_bar.setMaximum(maxi)
+        self.ui.prg_bar.setValue(progress)
 
     def analyze_all(self):
+        """
+        Method to perform concurrent batch analysis of registered images
+        :return: None
+        """
+        self.enable_buttons(False)
         self.ui.list_images.setEnabled(False)
-        self.ui.btn_analyse.setEnabled(False)
-        self.ui.btn_analyse_all.setEnabled(False)
-        self.ui.btn_clear_list.setEnabled(False)
-        self.ui.btn_delete_from_list.setEnabled(False)
         self.unsaved_changes = True
         self.selec_signal.emit()
-        thread = Thread(target=self._analyze_all, args=(
-            0, len(self.reg_images)-1))
+        thread = Thread(target=self._analyze_all)
         thread.start()
 
-    def _analyze_all(self, percent=0, maxi=0):
-        self.ui.list_images.setEnabled(False)
-        self.ui.btn_analyse.setEnabled(False)
-        self.ui.btn_analyse_all.setEnabled(False)
-        self.ui.btn_clear_list.setEnabled(False)
-        self.ui.btn_delete_from_list.setEnabled(False)
-        self.analyze_image(self.img_keys[self.sel_images[0]],
-                           message="Analysing " + self.sel_images[0],
-                           percent=percent, maxi=maxi, all_=True)
-        if percent < maxi:
-            self.selec_signal.emit()
-            self._analyze_all(percent=percent + 1, maxi=maxi)
-        if percent == maxi:
+    def _analyze_all(self):
+        """
+        Method to perform concurrent batch analysis of registered images
+        :return: None
+        """
+        with ProcessPoolExecutor(max_workers=None) as e:
+            logstate = self.detector.logging
+            self.detector.logging = False
+            self.prg_signal.emit("Starting multi image analysis", 0, 100, "")
+            res = e.map(self.detector.analyse_image, self.reg_images.values())
+            ind = 1
+            maxi = len(self.reg_images)
+            for r in res:
+                self.prg_signal.emit("Analysed images: {}/{}".format(ind, maxi),
+                                     ind, maxi, "")
+                self.save_rois_to_database(r)
+                ind += 1
+            self.roi_cache = list(res)[:-1]
+            self.enable_buttons()
             self.ui.list_images.setEnabled(True)
-            self.ui.btn_analyse.setEnabled(True)
-            self.ui.btn_analyse_all.setEnabled(True)
-            self.ui.btn_clear_list.setEnabled(True)
-            self.ui.btn_delete_from_list.setEnabled(True)
+            self.detector.logging = logstate
             self.prg_signal.emit("Analysis finished -- Program ready",
-                                maxi,
-                                maxi, "")
-            self.selec_signal.emit()
+                                 100,
+                                 100, "")
             
     def load_rois_from_database(self, md5):
         """
@@ -427,7 +466,6 @@ class NucDetect(QMainWindow):
         :param md5: The md5 hash of the image
         :return: A ROIHandler containing all roi
         """
-        # TODO
         rois = ROIHandler(ident=md5)
         entries = self.cursor.execute(
             "SELECT * FROM roi WHERE image = ?",
@@ -439,12 +477,12 @@ class NucDetect(QMainWindow):
         ).fetchall()
         for name in names:
             rois.idents.insert(name[1], name[2])
-        main = []
+        main_ = []
         sec = []
         for entry in entries:
             temproi = ROI(channel=entry[3], main=entry[7] is None, associated=entry[7])
             if temproi.main:
-                main.append(temproi)
+                main_.append(temproi)
             else:
                 sec.append(temproi)
             for p in self.cursor.execute(
@@ -453,14 +491,17 @@ class NucDetect(QMainWindow):
             ).fetchall():
                 temproi.add_point((p[1], p[2]), p[3])
             rois.add_roi(temproi)
-        for m in main:
+        for m in main_:
             for s in sec:
                 if s.associated == hash(m):
                     s.associated = m
         return rois
 
     def show_result_image(self):
-        # TODO Zoom implementieren: http://doc.qt.io/qt-5/qtwidgets-widgets-imageviewer-example.html
+        """
+        Method to open an dialog to show the analysis results as plt plot
+        :return: None
+        """
         image_dialog = ImgDialog(image=Detector.load_image(self.cur_img), handler=self.roi_cache)
         image_dialog.setWindowTitle("Result Images for " + self.cur_img)
         image_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
@@ -472,22 +513,43 @@ class NucDetect(QMainWindow):
         image_dialog.exec_()
 
     def save_results(self):
+        """
+        Method to export the analysis results as csv file
+        :return: None
+        """
         save = Thread(target=self._save_results)
         self.prg_signal.emit("Saving Results", 0, 100, "")
         save.start()
 
     def _save_results(self):
+        """
+        Method to export the analysis results as csv file
+        :return: None
+        """
         self.roi_cache.export_data_as_csv(path=result_path)
         self.prg_signal.emit("Saving Results", 50, 100, "")
         self.prg_signal.emit("Results saved -- Program ready", 100, 100, "")
         self.unsaved_changes = False
 
     def on_config_change(self, config, section, key, value):
+        """
+        Will be called if changed occur in the program settings
+        :param config: The changed config
+        :param section: The section in which the change occured
+        :param key: The identifier of the changed field
+        :param value: The value of the changed field
+        :return: None
+        """
         # TODO
         if section == "Analysis":
             self.detector.settings[key] = value
 
     def show_statistics(self):
+        """
+        Method to open a dialog showing various statistics
+        :return: None
+        """
+        # TODO Poisson überprüfen
         stat_dialog = QDialog()
         stat_dialog.ui = uic.loadUi(ui_stat_dial, stat_dialog)
         stat_dialog.setWindowTitle("Statistics")
@@ -497,7 +559,8 @@ class NucDetect(QMainWindow):
         assmap = self.detector.create_association_map(self.roi_cache)
         # Add labels to first tab
         stat_dialog.ui.dist_par.addWidget(QLabel("Detected nuclei: {}".format(len(assmap))))
-        stat_dialog.ui.dist_par.addWidget(QLabel("Thereof empty: {}".format(stat["empty"])))
+        empty = [x for x in assmap.values() if len(x) > 0]
+        stat_dialog.ui.dist_par.addWidget(QLabel("Thereof empty: {}".format(len(assmap) - len(empty))))
         colmarks = ["ro", "go", "co", "mo", "yo", "ko"]
         roinum = {}
         poiss_plots = []
@@ -519,24 +582,21 @@ class NucDetect(QMainWindow):
                 stat_dialog.ui.dist_par.addWidget(QLabel("Detected foci ({}): {}".format(x,
                                                                                          stat["sec stats"][x]["number"])
                                                          ))
-                # TODO
-                """
                 stat_dialog.ui.dist_par.addWidget(QLabel("Std. Dev. ({}): {:.2f}".format(x,
-                                                                                     np.std(stat["number stats"].values())
-                                                                                     )))
-                """
+                                                                                         np.std(list(roinum[x].values())
+                                                                                         ))))
                 stat_dialog.ui.int_par.addWidget(QLabel("Average Intensity ({}): {:.2f}".format(x,
-                                                                                            stat["sec stats"][x]["intensity average"])))
+                                                                            stat["sec stats"][x]["intensity average"])))
                 stat_dialog.ui.int_par.addWidget(QLabel("Std. Intensity ({}): {:.2f}".format(x,
-                                                                                         stat["sec stats"][x]["intensity std"])))
+                                                                                stat["sec stats"][x]["intensity std"])))
                 stat_dialog.ui.val_par.addWidget(QLabel("Max. number ({}): {}".format(x,
                                                                                       max(roinum[x].values()))))
                 stat_dialog.ui.val_par.addWidget(QLabel("Min. number ({}): {}".format(x,
                                                                                       min(roinum[x].values()))))
-                stat_dialog.ui.val_par.addWidget(QLabel("Max. intensity ({}): {}".format(x,
-                                                                                         stat["sec stats"][x]["intensity maximum"])))
-                stat_dialog.ui.val_par.addWidget(QLabel("Min. intensity ({}): {}".format(x,
-                                                                                         stat["sec stats"][x]["intensity minimum"])))
+                stat_dialog.ui.val_par.addWidget(QLabel("Max. intensity ({}): {:.2f}".format(x,
+                                                                            stat["sec stats"][x]["intensity maximum"])))
+                stat_dialog.ui.val_par.addWidget(QLabel("Min. intensity ({}): {:.2f}".format(x,
+                                                                            stat["sec stats"][x]["intensity minimum"])))
                 # Preparation of plots
                 poiss_plots.append(PoissonCanvas(np.average(list(roinum[x].values())),
                                                  max(roinum[x].values()),
@@ -550,7 +610,11 @@ class NucDetect(QMainWindow):
                         if val.ident == x:
                             tempstats = val.calculate_statistics()
                             temp.append(tempstats["intensity average"])
-                    vals.append(sum(temp)/len(temp))
+                    if len(temp) != 0:
+                        vals.append(sum(temp)/len(temp))
+                    else:
+                        # TODO otherwise division by zero on second image
+                        vals.append(0)
                 int = BarChart(name="r{} channel int - {}".format(x, self.cur_img),
                                title="{} Channel - Average Focus Intensity".format(x),
                                y_title="Average Intensity", x_title="Nucleus Index", x_label_rotation=45,
@@ -570,64 +634,54 @@ class NucDetect(QMainWindow):
         cnvs_num = XYChart(x_values=val_plots[0], y_values=val_plots[1], col_marks=colmarks[:len(chans)],
                            dat_labels=chans, name="numbers - {}".format(self.cur_img),
                            title="Foci Number", x_title="Nucleus Index", y_title="Foci")
-        # TODO
-        """
-        ind_red = 0
+        ind = 0
         x_values = []
         y_values = []
-        colmarks = []
-        # TODO create gen int plot
-        for inten in stat["intensity red total"]:
-            x_t = np.zeros(len(inten))
-            x_t.fill(ind_red)
-            x_values.append(x_t)
-            y_values.append(inten)
-            colmarks.append("ro")
-            ind_red += 1
-        ind_green = 0
-        for inten in stat["intensity green total"]:
-            x_t = np.zeros(len(inten))
-            x_t.fill(ind_green)
-            x_values.append(x_t)
-            y_values.append(inten)
-            colmarks.append("go")
-            ind_green += 1
-        cnvs_int = XYChart(x_values=x_values, y_values=y_values, col_marks=colmarks,
-                           dat_labels=["Green Channel", "Red Channel"],
-                           name="intensities - {}".format(key), title="Foci Intensities", x_title="Nucleus Index",
+        for key, value in assmap.items():
+            for focus in value:
+                chan_ind = self.roi_cache.idents.index(focus.ident)
+                if len(x_values)-1 < chan_ind:
+                    x_values.append([ind])
+                    y_values.append([focus.calculate_statistics()["intensity average"]])
+                else:
+                    x_values[chan_ind].append(ind)
+                    y_values[chan_ind].append(focus.calculate_statistics()["intensity average"])
+            ind += 1
+        colm = colmarks[:len(self.roi_cache.idents)-1]
+        labels = self.roi_cache.idents[:len(self.roi_cache.idents)-1]
+        cnvs_int = XYChart(x_values=x_values, y_values=y_values, col_marks=colm,
+                           dat_labels=labels,
+                           name="intensities - {}".format(key), title="Intensity", x_title="Nucleus Index",
                            y_title="Average Intensity")
-        """
+        stat_dialog.ui.vl_vals.addWidget(NavigationToolbar(cnvs_num, stat_dialog))
         stat_dialog.ui.vl_vals.addWidget(cnvs_num)
-        # stat_dialog.ui.vl_vals.addWidget(cnvs_int)
+        stat_dialog.ui.vl_vals.addWidget(NavigationToolbar(cnvs_int, stat_dialog))
+        stat_dialog.ui.vl_vals.addWidget(cnvs_int)
         for plot in poiss_plots:
+            stat_dialog.ui.vl_poisson.addWidget(NavigationToolbar(plot, stat_dialog))
             stat_dialog.ui.vl_poisson.addWidget(plot)
         for plot in int_plots:
+            stat_dialog.ui.vl_int.addWidget(NavigationToolbar(plot, stat_dialog))
             stat_dialog.ui.vl_int.addWidget(plot)
         stat_dialog.setWindowFlags(stat_dialog.windowFlags() |
                                    QtCore.Qt.WindowSystemMenuHint |
                                    QtCore.Qt.WindowMinMaxButtonsHint)
         code = stat_dialog.exec()
-        if code == QDialog.Accepted:
-            # TODO Save routine einführen
-            pass
-            """
-            cnvs_red_poisson.save()
-            cnvs_green_poisson.save()
-            cnvs_red_int.save()
-            cnvs_green_int.save()
-            cnvs_num.save()
-            cnvs_int.save()
-            """
 
     def show_categorization(self):
+        """
+        Method to open a dialog to enable the user to categories the loaded image
+        :return: None
+        """
         cl_dialog = QDialog()
         cl_dialog.ui = uic.loadUi(ui_class_dial, cl_dialog)
         cl_dialog.setWindowTitle("Classification")
         cl_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
         # categories = self.detector.get_categories(self.cur_img["key"])
+        hash_ = Detector.calculate_image_id(self.cur_img)
         categories = self.cursor.execute(
             "SELECT category FROM categories WHERE image = ?",
-            (self.cur_img["key"],)
+            (hash_,)
         )
         cate = ""
         for cat in categories:
@@ -638,20 +692,29 @@ class NucDetect(QMainWindow):
             self._categorize_image(cl_dialog.ui.te_cat.toPlainText())
 
     def _categorize_image(self, categories):
+        """
+        Method to save image categories to the database
+        :param categories: The categories to save as str, individually separated by \n
+        :return: None
+        """
         if categories is not "":
             categories = categories.split('\n')
-            self.detector.categorize_image(self.cur_img["key"], categories)
+            hash_ = Detector.calculate_image_id(self.cur_img)
             self.cursor.execute(
                 "DELETE FROM categories WHERE image = ?",
-                (self.cur_img["key"],)
+                (hash_,)
             )
             for cat in categories:
                 self.cursor.execute(
                     "INSERT INTO categories VALUES(?, ?)",
-                    (self.cur_img["key"], cat)
+                    (hash_, cat)
                 )
 
     def show_settings(self):
+        """
+        Method to open the settings dialog
+        :return: None
+        """
         sett = SettingsDialog()
         sett.initialize_from_file(os.path.join(os.getcwd(), "settings/settings.json"))
         sett.setWindowTitle("Settings")
@@ -669,6 +732,10 @@ class NucDetect(QMainWindow):
             sett.save_menu_settings()
 
     def show_modification_window(self):
+        """
+        Method to open the modification dialog, allowing the user to modify automatically determined results
+        :return: None
+        """
         mod = ModificationDialog(image=Detector.load_image(self.cur_img), handler=self.roi_cache)
         mod.setWindowTitle("Modification")
         mod.setWindowIcon(QtGui.QIcon("logo.png"))
@@ -676,9 +743,17 @@ class NucDetect(QMainWindow):
                            QtCore.Qt.WindowSystemMenuHint |
                            QtCore.Qt.WindowMinMaxButtonsHint |
                            QtCore.Qt.Window)
-        mod.exec()
+        code = mod.exec()
+        if code == QDialog.Accepted:
+            self.create_result_table_from_list(self.roi_cache)
+        elif code == QDialog.Rejected:
+            self.roi_cache = mod.handler
 
     def on_close(self):
+        """
+        Will be called if the program window closes
+        :return:
+        """
         self.connection.close()
 
 
@@ -709,7 +784,6 @@ class ResultFigure(FigureCanvas):
         ax.set_ylabel("Height")
         ax.set_xlabel("Width")
         self.draw()
-
 
     def save(self):
         """
@@ -763,7 +837,6 @@ class PoissonCanvas(MPLPlot):
         self.plot(_lambda, k, values)
 
     def plot(self, _lambda, k, values):
-        # TODO Poisson derzeit inkorrekt -> überarbeiten
         poisson = np.random.poisson(_lambda, k)
         ax = self.figure.add_subplot(111)
         objects = np.arange(k)
@@ -823,7 +896,7 @@ class XYChart(MPLPlot):
         ax.xaxis.set_major_locator(plt.MaxNLocator(self.x_label_max_num))
         ax.yaxis.set_major_locator(plt.MaxNLocator(self.y_label_max_num))
         for ind in range(len(self.x_values)):
-            if len(self.colmarks) == len(self.x_values):
+            if len(self.colmarks) is len(self.x_values):
                 ax.plot(self.x_values[ind], self.y_values[ind], self.colmarks[ind])
             else:
                 ax.plot(self.x_values[ind], self.y_values[ind])
@@ -956,6 +1029,7 @@ class ImgDialog(QDialog):
             ax.plot(dots_x, dots_y, self.MARKERS[cur_ind], markersize=4)
         self.figure.tight_layout()
         self.canvas.draw()
+
 
 class SettingsDialog(QDialog):
     """
@@ -1171,6 +1245,7 @@ class ModificationDialog(QDialog):
         self.commands = []
         self.conn = sqlite3.connect(database)
         self.curs = self.conn.cursor()
+        self.btn_col = QColor(47, 167, 212)
         self.initialize_ui()
 
     def accept(self):
@@ -1194,19 +1269,26 @@ class ModificationDialog(QDialog):
         self.max = chan_num - 1
         self.ui.sb_channel.setMaximum(chan_num)
         self.view = NucView(self.image, self.handler, self.commands,
-                            self.cur_channel, self.show, True, self.max, self.curs)
+                            self.cur_channel, self.show, True, self.max, self.curs, self)
         self.ui.graph_par.insertWidget(0, self.view, 3)
         self.lst_nuc_model = QStandardItemModel(self.ui.lst_nuc)
         self.ui.lst_nuc.setModel(self.lst_nuc_model)
         self.ui.lst_nuc.setIconSize(QSize(75, 75))
         self.ui.lst_nuc.selectionModel().selectionChanged.connect(self.on_selection_change)
         self.set_list_images(self.view.images)
+        self.update_list_indices()
         # Initialize buttons
         self.ui.sb_channel.valueChanged.connect(self.on_nucleus_selection_change)
+        self.ui.btn_split.clicked.connect(self.on_button_click)
+        self.ui.btn_split.setIcon(qta.icon("fa5s.ruler", color=self.btn_col))
         self.ui.btn_show.clicked.connect(self.on_button_click)
+        self.ui.btn_show.setIcon(qta.icon("fa5.eye", color=self.btn_col))
         self.ui.btn_merge.clicked.connect(self.on_button_click)
+        self.ui.btn_merge.setIcon(qta.icon("fa5.object-group", color=self.btn_col))
         self.ui.btn_remove.clicked.connect(self.on_button_click)
+        self.ui.btn_remove.setIcon(qta.icon("fa5.trash-alt", color=self.btn_col))
         self.ui.btn_edit.clicked.connect(self.on_button_click)
+        self.ui.btn_edit.setIcon(qta.icon("fa5.edit", color=self.btn_col))
         # Initialize interactivity of graphics view
         self.set_current_image()
 
@@ -1214,8 +1296,8 @@ class ModificationDialog(QDialog):
         self.lst_nuc_model.clear()
         for image in images:
             item = QStandardItem()
-            item_text = "Index: {}".format(images.index(image))
-            item.setText(item_text)
+            # TODO test3.tif
+            # ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
             item.setTextAlignment(QtCore.Qt.AlignLeft)
             pmap = QPixmap()
             pmap.convertFromImage(NucView.get_qimage_from_numpy(image[...,
@@ -1225,24 +1307,6 @@ class ModificationDialog(QDialog):
             item.setIcon(ic)
             self.lst_nuc_model.appendRow(item)
 
-    def get_roi_images(self):
-        if self.handler is not None:
-            self.lst_nuc_model.clear()
-            self.view.images.clear()
-            for nuc in self.view.main:
-                self.view.images.append(nuc.get_as_numpy())
-            for image in self.view.images:
-                item = QStandardItem()
-                item_text = "Index: {}".format(image[5])
-                item.setText(item_text)
-                item.setTextAlignment(QtCore.Qt.AlignLeft)
-                item.setFlag(QGraphicsItem.ItemIsSelectable)
-                pmap = QPixmap()
-                pmap.convertFromImage(NucView.get_qimage_from_numpy(image[0]))
-                ic = QIcon(pmap)
-                item.setIcon(ic)
-                self.lst_nuc_model.appendRow(item)
-
     def on_nucleus_selection_change(self):
         self.cur_channel = self.ui.sb_channel.value()
         self.set_current_image()
@@ -1251,9 +1315,17 @@ class ModificationDialog(QDialog):
         ident = self.sender().objectName()
         if ident == "btn_show":
             self.show = self.ui.btn_show.isChecked()
+            if self.show:
+                self.ui.btn_show.setIcon(qta.icon("fa5.eye", color=self.btn_col))
+            else:
+                self.ui.btn_show.setIcon(qta.icon("fa5.eye-slash", color=self.btn_col.darker()))
             self.view.show = self.show
         elif ident == "btn_edit":
             self.view.edit = self.ui.btn_edit.isChecked()
+            if self.view.edit:
+                self.ui.btn_edit.setIcon(qta.icon("fa5.edit", color=self.btn_col))
+            else:
+                self.ui.btn_edit.setIcon(qta.icon("fa5.edit", color=self.btn_col.darker()))
         elif ident == "btn_remove":
             selection = self.ui.lst_nuc.selectionModel().selectedIndexes()
             if selection:
@@ -1263,12 +1335,12 @@ class ModificationDialog(QDialog):
                                             QMessageBox.Yes | QMessageBox.No)
                 if code == QMessageBox.Yes:
                     offset = 0
-                    for ind in sel:
-                        nuc = self.view.main[ind]
+
+                    for ind in sorted(sel):
+                        nuc = self.view.main[ind + offset]
                         self.handler.rois.remove(nuc)
                         self.view.main.remove(nuc)
                         self.lst_nuc_model.removeRow(ind + offset)
-                        del self.view.main[ind]
                         del self.view.images[ind + offset]
                         offset -= 1
                         self.commands.extend(
@@ -1277,6 +1349,7 @@ class ModificationDialog(QDialog):
                              ("DELETE FROM points WHERE hash = ?",
                              (hash(nuc),)))
                         )
+                    self.view.cur_ind = 0
                     self.ui.lst_nuc.selectionModel().select(self.lst_nuc_model.createIndex(0, 0),
                                                             QItemSelectionModel.ClearAndSelect)
                     self.update_list_indices()
@@ -1330,11 +1403,31 @@ class ModificationDialog(QDialog):
                 ic = QIcon(pmap)
                 self.lst_nuc_model.itemFromIndex(selection[0]).setIcon(ic)
                 self.update_list_indices()
+        elif ident == "btn_split":
+            if self.ui.btn_split.isChecked():
+                self.ui.btn_remove.setEnabled(False)
+                self.ui.btn_edit.setEnabled(False)
+                self.ui.btn_show.setEnabled(False)
+                self.ui.btn_merge.setEnabled(False)
+                self.view.split = True
+            else:
+                self.ui.btn_remove.setEnabled(True)
+                self.ui.btn_edit.setEnabled(True)
+                self.ui.btn_show.setEnabled(True)
+                if self.ui.lst_nuc.selectionModel().selectedIndexes():
+                    self.ui.btn_merge.setEnabled(True)
+                self.view.split = False
+        self.set_current_image()
+
+    def update_nucleus_list(self):
+        self.set_list_images(self.view.images)
+        self.cur_index = len(self.view.images) - 1
+        self.update_list_indices()
         self.set_current_image()
 
     def update_list_indices(self):
         for a in range(len(self.view.main)):
-            self.lst_nuc_model.item(a, 0).setText("Index: {}".format(a))
+            self.lst_nuc_model.item(a, 0).setText("Index: {}\nHash: {}".format(a, hash(self.view.main[a])))
 
     def on_selection_change(self):
         index = self.ui.lst_nuc.selectionModel().selectedIndexes()
@@ -1347,14 +1440,20 @@ class ModificationDialog(QDialog):
                 self.ui.btn_merge.setEnabled(True)
 
     def set_current_image(self):
-        self.view.show_nucleus(self.cur_index, self.cur_channel)
+        if self.cur_index < len(self.view.main):
+            self.view.show_nucleus(self.cur_index, self.cur_channel)
+            self.update_counting_label()
+
+    def update_counting_label(self):
+        self.ui.lbl_number.setText("Foci: {}".format(self.view.cur_foc_num))
 
 
 class NucView(QGraphicsView):
 
     def __init__(self, image, handler, commands, cur_channel=None, show=True, edit=False, max_channel=None,
                  db_curs=None, parent=None):
-        super(NucView, self).__init__(parent)
+        super(NucView, self).__init__()
+        self.par = parent
         self.setMouseTracking(True)
         self.setSizePolicy(
             QSizePolicy.Expanding,
@@ -1376,12 +1475,15 @@ class NucView(QGraphicsView):
         self.curs = db_curs
         self.show = show
         self.edit = edit
+        self.split = False
+        self.temp_split = None
         self.pos = None
         self.temp_foc = None
         self.images = []
         self.foc_group = []
         self.map = {}
         self.commands = commands
+        self.cur_foc_num = 0
         scene = QGraphicsScene(self)
         scene.setSceneRect(0, 0, self.width(), self.height())
         self.setScene(scene)
@@ -1408,6 +1510,7 @@ class NucView(QGraphicsView):
         self.sc_bckg.setPos(self.scene().width() / 2 - tempmap.width() / 2,
                             self.scene().height() / 2 - tempmap.height() / 2)
         self.clear_scene()
+        self.cur_foc_num = 0
         if self.show and self.channel != self.main_channel:
             nuc_dat = self.cur_nuc.calculate_dimensions()
             x_offset = nuc_dat["minX"]
@@ -1426,6 +1529,7 @@ class NucView(QGraphicsView):
                     self.map[foc] = focus
                     self.foc_group.append(foc)
                     self.scene().addItem(foc)
+                    self.cur_foc_num += 1
 
     @staticmethod
     def get_qimage_from_numpy(numpy, mode=None):
@@ -1449,31 +1553,52 @@ class NucView(QGraphicsView):
 
     def keyPressEvent(self, event):
         super(NucView, self).keyPressEvent(event)
-        if event.key() == Qt.Key_Delete:
+        if event.key() == Qt.Key_Delete and not self.split:
             for item in self.foc_group:
                 if item.isSelected():
-                    self.handler.rois.remove(self.map[item])
+                    # TODO Fehlerhaft
+                    self.handler.remove_roi(self.map[item])
                     self.commands.extend((("DELETE FROM roi WHERE hash=?",
                                           (hash(self.map[item]),)),
                                          ("DELETE FROM points WHERE hash=?",
                                           (hash(self.map[item]),))))
                     del self.map[item]
                     self.scene().removeItem(item)
+                    self.cur_foc_num -= 1
+                    self.par.update_counting_label()
 
     def mousePressEvent(self, event):
         super(NucView, self).mousePressEvent(event)
         if self.edit and event.button() == Qt.LeftButton and \
-                self.channel < self.handler.idents.index(self.handler.main):
+                self.channel < self.handler.idents.index(self.handler.main) and not self.split:
             point = self.mapToScene(event.pos())
             p = self.itemAt(point.x(), point.y())
             if isinstance(p, QGraphicsPixmapItem):
                 self.pos = event.pos()
                 self.temp_foc = QGraphicsFocusItem(color_index=self.channel)
                 self.scene().addItem(self.temp_foc)
-        elif self.temp_foc is not None:
-            self.scene().removeItem(self.temp_foc)
+        elif self.split and event.button() == Qt.LeftButton:
+            point = self.mapToScene(event.pos())
+            p = self.itemAt(point.x(), point.y())
+            if isinstance(p, QGraphicsPixmapItem):
+                self.pos = event.pos()
+                self.temp_split = QGraphicsLineItem()
+                pen = QPen()
+                pen.setStyle(Qt.DashDotLine)
+                pen.setWidth(3)
+                pen.setBrush(QBrush(QColor(207, 255, 4)))
+                pen.setCapStyle(Qt.RoundCap)
+                pen.setJoinStyle(Qt.RoundJoin)
+                self.temp_split.setPen(pen)
+                self.scene().addItem(self.temp_split)
+        else:
             self.pos = None
+            if self.temp_split is not None:
+                self.scene().removeItem(self.temp_split)
+            if self.temp_foc is not None:
+                self.scene().removeItem(self.temp_foc)
             self.temp_foc = None
+            self.temp_split = None
 
     def mouseMoveEvent(self, event):
         super(NucView, self).mouseMoveEvent(event)
@@ -1491,9 +1616,12 @@ class NucView(QGraphicsView):
                 height * 2
             )
             self.temp_foc.setRect(bbox)
+        elif self.temp_split is not None:
+            self.temp_split.setLine(self.pos.x(), self.pos.y(), event.pos().x(), event.pos().y())
 
     def mouseReleaseEvent(self, event):
         super(NucView, self).mouseReleaseEvent(event)
+
         if self.temp_foc is not None:
             cur_nump = self.main[self.cur_ind].get_as_numpy()
             offset_factor = self.sc_bckg.boundingRect().height() / len(cur_nump)
@@ -1523,10 +1651,7 @@ class NucView(QGraphicsView):
                         )
             self.handler.rois.append(cur_roi)
             roidat = cur_roi.calculate_dimensions()
-            imghash = self.curs.execute(
-                "SELECT image FROM roi WHERE hash=?",
-                (hash(self.cur_nuc), )
-            ).fetchall()[0][0]
+            imghash = self.handler.ident
             self.commands.extend(
                 (("INSERT INTO roi VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
                  (hash(cur_roi), imghash, False, cur_roi.ident, str(roidat["center"]), roidat["width"],
@@ -1540,12 +1665,95 @@ class NucView(QGraphicsView):
             self.temp_foc = None
             self.scene().update()
             self.assmap = Detector.create_association_map(self.handler.rois)
+            self.cur_foc_num += 1
+            self.par.update_counting_label()
+        elif self.temp_split is not None:
+            cur_nump = self.main[self.cur_ind].get_as_numpy()
+            offset_factor = self.sc_bckg.boundingRect().height() / len(cur_nump)
+            hard_offset = self.sc_bckg.pos()
+            nuc_dat = self.cur_nuc.calculate_dimensions()
+            x_offset = nuc_dat["minX"]
+            y_offset = nuc_dat["minY"]
+            start_x = (self.pos.x() - hard_offset.x()) / offset_factor + x_offset
+            start_y = (self.pos.y() - hard_offset.y()) / offset_factor + y_offset
+            stop_x = (event.pos().x() - hard_offset.x()) / offset_factor + x_offset
+            stop_y = (event.pos().y() - hard_offset.y()) / offset_factor + y_offset
+            # Calculate line equation y = mx + n
+            m = (stop_y - start_y) / (stop_x - start_x)
+            n = stop_y - stop_x * m
+            # Compare each point of nucleus with line
+            aroi = ROI(channel=self.cur_nuc.ident)
+            broi = ROI(channel=self.cur_nuc.ident)
+            # Compare each center of foci with line
+            for p in self.cur_nuc.points:
+                ly = m * p[0] + n
+                if ly > p[1]:
+                    aroi.add_point(p, self.cur_nuc.inten[p])
+                else:
+                    broi.add_point(p, self.cur_nuc.inten[p])
+            c = (aroi.calculate_dimensions()["center"], broi.calculate_dimensions()["center"])
+            for foc in self.assmap[self.cur_nuc]:
+                fc = foc.calculate_dimensions()["center"]
+                d1 = math.sqrt((c[0][0] - fc[0])**2 + (c[0][1] - fc[1])**2)
+                d2 = math.sqrt((c[1][0] - fc[0])**2 + (c[1][1] - fc[1])**2)
+                if d1 < d2:
+                    foc.associated = aroi
+                else:
+                    foc.associated = broi
+            # Remove line
+            self.scene().removeItem(self.temp_split)
+            self.handler.rois.remove(self.cur_nuc)
+            self.handler.rois.extend((aroi, broi))
+            self.assmap = Detector.create_association_map(self.handler.rois)
+            adat = aroi.calculate_dimensions()
+            bdat = broi.calculate_dimensions()
+            imghash = self.handler.ident
+            self.commands.extend((
+                ("INSERT INTO roi VALUES (?, ?, ?, ?, ? ,?, ?, ?)",
+                 (hash(aroi), imghash, False, self.cur_nuc.ident, str(adat["center"]), adat["width"],
+                  adat["height"], None)),
+                ("INSERT INTO roi VALUES (?, ?, ?, ?, ? ,?, ?, ?)",
+                 (hash(broi), imghash, False, self.cur_nuc.ident, str(bdat["center"]), bdat["width"],
+                  bdat["height"], None)),
+                ("DELETE FROM roi WHERE hash=?",
+                 (hash(self.cur_nuc),)),
+                ("DELETE FROM points WHERE hash=?",
+                 (hash(self.cur_nuc),)),
+            ))
+            for p, inten in aroi.inten.items():
+                self.commands.append(
+                    ("INSERT INTO points VALUES (?, ?, ?, ?)",
+                     (hash(aroi), p[0], p[1], inten))
+                )
+            for p, inten in broi.inten.items():
+                self.commands.append(
+                    ("INSERT INTO points VALUES (?, ?, ?, ?)",
+                     (hash(broi), p[0], p[1], inten))
+                )
+            for foc in self.assmap[aroi]:
+                self.commands.append(
+                    ("UPDATE roi SET associated=? WHERE hash=?",
+                     (hash(aroi), hash(foc)))
+                )
+            for foc in self.assmap[broi]:
+                self.commands.append(
+                    ("UPDATE roi SET associated=? WHERE hash=?",
+                     (hash(broi), hash(foc)))
+                )
+            self.main.remove(self.cur_nuc)
+            self.main.extend((aroi, broi))
+            del self.images[self.cur_ind]
+            self.images.extend([self.convert_roi_to_numpy(x, True) for x in (aroi, broi)])
+            self.cur_nuc = aroi
+            self.temp_split = None
+            self.par.update_nucleus_list()
+            self.scene().update()
 
-    def convert_roi_to_numpy(self, roi):
+    def convert_roi_to_numpy(self, roi, full=False):
         dims = roi.calculate_dimensions()
         y_dist = dims["maxY"] - dims["minY"] + 1
         x_dist = dims["maxX"] - dims["minX"] + 1
-        if self.channel > self.max_channel:
+        if self.channel > self.max_channel or full:
             channel = self.image
             numpy = np.zeros((y_dist, x_dist, 3), dtype=np.uint8)
         else:
@@ -1592,7 +1800,7 @@ class QGraphicsFocusItem(QGraphicsEllipseItem):
         self.scene().update()
 
 
-if __name__ == '__main__':
+def main():
     app = QtWidgets.QApplication(sys.argv)
     pixmap = QPixmap("banner_norm.png")
     splash = QSplashScreen(pixmap)
@@ -1602,3 +1810,7 @@ if __name__ == '__main__':
     splash.finish(mainWin)
     mainWin.show()
     sys.exit(app.exec_())
+
+
+if __name__ == '__main__':
+    main()
