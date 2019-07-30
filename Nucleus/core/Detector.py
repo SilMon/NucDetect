@@ -5,6 +5,7 @@ Created 09.04.2019
 import os
 import hashlib
 
+import math
 import piexif
 import numpy as np
 import time
@@ -20,8 +21,8 @@ from skimage.morphology import watershed
 from skimage.feature import peak_local_max
 import matplotlib.pyplot as plt
 
-class Detector:
 
+class Detector:
     FORMATS = [
         ".tif",
         ".tiff",
@@ -30,21 +31,24 @@ class Detector:
         ".bmp"
     ]
 
-    def __init__(self, settings=None):
+    def __init__(self, settings=None, logging=None):
         self.settings = settings if settings is not None else {
             "ass_qual": True,
-            "names": "Red;Green;Blue",
-            "main_channel": 2,
+            "names": "APC;FITC;DAPI",
+            "main": 2,
             "min_foc_area": 9
         }
+        self.logging = logging
 
-    def analyse_image(self, path, main_channel=2):
+    def analyse_image(self, path, main_channel=2, logging=True):
         """
         Method to extract rois from the image given by path
         :param path: The URL of the image
         :param main_channel: Index of the channel associated with nuclei
+        :param logging: Enables logging
         :return: The analysis results as dict
         """
+        logging = logging if self.logging is None else self.logging
         imgdat = Detector.get_image_data(path)
         imgdat["id"] = Detector.calculate_image_id(path)
         image = Detector.load_image(path)
@@ -59,7 +63,7 @@ class Detector:
         # Channel thresholding
         thresh_chan = Detector.threshold_channels(channels, main_channel)
         # ROI detection
-        rois = Detector.extract_rois(channels, thresh_chan, names, main_map=main_channel)
+        rois = Detector.extract_rois(channels, thresh_chan, names, main_map=main_channel, logging=logging)
         handler = ROIHandler(ident=imgdat["id"])
         for roi in rois:
             handler.add_roi(roi)
@@ -67,7 +71,7 @@ class Detector:
         return imgdat
 
     @staticmethod
-    def extract_rois(channels, bin_maps, names, main_map=2):
+    def extract_rois(channels, bin_maps, names, main_map=2, logging=True):
         """
         Method to extract ROI objects from the given binary maps
         :param channels: List of the channels to detect rois on
@@ -136,13 +140,14 @@ class Detector:
             rois.extend(temprois)
         del main[0]
         rois.extend(main)
-        print("Analysis time: {:.4f}".format(time.time() - s0))
-        Detector.perform_roi_quality_check(rois)
+        Detector.log("Analysis time: {:.4f}".format(time.time() - s0), logging)
+        Detector.perform_roi_quality_check(rois, logging=logging)
         return rois
 
     @staticmethod
     def perform_roi_quality_check(rois, max_focus_overlapp=.75, min_dist=45,
-                                  min_thresh=25, max_thresh=60,  min_foc_area = 9):
+                                  min_thresh=25, max_thresh=60, min_main_area=400, min_foc_area=9,
+                                  max_main_area=16000, ws_line=False, logging=True):
         """
         Method to check detected rois for their quality.
         :param rois: A list of detected rois
@@ -150,61 +155,85 @@ class Detector:
         :param min_dist: The minimal distance between 2 nuclei
         :param min_thresh: The lower percentile to check for oversegmentation
         :param max_thresh: The upper percentile to check for undersegmentation
+        :param min_main_area: The mininmal area of a nucleus
+        :param max_main_area: The maximal area of a nucleus
+        :param ws_line: Should the separation line for ws separated nuclei be drawn?
+        :param logging: Enables logging
         :return: None
         """
         rem_list = []
         temp = []
         main = []
         foci = []
+        s7 = time.time()
         for roi in rois:
             if roi.main:
                 main.append(roi)
                 temp.append(len(roi))
             else:
                 foci.append(roi)
-        min_main_area = max(np.percentile(temp, min_thresh), 400)
-        max_main_area = np.percentile(temp, max_thresh)
-        print("Detected nuclei:{}\nDetected foci: {}".format(len(main), len(foci)))
+        if len(main) > 1:
+            min_main_area = max(np.percentile(temp, min_thresh), min_main_area)
+            max_main_area = min(np.percentile(temp, max_thresh), max_main_area)
+        else:
+            min_main_area = -1
+            max_main_area = len(main[0]) - 1
+        Detector.log("Detected nuclei:{}\nDetected foci: {}".format(len(main), len(foci)), logging)
         ws_list = []
-        s7 = time.time()
-        print("Checking for very small nuclei")
-        for nucleus in main:
-            if len(nucleus) < min_main_area:
-                rem_list.append(nucleus)
-        print("Time: {:4f}".format(time.time() - s7))
-        print("Remove not associated foci")
+        Detector.log("Checking for very small nuclei", logging)
+        # Remove very small nuclei
+        # main = [x for x in main if len(x) > min_main_area]
+        Detector.log("Time: {:4f}\nRemove not associated foci".format(time.time() - s7), logging)
         s8 = time.time()
-        for focus in foci:
-            if focus.associated in rem_list or focus.associated is None:
-                rem_list.append(focus)
-        for rem in rem_list:
-            rois.remove(rem)
-            if rem.main:
-                main.remove(rem)
-            else:
-                foci.remove(rem)
-        rem_list.clear()
-        print("Time: {:4f}".format(time.time() - s8))
+        # Remove foci that are either unassociated or whose nucleus was deleted
+        maincop = main.copy()
+        maincop.extend(foci)
+        ass = {key: value for key, value in Detector.create_association_map(maincop).items() if
+               len(key) > min_main_area}
+
+        Detector.log("Assmap-Creation: {}".format(time.time() - s8), logging)
+        mainlen = len(main)
+        main = [x for x, _ in ass.items()]
+        Detector.log("Removed nuclei: {}".format(mainlen - len(main)), logging)
+        foclen = len(foci)
+        foci = [x for _, focs in ass.items() for x in focs if x.associated is not None]
+        # Remove very small foci
+        foci = [x for x in foci if len(x) > min_foc_area]
+        Detector.log("Removed foci: {}\nTime: {:4f}".format(foclen - len(foci), time.time() - s8), logging)
         # Focus quality check
-        print("Focus quality check")
         s4 = time.time()
+        # TODO Immer noch langsam
         for ind in range(len(foci)):
             focus = foci[ind]
+            focdim = focus.calculate_dimensions()
+            maxdist = max(focdim["height"], focdim["width"])
+            c = focdim["center"]
             if focus not in rem_list:
                 for ind2 in range(ind + 1, len(foci)):
                     focus2 = foci[ind2]
-                    if focus.ident == focus2.ident:
+                    focdim2 = focus2.calculate_dimensions()
+                    maxdist2 = max(focdim2["height"], focdim2["width"])
+                    c2 = focdim2["center"]
+                    # TODO Nachbearbeiten
+                    rdist = math.sqrt((c[0] - c2[0]) ** 2 + (c[1] - c2[1]) ** 2) < maxdist / 2 + maxdist2 / 2
+                    if focus.ident == focus2.ident and rdist:
                         if focus.calculate_roi_intersection(focus2) >= max_focus_overlapp:
-                            rem_list.append(focus2)
-        print("Removed foci: {}".format(len(rem_list)))
-        for rem in rem_list:
-            foci.remove(rem)
-            rois.remove(rem)
+                            if focus2.points >= focus.points:
+                                rem_list.append(focus2)
+                            else:
+                                rem_list.append(focus)
+                                break
+        foci = [x for x in foci if x not in rem_list]
         rem_list.clear()
-        print("Time: {:4f}".format(time.time() - s4))
+        Detector.log("Time: {:4f}\nNucleus Quality Check".format(time.time() - s4), logging)
         # Nucleus quality check
-        print("Nucleus Quality Check")
         s1 = time.time()
+        ws_num = 0
+        res_nuc = 0
+        maincop = main.copy()
+        maincop.extend(foci)
+        ass = Detector.create_association_map(maincop)
+        foc_cop = []
         for nucleus in main:
             if len(nucleus) > max_main_area:
                 numpy_bin = nucleus.get_as_binary_map()
@@ -213,10 +242,11 @@ class Detector:
                                                 min_distance=min_dist)
                 points_labels, num_labels = ndi.label(points_loc_max)
                 if num_labels > 1:
+                    res_nuc += num_labels
                     index = main.index(nucleus)
                     dims = nucleus.calculate_dimensions()
                     offset = (dims["minX"], dims["minY"])
-                    points_ws = watershed(-numpy_edm, points_labels, mask=numpy_bin)
+                    points_ws = watershed(-numpy_edm, points_labels, mask=numpy_bin, watershed_line=ws_line)
                     # Extraction of ROI from watershed
                     lab_num = np.amax(points_ws)
                     nucs = [None] * lab_num
@@ -231,37 +261,43 @@ class Detector:
                                     p = (ii + offset[0], i + offset[1])
                                     nucs[points_ws[i][ii] - 1].add_point(p, nucleus.inten[p])
                     ws_list.append((index, nucleus, nucs))
-        print("Time: {:4f}".format(time.time() - s1))
-        print("Add newly found nuclei")
+                    ws_num += 1
+                else:
+                    foc_cop.extend(ass[nucleus])
+            else:
+                foc_cop.extend(ass[nucleus])
+        Detector.log("Watershed applied to {} nuclei, creating {} potential nuclei\n"
+                     "Time: {:4f}\nAdd newly found nuclei".format(ws_num, res_nuc, time.time() - s1), logging)
+        # TODO Überprüfen ob so funktionstüchtig
         s2 = time.time()
-        ass = Detector.create_association_map(foci)
         for t in ws_list:
+            centers = []
             for nuc in t[2]:
-                for focus in ass[t[1]]:
-                    if focus.associated == t[1] and focus not in rem_list:
-                        intersect = nuc.calculate_roi_intersection(focus)
-                        if intersect >= 0.50:
-                            focus.associated = nuc
-                            rem_list.append(focus)
-                rois.append(nuc)
+                centers.append(nuc.calculate_dimensions()["center"])
+                main.append(nuc)
             for focus in ass[t[1]]:
-                if focus.associated == t[1] and focus not in rem_list:
-                    print("Removed unassociated focus: {}".format(hash(t[1])))
-                    rois.remove(focus)
-                    rem_list.append(focus)
-            rois.remove(t[1])
-        rem_list.clear()
-        print("Time: {:4f}".format(time.time() - s2))
+                c = focus.calculate_dimensions()["center"]
+                min_dist = [math.sqrt((c[0] - c2[0]) ** 2 + (c[1] - c2[1]) ** 2) for c2 in centers]
+                focus.associated = t[2][min_dist.index(min(min_dist))]
+                foc_cop.append(focus)
+            main.remove(t[1])
+        rois.clear()
+        # TODO Reihenfolge wichtig, ausbessern da undynamisch
+        rois.extend(foc_cop)
+        rois.extend(main)
+        Detector.log("Time: {:4f}\nTotal Quality Check Time: {}".format(time.time() - s2, time.time() - s7), logging)
 
     @staticmethod
     def create_association_map(rois):
-        ass = {}
+        """
+        Method to create a dictionary which associates main roi (as keys) with their foci (as list of ROI)
+        :param rois: The list of roi to create the association map from
+        :return: The association map as dict
+        """
+        ass = {x: [] for x in rois if x.main}
         for roi in rois:
             if roi.associated is not None:
-                if roi.associated in ass:
-                    ass[roi.associated].append(roi)
-                else:
-                    ass[roi.associated] = [roi]
+                ass[roi.associated].append(roi)
         return ass
 
     @staticmethod
@@ -308,35 +344,51 @@ class Detector:
         return map_
 
     @staticmethod
-    def perform_labelling(local_maxima):
+    def perform_labelling(local_maxima, main_map=-1):
         """
         Method to label a list of maps of local maxima with unique identifiers
+        :param main_map: The main map which should not be altered
         :param local_maxima: List of maps of local maxima
         :return: Two lists containing the labelled maps and the numbers of used labels
         """
         labels = []
         label_nums = []
-        for loc_max in local_maxima:
-            label, lab_num = ndi.label(loc_max)
-            labels.append(label)
-            label_nums.append(lab_num)
+        for i in range(len(local_maxima)):
+            if i != main_map:
+                label, lab_num = ndi.label(local_maxima[i])
+                labels.append(label)
+                label_nums.append(lab_num)
+            else:
+                labels.append(local_maxima[i])
+                label_nums.append(np.max(local_maxima[i]))
         return labels, label_nums
 
     @staticmethod
-    def threshold_channels(channels, main_channel=2, main_threshold=5):
+    def threshold_channels(channels, main_channel=2, main_threshold=5, pad=1):
         """
         Method to threshold the channels to prepare for nuclei and foci detection
         :param channels: The channels of the image as list
         :param main_channel: Index of the channel associated with nuclei (usually blue -> 2)
-        :param main_threshold: Global threshold to apply onto the main channel
+        :param main_threshold: Global threshold to apply onto the main channel in %
+        :param pad: Padding used to account for edge areas (should be 1)
         :return: The thresholded channels
         """
-        thresh = [None]*len(channels)
-        edges_main = (sobel(channels[main_channel]) * 255).astype("uint8")
+        thresh = [None] * len(channels)
+        edges_main = np.pad(channels[main_channel], pad_width=pad,
+                            mode="constant", constant_values=0)
+        # TODO Sobel eventuell mit Gabor tauschen
+        edges_main = (sobel(edges_main) * 255).astype("uint8")
         det = []
         ch_main_bin = edges_main > main_threshold
         ch_main_bin = ndi.binary_fill_holes(ch_main_bin)
         ch_main_bin = binary_opening(ch_main_bin)
+        numpy_edm = ndi.distance_transform_edt(ch_main_bin)
+        points_loc_max = peak_local_max(numpy_edm, labels=ch_main_bin, indices=False,
+                                        min_distance=45, exclude_border=False)
+        points_ws, num_labels = ndi.label(points_loc_max)
+        ch_main_bin = watershed(-numpy_edm, points_ws, mask=ch_main_bin, watershed_line=False)
+        # Removal of added padding
+        ch_main_bin = np.array([x[pad:-pad] for x in ch_main_bin[pad:-pad]])
         truth_table = np.zeros(shape=ch_main_bin.shape, dtype=bool)
         for i in range(len(ch_main_bin)):
             for ii in range(len(ch_main_bin[0])):
@@ -427,7 +479,7 @@ class Detector:
         for i in range(len(data)):
             for ii in range(len(data[0])):
                 if data[i][ii] != 0:
-                    channel[i + offset[0]][ii+offset[1]] = data[i][ii]
+                    channel[i + offset[0]][ii + offset[1]] = data[i][ii]
 
     @staticmethod
     def get_channels(img):
@@ -456,7 +508,7 @@ class Detector:
         x_dist = max_x - min_x + 1
         numpy = np.zeros((y_dist, x_dist), dtype=np.uint8)
         for p in lst:
-            numpy[p[0][0]-min_y, p[0][1]-min_x] = p[1]
+            numpy[p[0][0] - min_y, p[0][1] - min_x] = p[1]
         return numpy, (min_y, min_x)
 
     @staticmethod
@@ -466,19 +518,30 @@ class Detector:
         :param path: The URL of the image
         :return: The extracted metadata as dict
         """
-        tags = piexif.load(path)
-        image_data = {
-            "datetime": tags["0th"][piexif.ImageIFD.DateTime],
-            "height": tags["0th"][piexif.ImageIFD.ImageLength],
-            "width": tags["0th"][piexif.ImageIFD.ImageWidth],
-            "x_res": tags["0th"][piexif.ImageIFD.XResolution],
-            "y_res": tags["0th"][piexif.ImageIFD.YResolution],
-            "channels": tags["0th"][piexif.ImageIFD.SamplesPerPixel]
-        }
-        if piexif.ImageIFD.ResolutionUnit in tags["0th"]:
-            image_data["unit"] = tags["0th"][piexif.ImageIFD.ResolutionUnit]
+        filename, file_extension = os.path.splitext(path)
+        img = Detector.load_image(path)
+        if file_extension in (".tiff", ".tif", ".jpg"):
+            tags = piexif.load(path)
+            image_data = {
+                "datetime": tags["0th"].get(piexif.ImageIFD.DateTime, os.path.getctime(path)),
+                "height": tags["0th"].get(piexif.ImageIFD.ImageLength, img.shape[0]),
+                "width": tags["0th"].get(piexif.ImageIFD.ImageWidth, img.shape[1]),
+                "x_res": tags["0th"].get(piexif.ImageIFD.XResolution, -1),
+                "y_res": tags["0th"].get(piexif.ImageIFD.YResolution, -1),
+                "channels": tags["0th"].get(piexif.ImageIFD.SamplesPerPixel, 3),
+                "unit": tags["0th"].get(piexif.ImageIFD.ResolutionUnit, 2)
+            }
         else:
-            image_data["unit"] = 2
+            # TODO Dialog for resolution, number of channels and unit
+            image_data = {
+                "datetime": os.path.getctime(path),
+                "heigth": img.shape[0],
+                "width": img.shape[1],
+                "x_res": -1,
+                "y_res": -1,
+                "channels": 1 if len(img.shape) == 2 else 3,
+                "unit": 2
+            }
         return image_data
 
     @staticmethod
@@ -506,3 +569,13 @@ class Detector:
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
 
+    @staticmethod
+    def log(message, state=True):
+        """
+        Method to log messages to the console
+        :param message: The message to log
+        :param state: Enables logging
+        :return: None
+        """
+        if state:
+            print(message)

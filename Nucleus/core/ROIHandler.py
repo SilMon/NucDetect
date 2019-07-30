@@ -38,6 +38,10 @@ class ROIHandler:
             self.main = roi.ident
         self.stats.clear()
 
+    def remove_roi(self, roi):
+        self.rois.remove(roi)
+        self.stats.clear()
+
     def calculate_statistics(self):
         """
         Method to calculate statistics about the saved ROIs
@@ -64,6 +68,7 @@ class ROIHandler:
                             "area": [temp_stat["area"]],
                             "intensity": [temp_stat["intensity average"]]
                         }
+                        main["num empty"] -= 1
                     else:
                         sec[roi.ident]["num"] += 1
                         sec[roi.ident]["area"].append(temp_stat["area"])
@@ -91,7 +96,6 @@ class ROIHandler:
             inten = main["intensity"]
             self.stats = {
                 "number": main["num"],
-                "empty": main["num"] - len(sec),
                 "number stats": sec_stat,
                 "area list": area,
                 "area average": np.average(area),
@@ -110,6 +114,7 @@ class ROIHandler:
         Method to retrieve the stored ROI data as list
         :return: The data as dict
         """
+        print(self.idents)
         tempdat = {}
         header = ["Hash", "Width", "Height", "Center"]
         header.extend(self.idents)
@@ -135,10 +140,12 @@ class ROIHandler:
                 for chan in self.idents:
                     if chan in secstat.keys():
                         row.append(secstat[chan])
+                    elif chan != self.main:
+                        row.append(0)
                 tempdat["data"].append(row)
         return tempdat
 
-    def export_data_as_csv(self, path, delimiter=";", quotechar="|"):
+    def export_data_as_csv(self, path, delimiter=",", quotechar="|"):
         """
         Method to save the roi data to a csv table
         :param path: The folder to save the file in

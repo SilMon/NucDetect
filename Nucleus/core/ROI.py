@@ -67,7 +67,7 @@ class ROI:
     def __hash__(self):
         if self.id is None:
             md5 = hashlib.md5()
-            ident = "{}{}".format(sorted(self.points, key=lambda k: [k[0], k[1]]), self.ident).encode()
+            ident = "{}{}".format(sorted(self.inten.items(), key=lambda k: [k[0], k[1]]), self.ident).encode()
             md5.update(ident)
             self.id = int("0x" + md5.hexdigest(), 0)
         return self.id
@@ -155,6 +155,70 @@ class ROI:
         for point in self.points:
             array[point[1] - self.dims["minY"], point[0] - self.dims["minX"]] = 1
         return array
+
+    @staticmethod
+    def get_roi_map(roi, asso, names):
+        """
+        Creates a map of associated roi for the given ROI
+        :param roi: The roi to create the association map for
+        :param asso:  List of to roi associated ROI
+        :param names: An ordered list of channel names
+        :return: A tuple containing the different binary association maps
+        """
+        if not roi.main:
+            raise AttributeError("Only main ROI have associated ROI!")
+        else:
+            d = roi.calculate_dimensions()
+            main = np.zeros(shape=(d["height"], d["width"]), dtype="uint8")
+            focs = []
+            for i in range(len(names)):
+                if names[i] == roi.ident:
+                    focs.append(None)
+                else:
+                    focs.append(np.zeros(shape=(d["height"], d["width"]), dtype="uint8"))
+            fp = {name: {} for name in names}
+            for foc in asso:
+                fp[foc.ident].update(foc.inten)
+            for p in roi.points:
+                main[p[1] - d["minY"], p[0] - d["minX"]] = roi.inten[p]
+            for chan, vals in fp.items():
+                if chan is not roi.ident:
+                    for p, i in vals.items():
+                        focs[names.index(chan)][p[1] - d["minY"], p[0] - d["minX"]] = i
+            focs[names.index(roi.ident)] = main
+            return focs
+
+    @staticmethod
+    def get_binary_roi_map(roi, asso, names):
+        """
+        Creates a binary map of associated roi for the given ROI
+        :param roi: The roi to create the binary association map for
+        :param asso:  List of to roi associated ROI
+        :param names: An ordered list of channel names
+        :return: A tuple containing the different binary association maps
+        """
+        if not roi.main:
+            raise AttributeError("Only main ROI have associated ROI!")
+        else:
+            d = roi.calculate_dimensions()
+            main = np.zeros(shape=(d["height"], d["width"]), dtype="uint8")
+            focs = []
+            for i in range(len(names)):
+                if names[i] == roi.ident:
+                    focs.append(None)
+                else:
+                    focs.append(np.zeros(shape=(d["height"], d["width"]), dtype="uint8"))
+            fp = {name: {} for name in names}
+            for foc in asso:
+                fp[foc.ident].update(foc.inten)
+            for p in roi.points:
+                main[p[1] - d["minY"], p[0] - d["minX"]] = 1
+            for chan, vals in fp.items():
+                if chan is not roi.ident:
+                    for p, i in vals.items():
+                        focs[names.index(chan)][p[1] - d["minY"], p[0] - d["minX"]] = 1
+            focs[names.index(roi.ident)] = main
+            return focs
 
     def calculate_dimensions(self):
         """
