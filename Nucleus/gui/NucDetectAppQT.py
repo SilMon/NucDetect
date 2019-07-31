@@ -559,7 +559,7 @@ class NucDetect(QMainWindow):
         :param value: The value of the changed field
         :return: None
         """
-        # TODO
+        # TODO Implement & test
         if section == "Analysis":
             self.detector.settings[key] = value
 
