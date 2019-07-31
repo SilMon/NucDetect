@@ -53,7 +53,7 @@ class NucDetect(QMainWindow):
     @author: Romano Weiss
     """
     prg_signal = pyqtSignal(str, int, int, str)
-    selec_signal = pyqtSignal()
+    selec_signal = pyqtSignal(bool)
     aa_signal = pyqtSignal(int, int)
     executor = Thread()
 
@@ -394,14 +394,15 @@ class NucDetect(QMainWindow):
         self.ui.btn_categories.setEnabled(state)
         self.ui.btn_modify.setEnabled(state)
 
-    def _select_next_image(self):
+    def _select_next_image(self, first=False):
         """
         Method to select the next image in the list of loaded images. Selects the first image if no image is selected
+        :param first: Indicates if the first image in the list should be selected
         :return: None
         """
         max_ind = self.img_list_model.rowCount()
         cur_ind = self.ui.list_images.currentIndex()
-        if cur_ind.row() < max_ind:
+        if cur_ind.row() < max_ind and not first:
             nex = self.img_list_model.index(cur_ind.row() + 1, 0)
             self.ui.list_images.selectionModel().select(nex, QItemSelectionModel.Select)
             self.ui.list_images.setCurrentIndex(nex)
@@ -431,7 +432,6 @@ class NucDetect(QMainWindow):
         self.enable_buttons(False)
         self.ui.list_images.setEnabled(False)
         self.unsaved_changes = True
-        self.selec_signal.emit()
         thread = Thread(target=self._analyze_all)
         thread.start()
 
@@ -459,6 +459,7 @@ class NucDetect(QMainWindow):
             self.prg_signal.emit("Analysis finished -- Program ready",
                                  100,
                                  100, "")
+            self.selec_signal.emit(True)
             
     def load_rois_from_database(self, md5):
         """
@@ -715,6 +716,7 @@ class NucDetect(QMainWindow):
         Method to open the settings dialog
         :return: None
         """
+        # TODO
         sett = SettingsDialog()
         sett.initialize_from_file(os.path.join(os.getcwd(), "settings/settings.json"))
         sett.setWindowTitle("Settings")
@@ -725,6 +727,7 @@ class NucDetect(QMainWindow):
             if sett.changed:
                 for key, value in sett.changed.items():
                     self.detector.settings[key] = value
+                    print("Key: {} Value: {}".format(key, value))
                     self.cursor.execute(
                         "INSERT INTO settings VALUES(?, ?)",
                         (key, value)
