@@ -9,6 +9,7 @@ import math
 import piexif
 import numpy as np
 import time
+from typing import Union, Dict, List, Tuple, Any
 from scipy import ndimage as ndi
 from skimage import io
 from skimage.feature import canny, blob_log
@@ -31,7 +32,12 @@ class Detector:
         ".bmp"
     ]
 
-    def __init__(self, settings=None, logging=None):
+    def __init__(self, settings: Dict[str, Any] = None, logging: bool = None):
+        """
+        Constructor of the detector class
+        :param settings: The settings of the class
+        :param logging: Indicates if analysis messages should be printed to the console
+        """
         self.settings = settings if settings is not None else {
             "ass_qual": True,
             "names": "Red;Green;Blue",
@@ -40,11 +46,11 @@ class Detector:
         }
         self.logging = logging
 
-    def analyse_image(self, path, logging=True):
+    def analyse_image(self, path, logging=True) -> Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]:
         """
         Method to extract rois from the image given by path
+
         :param path: The URL of the image
-        :param main_channel: Index of the channel associated with nuclei
         :param logging: Enables logging
         :return: The analysis results as dict
         """
@@ -72,9 +78,11 @@ class Detector:
         return imgdat
 
     @staticmethod
-    def extract_rois(channels, bin_maps, names, main_map=2, logging=True):
+    def extract_rois(channels: List[np.ndarray], bin_maps: List[np.ndarray],
+                     names: List[str], main_map: int = 2, logging: bool = True) -> List[ROI]:
         """
         Method to extract ROI objects from the given binary maps
+
         :param channels: List of the channels to detect rois on
         :param bin_maps: A list of binary maps of the channels
         :param names: The names associated with each channel
@@ -147,11 +155,13 @@ class Detector:
         return rois
 
     @staticmethod
-    def perform_roi_quality_check(rois, max_focus_overlapp=.75, min_dist=45,
-                                  min_thresh=25, max_thresh=60, min_main_area=400, min_foc_area=9,
-                                  max_main_area=16000, ws_line=False, logging=True):
+    def perform_roi_quality_check(rois: List[ROI], max_focus_overlapp: float = .75, min_dist: int = 45,
+                                  min_thresh: int = 25, max_thresh: int = 60, min_main_area: int = 400,
+                                  min_foc_area: int = 9, max_main_area: int = 16000, ws_line: bool = False,
+                                  logging: bool = True) -> None:
         """
-        Method to check detected rois for their quality.
+        Method to check detected rois for their quality. Changes ROI in place.
+
         :param rois: A list of detected rois
         :param max_focus_overlapp: The threshold used to determine if two rois are considered duplicates
         :param min_dist: The minimal distance between 2 nuclei
@@ -201,7 +211,8 @@ class Detector:
         foci = [x for _, focs in ass.items() for x in focs if x.associated is not None]
         # Remove very small foci
         foci = [x for x in foci if len(x) > min_foc_area]
-        Detector.log("Removed foci: {}\nTime: {:4f}\nFocus Quality Check".format(foclen - len(foci), time.time() - s8), logging)
+        Detector.log("Removed foci: {}\nTime: {:4f}\nFocus Quality Check".format(foclen - len(foci), time.time() - s8),
+                     logging)
         # Focus quality check
         s4 = time.time()
         for ind in range(len(foci)):
@@ -287,9 +298,10 @@ class Detector:
         Detector.log("Time: {:4f}\nTotal Quality Check Time: {}".format(time.time() - s2, time.time() - s7), logging)
 
     @staticmethod
-    def create_association_map(rois):
+    def create_association_map(rois: List[ROI]) -> Dict[ROI, List[ROI]]:
         """
         Method to create a dictionary which associates main roi (as keys) with their foci (as list of ROI)
+
         :param rois: The list of roi to create the association map from
         :return: The association map as dict
         """
@@ -300,9 +312,12 @@ class Detector:
         return ass
 
     @staticmethod
-    def detect_blobs(channels, main_channel=-1, min_sigma=1, max_sigma=5, num_sigma=10, threshold=.1):
+    def detect_blobs(channels: List[np.ndarray], main_channel: int = -1, min_sigma: Union[int, float] = 1,
+                     max_sigma: Union[int, float] = 5, num_sigma: int = 10,
+                     threshold: float = .1) -> Tuple[List[np.ndarray], List[int]]:
         """
         Method to detect blobs in the given channels using the blob_log method
+
         :param channels: A list of all channels
         :param main_channel: The index of the main channel
         :param min_sigma: the minimum standard deviation for Gaussian kernel
@@ -328,10 +343,11 @@ class Detector:
         return blob_maps, blob_nums
 
     @staticmethod
-    def create_blob_map(shape, blob_dat):
+    def create_blob_map(shape: Tuple[int, int], blob_dat: np.ndarray) -> np.ndarray:
         """
         Method to create a binary map of detected blobs.
-        :param shape: The shape of the blob map as tuple
+
+        :param shape: The shape of the blob map
         :param blob_dat: List of all detected blobs
         :return: The created blob map
         """
@@ -343,9 +359,11 @@ class Detector:
         return map_
 
     @staticmethod
-    def perform_labelling(local_maxima, main_map=-1):
+    def perform_labelling(local_maxima: List[np.ndarray],
+                          main_map: int = -1) -> Tuple[List[np.ndarray, int], List[Union[int, float]]]:
         """
         Method to label a list of maps of local maxima with unique identifiers
+
         :param main_map: The main map which should not be altered
         :param local_maxima: List of maps of local maxima
         :return: Two lists containing the labelled maps and the numbers of used labels
@@ -363,21 +381,23 @@ class Detector:
         return labels, label_nums
 
     @staticmethod
-    def threshold_channels(channels, main_channel=2, main_threshold=5, pad=1):
+    def threshold_channels(channels: List[np.ndarray], main_channel: int = 2,
+                           main_threshold: int = 5, pad: int = 1) -> List[np.ndarray]:
         """
         Method to threshold the channels to prepare for nuclei and foci detection
+
         :param channels: The channels of the image as list
         :param main_channel: Index of the channel associated with nuclei (usually blue -> 2)
         :param main_threshold: Global threshold to apply onto the main channel in %
         :param pad: Padding used to account for edge areas (should be 1)
         :return: The thresholded channels
         """
-        thresh = [None] * len(channels)
+        thresh: List[Union[None, np.ndarray]] = [None] * len(channels)
         edges_main = np.pad(channels[main_channel], pad_width=pad,
                             mode="constant", constant_values=0)
         # TODO Sobel eventuell mit Gabor tauschen
         edges_main = (sobel(edges_main) * 255).astype("uint8")
-        det = []
+        det: List[Tuple[int, int]] = []
         ch_main_bin = edges_main > main_threshold
         ch_main_bin = ndi.binary_fill_holes(ch_main_bin)
         ch_main_bin = binary_opening(ch_main_bin)
@@ -402,9 +422,11 @@ class Detector:
         return thresh
 
     @staticmethod
-    def calculate_local_region_threshold(nuclei, channel):
+    def calculate_local_region_threshold(nuclei: List[Tuple[int, int]],
+                                         channel: np.ndarray) -> np.ndarray:
         """
         Method to threshold nuclei for foci extraction
+
         :param nuclei: The points of the nucleus as list
         :param channel: The corresponding channel
         :return: The foci map for the nucleus
@@ -425,21 +447,27 @@ class Detector:
         return chan
 
     @staticmethod
-    def detect_edges(channel, sigma=2, low_threshold=None, high_threshold=None):
+    def detect_edges(channel: np.ndarray, sigma: Union[int, float] = 2,
+                     low_threshold: Union[int, float, None] = None,
+                     high_threshold: Union[int, float, None] = None) -> np.ndarray:
         """
         Privat method to detect the edges of the given channel via the canny operator.
+
         :param channel: The channel to detect the edges on
         :param sigma: Standard deviation of the gaussian kernel
         :param low_threshold: Lower bound for hysteresis thresholding
         :param high_threshold: Upper bound for hysteresis thresholding
-        :return: The edge map as ndarray
+        :return: The edge map
         """
         return canny(channel.astype("float64"), sigma, low_threshold, high_threshold)
 
     @staticmethod
-    def adjusted_flood_fill(starting_point, region_map, truth_table):
+    def adjusted_flood_fill(starting_point: Tuple[int, int],
+                            region_map: np.ndarray,
+                            truth_table: List[bool]) -> Union[List[Tuple[int, int], None]]:
         """
         Adjusted implementation of flood fill to extract a list of connected points
+
         :param starting_point: The point to start flood fill from
         :param region_map: The region to check
         :param truth_table: The table to indicate already checked points
@@ -467,9 +495,10 @@ class Detector:
         return nuc if nuc else None
 
     @staticmethod
-    def imprint_data_into_channel(channel, data, offset):
+    def imprint_data_into_channel(channel: np.ndarray, data: np.ndarray, offset: int) -> None:
         """
-        Method to transfer the information stored in data into channel
+        Method to transfer the information stored in data into channel. Works in place
+
         :param channel: The image channel as ndarray
         :param data: The data to transfer as ndarray
         :param offset: The offset of the data
@@ -481,9 +510,10 @@ class Detector:
                     channel[i + offset[0]][ii + offset[1]] = data[i][ii]
 
     @staticmethod
-    def get_channels(img):
+    def get_channels(img: np.ndarray) -> List[np.ndarray]:
         """
         Method to extract the channels of the given image
+
         :param img: The image as ndarray
         :return: A list of all channels
         """
@@ -493,9 +523,10 @@ class Detector:
         return channels
 
     @staticmethod
-    def create_numpy_from_point_list(lst):
+    def create_numpy_from_point_list(lst: List[Tuple[int, int]]) -> Tuple[np.ndarray, Tuple[int, int]]:
         """
         Method to create a ndarray from a list of points
+
         :param lst: The point list
         :return: The created ndarray and the offset as tuple
         """
@@ -511,9 +542,10 @@ class Detector:
         return numpy, (min_y, min_x)
 
     @staticmethod
-    def get_image_data(path):
+    def get_image_data(path: str) -> Dict[str, Union[int, float, str]]:
         """
         Method to extract relevant metadata from an image
+
         :param path: The URL of the image
         :return: The extracted metadata as dict
         """
@@ -544,9 +576,10 @@ class Detector:
         return image_data
 
     @staticmethod
-    def load_image(path):
+    def load_image(path:str) -> np.ndarray:
         """
         Method to load an image given by path. Method will only load image formats specified by Detector.FORMATS
+
         :param path: The URL of the image
         :return: The image as ndarray
         """
@@ -556,9 +589,10 @@ class Detector:
             raise Warning("Unsupported image format ->{}!".format(os.path.splitext(path)[1]))
 
     @staticmethod
-    def calculate_image_id(path):
+    def calculate_image_id(path: str) -> int:
         """
         Method to calculate the md5 hash sum of the image described by path
+
         :param path: The URL of the image
         :return: The md5 hash sum as hex
         """
@@ -569,9 +603,10 @@ class Detector:
         return hash_md5.hexdigest()
 
     @staticmethod
-    def log(message, state=True):
+    def log(message: str, state: bool = True):
         """
         Method to log messages to the console
+
         :param message: The message to log
         :param state: Enables logging
         :return: None

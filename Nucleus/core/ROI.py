@@ -2,10 +2,11 @@
 Created on 09.04.2019
 @author: Romano Weiss
 """
+from __future__ import annotations
+from typing import Union, Dict, List, Tuple
 import numpy as np
 import hashlib
 import json
-
 from math import sqrt
 
 
@@ -23,7 +24,17 @@ class ROI:
         "marked"
     ]
 
-    def __init__(self, main=True, channel="Blue", auto=True, associated=None, marked=False):
+    def __init__(self, main: bool = True, channel: str = "Blue", auto: bool = True,
+                 associated: Union[ROI, None] = None, marked: bool = False):
+        """
+        Constructor of ROI class
+
+        :param main: Indicates that this roi is on the main channel
+        :param channel: Name of the channel
+        :param auto: Indicates if the roi was automatically generated
+        :param associated: The ROI this ROI is associated with
+        :param marked: Convenience flag for processing
+        """
         self.main = main
         self.ident = channel
         self.auto = auto
@@ -35,7 +46,7 @@ class ROI:
         self.marked = marked
         self.id = None
 
-    def __eq__(self, other):
+    def __eq__(self, other: ROI):
         if isinstance(other, ROI):
             return set(self.points) == set(other.points)
         else:
@@ -74,9 +85,10 @@ class ROI:
             self.id = int("0x" + md5.hexdigest(), 0)
         return self.id
 
-    def merge(self, roi):
+    def merge(self, roi: ROI) -> None:
         """
         Method to merge this roi with another ROI
+
         :param roi: The roi to merge with this
         :return: None
         """
@@ -92,9 +104,10 @@ class ROI:
         else:
             raise ValueError("Not an ROI")
 
-    def add_point(self, point, intensity):
+    def add_point(self, point: Tuple[int, int], intensity: int) -> None:
         """
         Method to add a point to this ROI
+
         :param point: The point as tuple (x,y)
         :param intensity: The intensity of the image associated with this point (int or float)
         :return: None
@@ -105,9 +118,11 @@ class ROI:
         self.dims.clear()
         self.stats.clear()
 
-    def set_points(self, point_list, original):
+    def set_points(self, point_list: List[tuple[int, int]],
+                   original: Union[np.ndarray, Dict[Tuple[int, int], int]]) -> None:
         """
         Method to initialize this roi from a list of points
+
         :param point_list: The points to add to this roi
         :param original: Either the image where the points are derived from or a dict of intensities
         :return: None
@@ -119,9 +134,10 @@ class ROI:
             for p in point_list:
                 self.add_point(p, original[p])
 
-    def calculate_roi_intersection(self, roi):
+    def calculate_roi_intersection(self, roi: ROI) -> float:
         """
         Method to calculate the intersection ratio to another ROI
+
         :param roi: The other ROI
         :return: The degree of intersection as float
         """
@@ -136,9 +152,10 @@ class ROI:
             return len(intersection) / max_intersection
         return 0.0
 
-    def get_as_numpy(self):
+    def get_as_numpy(self) -> None:
         """
         Method to get this roi as numpy array
+
         :return: The created numpy array
         """
         self.calculate_dimensions()
@@ -147,9 +164,10 @@ class ROI:
             array[point[1] - self.dims["minY"], point[0] - self.dims["minX"]] = self.inten[point]
         return array
 
-    def get_as_binary_map(self):
+    def get_as_binary_map(self) -> np.ndarray:
         """
         Method to get this roi as binary map (ndarray)
+
         :return: The created binary map
         """
         self.calculate_dimensions()
@@ -159,9 +177,10 @@ class ROI:
         return array
 
     @staticmethod
-    def get_roi_map(roi, asso, names):
+    def get_roi_map(roi: ROI, asso: ROI, names: List[str]) -> List[np.ndarray]:
         """
         Creates a map of associated roi for the given ROI
+
         :param roi: The roi to create the association map for
         :param asso:  List of to roi associated ROI
         :param names: An ordered list of channel names
@@ -191,9 +210,10 @@ class ROI:
             return focs
 
     @staticmethod
-    def get_binary_roi_map(roi, asso, names):
+    def get_binary_roi_map(roi: ROI, asso: ROI, names: List[str]) -> List[np.ndarray]:
         """
         Creates a binary map of associated roi for the given ROI
+
         :param roi: The roi to create the binary association map for
         :param asso:  List of to roi associated ROI
         :param names: An ordered list of channel names
@@ -222,9 +242,10 @@ class ROI:
             focs[names.index(roi.ident)] = main
             return focs
 
-    def calculate_dimensions(self):
+    def calculate_dimensions(self) -> Dict[str, Union[int, float]]:
         """
         Method to calculate the dimension of this roi
+
         :return: The calculated dimensions as dict
         """
         if not self.dims:
@@ -243,10 +264,11 @@ class ROI:
                 raise Exception("ROI does not contain any points!")
         return self.dims
 
-    def calculate_statistics(self):
+    def calculate_statistics(self) -> dict[str, Union[int, float]]:
         """
         Method to calculate statistics for this roi
-        :return: The calculated statistics as dict
+
+        :return: The calculated statistics
         """
         if not self.stats:
             vals = list(self.inten.values())
@@ -260,9 +282,10 @@ class ROI:
             }
         return self.stats
 
-    def convert_to_json(self):
+    def convert_to_json(self) -> str:
         """
         Method to convert this roi to a json str
+
         :return: The json str
         """
         tempinten = {str(x): value for x, value in self.inten}
@@ -274,9 +297,10 @@ class ROI:
         }
         return json.dumps(d)
 
-    def initialize_from_json(self, json_):
+    def initialize_from_json(self, json_: str) -> None:
         """
         Method to initialize this roi from a json str
+
         :param json_: The json str
         :return: None
         """
