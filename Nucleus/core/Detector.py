@@ -34,13 +34,13 @@ class Detector:
     def __init__(self, settings=None, logging=None):
         self.settings = settings if settings is not None else {
             "ass_qual": True,
-            "names": "APC;FITC;DAPI",
-            "main": 2,
+            "names": "Red;Green;Blue",
+            "main_channel": 2,
             "min_foc_area": 9
         }
         self.logging = logging
 
-    def analyse_image(self, path, main_channel=2, logging=True):
+    def analyse_image(self, path, logging=True):
         """
         Method to extract rois from the image given by path
         :param path: The URL of the image
@@ -53,6 +53,7 @@ class Detector:
         imgdat["id"] = Detector.calculate_image_id(path)
         image = Detector.load_image(path)
         names = self.settings["names"].split(";")
+        main_channel = self.settings["main_channel"]
         if imgdat["channels"] != 3:
             if imgdat["channels"] == 1:
                 raise ValueError("Detector class can only analyse multichannel images, not grayscale!")
@@ -78,6 +79,7 @@ class Detector:
         :param bin_maps: A list of binary maps of the channels
         :param names: The names associated with each channel
         :param main_map: Index of the map containing nuclei
+        :param logging: Indicates if messages should be printed to console
         :return: A list of all detected roi
         """
         # First round of ROI detection
@@ -199,10 +201,9 @@ class Detector:
         foci = [x for _, focs in ass.items() for x in focs if x.associated is not None]
         # Remove very small foci
         foci = [x for x in foci if len(x) > min_foc_area]
-        Detector.log("Removed foci: {}\nTime: {:4f}".format(foclen - len(foci), time.time() - s8), logging)
+        Detector.log("Removed foci: {}\nTime: {:4f}\nFocus Quality Check".format(foclen - len(foci), time.time() - s8), logging)
         # Focus quality check
         s4 = time.time()
-        # TODO Immer noch langsam
         for ind in range(len(foci)):
             focus = foci[ind]
             focdim = focus.calculate_dimensions()
@@ -214,16 +215,15 @@ class Detector:
                     focdim2 = focus2.calculate_dimensions()
                     maxdist2 = max(focdim2["height"], focdim2["width"])
                     c2 = focdim2["center"]
-                    # TODO Nachbearbeiten
                     rdist = math.sqrt((c[0] - c2[0]) ** 2 + (c[1] - c2[1]) ** 2) < maxdist / 2 + maxdist2 / 2
                     if focus.ident == focus2.ident and rdist:
                         if focus.calculate_roi_intersection(focus2) >= max_focus_overlapp:
                             if focus2.points >= focus.points:
-                                rem_list.append(focus2)
+                                focus2.marked = True
                             else:
-                                rem_list.append(focus)
+                                focus.marked = True
                                 break
-        foci = [x for x in foci if x not in rem_list]
+        foci = [x for x in foci if not x.marked]
         rem_list.clear()
         Detector.log("Time: {:4f}\nNucleus Quality Check".format(time.time() - s4), logging)
         # Nucleus quality check
@@ -268,7 +268,6 @@ class Detector:
                 foc_cop.extend(ass[nucleus])
         Detector.log("Watershed applied to {} nuclei, creating {} potential nuclei\n"
                      "Time: {:4f}\nAdd newly found nuclei".format(ws_num, res_nuc, time.time() - s1), logging)
-        # TODO Überprüfen ob so funktionstüchtig
         s2 = time.time()
         for t in ws_list:
             centers = []

@@ -65,7 +65,8 @@ class NucDetect(QMainWindow):
         self.connection = sqlite3.connect(database)
         self.cursor = self.connection.cursor()
         self.settings = self.load_settings()
-        self.detector = Detector(settings=[].extend(list(self.settings.values())))
+        print(self.settings)
+        self.detector = Detector(settings=[].extend(list(self.settings.values())), logging=self.settings["logging"])
         self.reg_images = {}
         self.sel_images = []
         self.cur_img = None
@@ -77,8 +78,8 @@ class NucDetect(QMainWindow):
 
     def load_settings(self):
         """
-        Method to load the saved
-        :return:
+        Method to load the saved Settings
+        :return: None
         """
         self.cursor.execute(
             "SELECT key_, value FROM settings"

@@ -19,10 +19,11 @@ class ROI:
         "inten",
         "stats",
         "associated",
-        "id"
+        "id",
+        "marked"
     ]
 
-    def __init__(self, main=True, channel="Blue", auto=True, associated=None):
+    def __init__(self, main=True, channel="Blue", auto=True, associated=None, marked=False):
         self.main = main
         self.ident = channel
         self.auto = auto
@@ -31,6 +32,7 @@ class ROI:
         self.inten = {}
         self.stats = {}
         self.associated = associated
+        self.marked = marked
         self.id = None
 
     def __eq__(self, other):

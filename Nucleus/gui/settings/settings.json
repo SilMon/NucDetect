@@ -1,9 +1,9 @@
 {
   "General": [
     {
-      "id": "aut_recalc",
-      "title": "Automatic re-calculation on Settings change",
-      "desc": "Automatic calculation restart upon changes in the settings",
+      "id": "logging",
+      "title": "Logging during analysis",
+      "desc": "Should analysis messages be printed to console?",
       "type": "check",
       "value": 2,
       "values": {
@@ -18,16 +18,16 @@
       "value": "./results"
     }
   ],
-  "Processing": [
+  "Analysis": [
     {
       "id": "names",
       "title": "Channel Names",
       "desc": "The names assigned to the isolated channels.Separate the individual names by ';' in the order BRGXY...Z",
       "type": "text",
-      "value": "DAPI;APC;FITC"
+      "value": "Blue;Red;Green"
     },
     {
-      "id": "main",
+      "id": "main_channel",
       "title": "Main Channel Index",
       "desc": "Index of the channel containing nuclei",
       "type": "spin",
