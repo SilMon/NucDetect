@@ -227,6 +227,7 @@ class NucDetect(QMainWindow):
     def add_images_from_folder(self, url):
         """
         Method to load a whole folder of images
+
         :param url: The path of the folder
         :return: None
         """
@@ -237,6 +238,7 @@ class NucDetect(QMainWindow):
     def remove_image_from_list(self):
         """
         Method to remove an loaded image from the file list.
+
         :return: None
         """
         cur_ind = self.ui.list_images.currentIndex()
@@ -253,6 +255,7 @@ class NucDetect(QMainWindow):
     def clear_image_list(self):
         """
         Method to clear the list of loaded images
+
         :return: None
         """
         self.img_list_model.clear()
@@ -261,6 +264,7 @@ class NucDetect(QMainWindow):
     def analyze(self):
         """
         Method to analyze an loaded image
+
         :return: None
         """
         self.res_table_model.setRowCount(0)
@@ -279,6 +283,7 @@ class NucDetect(QMainWindow):
     def analyze_image(self, path, message, percent, maxi):
         """
         Method to analyse the image given by path
+
         :param path: The path leading to the image
         :param message: The message to display above the progress bar
         :param percent: The value of the progress bar
@@ -309,6 +314,7 @@ class NucDetect(QMainWindow):
     def save_rois_to_database(self, data):
         """
         Method to save the data stored in the ROIHandler rois to the database
+
         :param data: The data dict returned by the Detector class
         :return: None
         """
@@ -360,6 +366,7 @@ class NucDetect(QMainWindow):
     def create_result_table_from_list(self, handler):
         """
         Method to create the result table from a list of rois
+
         :param handler: The handler containing the rois
         :return: None
         """
@@ -380,6 +387,7 @@ class NucDetect(QMainWindow):
     def enable_buttons(self, state=True, ana_buttons=True):
         """
         Method to disable or enable the GUI buttons
+
         :param state: The state the buttons will set into
         :param ana_buttons: Indicates if the status of the analysis buttons also should be changed
         :return: None
@@ -398,6 +406,7 @@ class NucDetect(QMainWindow):
     def _select_next_image(self, first=False):
         """
         Method to select the next image in the list of loaded images. Selects the first image if no image is selected
+
         :param first: Indicates if the first image in the list should be selected
         :return: None
         """
@@ -415,6 +424,7 @@ class NucDetect(QMainWindow):
     def _set_progress(self, text, progress, maxi, symbol):
         """
         Method to control the progress bar. Should not be called directly, emit the progress signal instead
+
         :param text: The text to show above the bar
         :param progress: The value of the bar
         :param maxi: The max value of the bar
@@ -428,6 +438,7 @@ class NucDetect(QMainWindow):
     def analyze_all(self):
         """
         Method to perform concurrent batch analysis of registered images
+
         :return: None
         """
         self.enable_buttons(False)
@@ -439,6 +450,7 @@ class NucDetect(QMainWindow):
     def _analyze_all(self):
         """
         Method to perform concurrent batch analysis of registered images
+
         :return: None
         """
         with ProcessPoolExecutor(max_workers=None) as e:
@@ -465,6 +477,7 @@ class NucDetect(QMainWindow):
     def load_rois_from_database(self, md5):
         """
         Method to load all rois associated with this image
+
         :param md5: The md5 hash of the image
         :return: A ROIHandler containing all roi
         """
@@ -502,6 +515,7 @@ class NucDetect(QMainWindow):
     def show_result_image(self):
         """
         Method to open an dialog to show the analysis results as plt plot
+
         :return: None
         """
         image_dialog = ImgDialog(image=Detector.load_image(self.cur_img), handler=self.roi_cache)
@@ -517,6 +531,7 @@ class NucDetect(QMainWindow):
     def save_results(self):
         """
         Method to export the analysis results as csv file
+
         :return: None
         """
         save = Thread(target=self._save_results)
@@ -526,6 +541,7 @@ class NucDetect(QMainWindow):
     def _save_results(self):
         """
         Method to export the analysis results as csv file
+
         :return: None
         """
         self.roi_cache.export_data_as_csv(path=result_path)
@@ -536,6 +552,7 @@ class NucDetect(QMainWindow):
     def on_config_change(self, config, section, key, value):
         """
         Will be called if changed occur in the program settings
+
         :param config: The changed config
         :param section: The section in which the change occured
         :param key: The identifier of the changed field
@@ -549,6 +566,7 @@ class NucDetect(QMainWindow):
     def show_statistics(self):
         """
         Method to open a dialog showing various statistics
+
         :return: None
         """
         # TODO Poisson überprüfen
@@ -673,6 +691,7 @@ class NucDetect(QMainWindow):
     def show_categorization(self):
         """
         Method to open a dialog to enable the user to categories the loaded image
+
         :return: None
         """
         cl_dialog = QDialog()
@@ -696,6 +715,7 @@ class NucDetect(QMainWindow):
     def _categorize_image(self, categories):
         """
         Method to save image categories to the database
+
         :param categories: The categories to save as str, individually separated by \n
         :return: None
         """
@@ -715,6 +735,7 @@ class NucDetect(QMainWindow):
     def show_settings(self):
         """
         Method to open the settings dialog
+
         :return: None
         """
         # TODO
@@ -738,6 +759,7 @@ class NucDetect(QMainWindow):
     def show_modification_window(self):
         """
         Method to open the modification dialog, allowing the user to modify automatically determined results
+
         :return: None
         """
         mod = ModificationDialog(image=Detector.load_image(self.cur_img), handler=self.roi_cache)
@@ -756,6 +778,7 @@ class NucDetect(QMainWindow):
     def on_close(self):
         """
         Will be called if the program window closes
+
         :return:
         """
         self.connection.close()
@@ -776,6 +799,7 @@ class ResultFigure(FigureCanvas):
     def show_image(self, image, image_title="", show_axis="On"):
         """
         Method to show an image in the ResultFigure
+
         :param image: The image to show as numpy array
         :param image_title: The title to display for the image
 
@@ -792,6 +816,7 @@ class ResultFigure(FigureCanvas):
     def save(self):
         """
         Method to save the figure to file
+
         :return: None
         """
         pardir = os.getcwd()
@@ -820,6 +845,7 @@ class MPLPlot(FigureCanvas):
     def save(self):
         """
         Method to save the plot as image
+
         :return: None
         """
         pardir = os.getcwd()
@@ -1054,6 +1080,7 @@ class SettingsDialog(QDialog):
     def initialize_from_file(self, url):
         """
         Method to initialize the settings window from a JSON file
+
         :param url: The URL leading to the JSON
         :return: None
         """
@@ -1069,6 +1096,7 @@ class SettingsDialog(QDialog):
     def add_section(self, section):
         """
         Method to add a section to the settings
+
         :param section: The name of the section
         :return: None
         """
@@ -1092,6 +1120,7 @@ class SettingsDialog(QDialog):
     def add_menu_point(self, section, menupoint):
         """
         Method to add a menu point to the settings section
+
         :param section: The name of the section
         :param menupoint: The menupoint
         :return: None
@@ -1201,6 +1230,7 @@ class SettingsDialog(QDialog):
     def menupoint_changed(self, _id=None, value=None):
         """
         Method to detect value changes of the settings widgets
+
         :param _id: The id of the widget as str
         :param value: The value of the widget. Types depends on widget type
         :return: None
@@ -1211,6 +1241,7 @@ class SettingsDialog(QDialog):
     def save_menu_settings(self):
         """
         Method to save the changes of the settings back to the defining JSON file
+
         :return: None
         :raises: RuntimeError if no JSON was loaded
         """
@@ -1539,6 +1570,7 @@ class NucView(QGraphicsView):
     def get_qimage_from_numpy(numpy, mode=None):
         """
         Method to convert a numpy array to an QImage
+
         :param numpy: The array to convert
         :param mode: The mode to use for conversion
         :return: The QImage
