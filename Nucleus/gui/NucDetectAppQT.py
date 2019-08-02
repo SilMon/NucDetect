@@ -1,3 +1,4 @@
+from __future__ import annotations
 import copy
 import json
 import os
@@ -6,6 +7,7 @@ import sys
 import time
 from threading import Thread
 from concurrent.futures import ProcessPoolExecutor
+from typing import Union, Dict, List, Tuple, Any
 
 import PyQt5
 import math
@@ -18,10 +20,11 @@ from PIL.ImageQt import ImageQt
 from PyQt5 import QtCore, QtWidgets
 from PyQt5 import uic
 from PyQt5.QtCore import QSize, Qt, pyqtSignal, QRectF, QItemSelectionModel
-from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon, QPixmap, QColor, QBrush, QPen
+from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon, QPixmap, QColor, QBrush, QPen, QResizeEvent, \
+    QKeyEvent, QMouseEvent, QPainter
 from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, QSizePolicy, QWidget, \
     QVBoxLayout, QScrollArea, QMessageBox, QGraphicsScene, QGraphicsEllipseItem, QGraphicsView, QGraphicsItem, \
-    QGraphicsPixmapItem, QLabel, QGraphicsLineItem
+    QGraphicsPixmapItem, QLabel, QGraphicsLineItem, QStyleOptionGraphicsItem
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
@@ -76,7 +79,7 @@ class NucDetect(QMainWindow):
         self.setWindowTitle("NucDetect")
         self.setWindowIcon(QtGui.QIcon('logo.png'))
 
-    def load_settings(self):
+    def load_settings(self) -> None:
         """
         Method to load the saved Settings
         :return: None
@@ -86,7 +89,7 @@ class NucDetect(QMainWindow):
         )
         return dict(self.cursor.fetchall())
 
-    def closeEvent(self, event):
+    def closeEvent(self, event) -> None:
         """
         Will be called if the program window closes
         :param event: The closing event
@@ -95,7 +98,7 @@ class NucDetect(QMainWindow):
         self.on_close()
         event.accept()
 
-    def _setup_ui(self):
+    def _setup_ui(self) -> None:
         """
         Method to initialize the UI of the main window
         :return: None
@@ -145,7 +148,7 @@ class NucDetect(QMainWindow):
                               r"images")
         self.add_images_from_folder(imgdir)
 
-    def on_image_selection_change(self):
+    def on_image_selection_change(self) -> None:
         """
         Will be called if a new image is selected
         :return: None
@@ -175,7 +178,7 @@ class NucDetect(QMainWindow):
         else:
             self.ui.btn_analyse.setEnabled(False)
 
-    def _show_loading_dialog(self):
+    def _show_loading_dialog(self) -> None:
         """
         Method to show a file loading dialog, which allows the user to select images.
         :return: None
@@ -191,7 +194,7 @@ class NucDetect(QMainWindow):
         if file_name:
             self.add_image_to_list(file_name.replace("/", os.sep))
 
-    def add_image_to_list(self, path):
+    def add_image_to_list(self, path: str) -> None:
         """
         Method to add an image to the list of loaded files. The image will be processed, added and loaded.
         :param path: The path leading to the file
@@ -224,7 +227,7 @@ class NucDetect(QMainWindow):
                 )
             self.connection.commit()
 
-    def add_images_from_folder(self, url):
+    def add_images_from_folder(self, url: str) -> None:
         """
         Method to load a whole folder of images
 
@@ -235,7 +238,7 @@ class NucDetect(QMainWindow):
             for file in t[2]:
                 self.add_image_to_list(os.path.join(t[0], file))
 
-    def remove_image_from_list(self):
+    def remove_image_from_list(self) -> None:
         """
         Method to remove an loaded image from the file list.
 
@@ -252,7 +255,7 @@ class NucDetect(QMainWindow):
             self.ui.list_images.selectionModel().select(nex, QItemSelectionModel.Select)
             self.ui.list_images.setCurrentIndex(nex)
 
-    def clear_image_list(self):
+    def clear_image_list(self) -> None:
         """
         Method to clear the list of loaded images
 
@@ -261,7 +264,7 @@ class NucDetect(QMainWindow):
         self.img_list_model.clear()
         self.reg_images.clear()
 
-    def analyze(self):
+    def analyze(self) -> None:
         """
         Method to analyze an loaded image
 
@@ -280,7 +283,7 @@ class NucDetect(QMainWindow):
                               100, 100,))
         thread.start()
 
-    def analyze_image(self, path, message, percent, maxi):
+    def analyze_image(self, path: str, message: str, percent: Union[int, float], maxi: Union[int, float]) -> None:
         """
         Method to analyse the image given by path
 
@@ -311,7 +314,7 @@ class NucDetect(QMainWindow):
         self.ui.btn_analyse.setEnabled(False)
         self.ui.list_images.setEnabled(True)
 
-    def save_rois_to_database(self, data):
+    def save_rois_to_database(self, data: Dict[str, Union[int, float, str]]) -> None:
         """
         Method to save the data stored in the ROIHandler rois to the database
 
@@ -363,7 +366,7 @@ class NucDetect(QMainWindow):
         con.commit()
         con.close()
 
-    def create_result_table_from_list(self, handler):
+    def create_result_table_from_list(self, handler: ROIHandler) -> None:
         """
         Method to create the result table from a list of rois
 
@@ -384,7 +387,7 @@ class NucDetect(QMainWindow):
                 row.append(item)
             self.res_table_model.appendRow(row)
 
-    def enable_buttons(self, state=True, ana_buttons=True):
+    def enable_buttons(self, state: bool = True, ana_buttons: bool = True) -> None:
         """
         Method to disable or enable the GUI buttons
 
@@ -403,7 +406,7 @@ class NucDetect(QMainWindow):
         self.ui.btn_categories.setEnabled(state)
         self.ui.btn_modify.setEnabled(state)
 
-    def _select_next_image(self, first=False):
+    def _select_next_image(self, first: bool = False) -> None:
         """
         Method to select the next image in the list of loaded images. Selects the first image if no image is selected
 
@@ -421,7 +424,7 @@ class NucDetect(QMainWindow):
             self.ui.list_images.selectionModel().select(first, QItemSelectionModel.Select)
             self.ui.list_images.setCurrentIndex(first)
 
-    def _set_progress(self, text, progress, maxi, symbol):
+    def _set_progress(self, text: str, progress: Union[int, float], maxi: Union[int, float], symbol: str) -> None:
         """
         Method to control the progress bar. Should not be called directly, emit the progress signal instead
 
@@ -435,7 +438,7 @@ class NucDetect(QMainWindow):
         self.ui.prg_bar.setMaximum(maxi)
         self.ui.prg_bar.setValue(progress)
 
-    def analyze_all(self):
+    def analyze_all(self) -> None:
         """
         Method to perform concurrent batch analysis of registered images
 
@@ -447,7 +450,7 @@ class NucDetect(QMainWindow):
         thread = Thread(target=self._analyze_all)
         thread.start()
 
-    def _analyze_all(self):
+    def _analyze_all(self) -> None:
         """
         Method to perform concurrent batch analysis of registered images
 
@@ -474,7 +477,7 @@ class NucDetect(QMainWindow):
                                  100, "")
             self.selec_signal.emit(True)
             
-    def load_rois_from_database(self, md5):
+    def load_rois_from_database(self, md5: int) -> ROIHandler:
         """
         Method to load all rois associated with this image
 
@@ -512,7 +515,7 @@ class NucDetect(QMainWindow):
                     s.associated = m
         return rois
 
-    def show_result_image(self):
+    def show_result_image(self) -> None:
         """
         Method to open an dialog to show the analysis results as plt plot
 
@@ -528,7 +531,7 @@ class NucDetect(QMainWindow):
 
         image_dialog.exec_()
 
-    def save_results(self):
+    def save_results(self) -> None:
         """
         Method to export the analysis results as csv file
 
@@ -538,7 +541,7 @@ class NucDetect(QMainWindow):
         self.prg_signal.emit("Saving Results", 0, 100, "")
         save.start()
 
-    def _save_results(self):
+    def _save_results(self) -> None:
         """
         Method to export the analysis results as csv file
 
@@ -549,7 +552,7 @@ class NucDetect(QMainWindow):
         self.prg_signal.emit("Results saved -- Program ready", 100, 100, "")
         self.unsaved_changes = False
 
-    def on_config_change(self, config, section, key, value):
+    def on_config_change(self, config, section, key: str, value: Union[str, int, float]) -> None:
         """
         Will be called if changed occur in the program settings
 
@@ -560,10 +563,11 @@ class NucDetect(QMainWindow):
         :return: None
         """
         # TODO Implement & test
+        print(config)
         if section == "Analysis":
             self.detector.settings[key] = value
 
-    def show_statistics(self):
+    def show_statistics(self) -> None:
         """
         Method to open a dialog showing various statistics
 
@@ -688,7 +692,7 @@ class NucDetect(QMainWindow):
                                    QtCore.Qt.WindowMinMaxButtonsHint)
         code = stat_dialog.exec()
 
-    def show_categorization(self):
+    def show_categorization(self) -> None:
         """
         Method to open a dialog to enable the user to categories the loaded image
 
@@ -712,7 +716,7 @@ class NucDetect(QMainWindow):
         if code == QDialog.Accepted:
             self._categorize_image(cl_dialog.ui.te_cat.toPlainText())
 
-    def _categorize_image(self, categories):
+    def _categorize_image(self, categories: str) -> None:
         """
         Method to save image categories to the database
 
@@ -732,7 +736,7 @@ class NucDetect(QMainWindow):
                     (hash_, cat)
                 )
 
-    def show_settings(self):
+    def show_settings(self) -> None:
         """
         Method to open the settings dialog
 
@@ -750,13 +754,16 @@ class NucDetect(QMainWindow):
                 for key, value in sett.changed.items():
                     self.detector.settings[key] = value
                     print("Key: {} Value: {}".format(key, value))
+                    # TODO
+                    """
                     self.cursor.execute(
                         "INSERT INTO settings VALUES(?, ?)",
-                        (key, value)
+                        (key, str(value))
                     )
+                    """
             sett.save_menu_settings()
 
-    def show_modification_window(self):
+    def show_modification_window(self) -> None:
         """
         Method to open the modification dialog, allowing the user to modify automatically determined results
 
@@ -775,7 +782,7 @@ class NucDetect(QMainWindow):
         elif code == QDialog.Rejected:
             self.roi_cache = mod.handler
 
-    def on_close(self):
+    def on_close(self) -> None:
         """
         Will be called if the program window closes
 
@@ -786,7 +793,8 @@ class NucDetect(QMainWindow):
 
 class ResultFigure(FigureCanvas):
 
-    def __init__(self, name, width=4, height=4, dpi=65, parent=None):
+    def __init__(self, name: str, width: Union[int, float] = 4,
+                 height: Union[int, float] = 4, dpi: Union[int, float] = 65, parent: QWidget = None):
         self.fig = Figure(figsize=(width, height), dpi=dpi)
         self.name = name
         self.setParent(parent)
@@ -796,13 +804,13 @@ class ResultFigure(FigureCanvas):
                                    QSizePolicy.Expanding,
                                    QSizePolicy.Expanding)
 
-    def show_image(self, image, image_title="", show_axis="On"):
+    def show_image(self, image: np.ndarray, image_title: str = "", show_axis: str = "On") -> None:
         """
         Method to show an image in the ResultFigure
 
         :param image: The image to show as numpy array
         :param image_title: The title to display for the image
-
+        :param show_axis: Indicates if the axis should be shown
         :return: None
         """
         ax = self.figure.add_subplot(111)
@@ -813,7 +821,7 @@ class ResultFigure(FigureCanvas):
         ax.set_xlabel("Width")
         self.draw()
 
-    def save(self):
+    def save(self) -> None:
         """
         Method to save the figure to file
 
@@ -832,7 +840,8 @@ class ResultFigure(FigureCanvas):
 
 class MPLPlot(FigureCanvas):
 
-    def __init__(self, name, width=4, height=4, dpi=65, parent=None):
+    def __init__(self, name: str, width: Union[int, float] = 4, height: Union[int, float] = 4,
+                 dpi: Union[int, float] = 65, parent: QWidget=None):
         self.fig = Figure(figsize=(width, height), dpi=dpi)
         self.name = name
         self.axes = self.fig.add_subplot(111)
@@ -842,7 +851,7 @@ class MPLPlot(FigureCanvas):
                                    QSizePolicy.Expanding,
                                    QSizePolicy.Expanding)
 
-    def save(self):
+    def save(self) -> None:
         """
         Method to save the plot as image
 
@@ -861,12 +870,14 @@ class MPLPlot(FigureCanvas):
 
 class PoissonCanvas(MPLPlot):
 
-    def __init__(self, _lambda, k, values, title="", name="", parent=None, width=4, height=4, dpi=65):
+    def __init__(self, _lambda: Union[int, float], k: int, values: List[Union[int, float]],
+                 title: str = "", name: str = "", parent: QWidget = None, width: Union[int, float] = 4,
+                 height: Union[int, float] = 4, dpi: Union[int, float] = 65):
         super(PoissonCanvas, self).__init__(name, width, height, dpi, parent)
         self.title = title
         self.plot(_lambda, k, values)
 
-    def plot(self, _lambda, k, values):
+    def plot(self, _lambda: Union[int, float], k: int, values: List[Union[int, float]]) -> None:
         poisson = np.random.poisson(_lambda, k)
         ax = self.figure.add_subplot(111)
         objects = np.arange(k)
@@ -889,9 +900,11 @@ class PoissonCanvas(MPLPlot):
 
 class XYChart(MPLPlot):
 
-    def __init__(self, x_values, y_values, dat_labels, col_marks=["ro"], parent=None, name="", title="", x_title="",
-                 y_title="", width=4, height=4, dpi=65, x_label_max_num=20, y_label_max_num=20, x_label_rotation=0,
-                 y_label_rotation=0):
+    def __init__(self, x_values: List[Union[int, float]], y_values: List[Union[int, float]], dat_labels: List[str],
+                 col_marks: List[str] = ("ro",), parent: QWidget = None, name: str = "", title: str = "",
+                 x_title: str = "", y_title: str = "", width: Union[int, float] = 4, height: Union[int, float] = 4,
+                 dpi: Union[int, float] = 65, x_label_max_num: int = 20, y_label_max_num: int = 20,
+                 x_label_rotation: Union[int, float] = 0, y_label_rotation: Union[int, float] = 0):
         super(XYChart, self).__init__(name, width, height, dpi, parent)
         self.name = name
         self.title = title
@@ -908,7 +921,7 @@ class XYChart(MPLPlot):
         self.lines = []
         self.plot()
 
-    def plot(self):
+    def plot(self) -> None:
         ax = self.figure.add_subplot(111)
         ax.set_title(self.title)
         ax.set_ylabel(self.y_title)
@@ -937,9 +950,10 @@ class XYChart(MPLPlot):
 
 class BarChart(MPLPlot):
 
-    def __init__(self, values, labels, colors=[], parent=None, overlay=True, name="",
-                 title="", x_title="", y_title="", width=4, height=4, dpi=65,
-                 x_label_rotation=0, y_label_rotation=0):
+    def __init__(self, values: List[int], labels: List[str], colors: List[str] = (), parent: QWidget = None,
+                 overlay: bool = True, name: str = "", title: str = "", x_title: str = "", y_title: str = "",
+                 width: Union[int, float] = 4, height: Union[int, float] = 4, dpi: Union[int, float] = 65,
+                 x_label_rotation: Union[int, float] = 0, y_label_rotation: Union[int, float] = 0):
         super(BarChart, self).__init__(name, width, height, dpi, parent)
         self.title = title
         self.x_title = x_title
@@ -952,7 +966,7 @@ class BarChart(MPLPlot):
         self.overlay = overlay
         self.plot()
 
-    def plot(self):
+    def plot(self) -> None:
         ax = self.figure.add_subplot(111)
         ax.set_title(self.title)
         ax.set_ylabel(self.y_title)
@@ -989,7 +1003,7 @@ class ImgDialog(QDialog):
         "wo"   # White
     ]
 
-    def __init__(self, image, handler, parent=None):
+    def __init__(self, image: np.ndarray, handler: ROIHandler, parent: QWidget = None):
         super(ImgDialog, self).__init__(parent)
         self.orig = image.copy()
         self.image = image
@@ -1002,7 +1016,7 @@ class ImgDialog(QDialog):
         self.initialize_ui()
         self.setAttribute(QtCore.Qt.WA_DeleteOnClose)
 
-    def initialize_ui(self):
+    def initialize_ui(self) -> None:
         self.canvas.setSizePolicy(
             QSizePolicy.Expanding,
             QSizePolicy.Expanding
@@ -1015,21 +1029,21 @@ class ImgDialog(QDialog):
         self.ui.navbar.insertWidget(0, self.nav, 3)
         self.layout().addWidget(self.canvas)
 
-    def resizeEvent(self, event):
+    def resizeEvent(self, event: QResizeEvent) -> None:
         super(ImgDialog, self).resizeEvent(event)
         self.set_current_image()
 
-    def on_channel_selection_change(self):
+    def on_channel_selection_change(self) -> None:
         if self.ui.cbx_channels.currentIndex() < len(self.handler.idents):
             self.image = self.orig[..., self.ui.cbx_channels.currentIndex()]
         else:
             self.image = self.orig.copy()
         self.set_current_image()
 
-    def on_button_click(self):
+    def on_button_click(self) -> None:
         self.save_image()
 
-    def set_current_image(self):
+    def set_current_image(self) -> None:
         cur_ind = self.ui.cbx_channels.currentIndex()
         # create an axis
         ax = self.figure.add_subplot(111)
@@ -1066,7 +1080,7 @@ class SettingsDialog(QDialog):
     Class to display a settings window, dynamically generated from a JSON file
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: QWidget = None):
         super(SettingsDialog, self).__init__(parent)
         self.data = {}
         self.changed = {}
@@ -1074,10 +1088,10 @@ class SettingsDialog(QDialog):
         self.url = None
         self._initialize_ui()
 
-    def _initialize_ui(self):
+    def _initialize_ui(self) -> None:
         self.ui = uic.loadUi(ui_settings_dial, self)
 
-    def initialize_from_file(self, url):
+    def initialize_from_file(self, url: str) -> None:
         """
         Method to initialize the settings window from a JSON file
 
@@ -1093,7 +1107,7 @@ class SettingsDialog(QDialog):
             for section, p in j_dat.items():
                 self.add_menu_point(section, p)
 
-    def add_section(self, section):
+    def add_section(self, section: str) -> None:
         """
         Method to add a section to the settings
 
@@ -1117,7 +1131,7 @@ class SettingsDialog(QDialog):
             tab.setWidget(kernel)
             self.ui.settings.addTab(tab, section)
 
-    def add_menu_point(self, section, menupoint):
+    def add_menu_point(self, section:str, menupoint: Dict[str, Union[str, float, int]]) -> None:
         """
         Method to add a menu point to the settings section
 
@@ -1227,7 +1241,7 @@ class SettingsDialog(QDialog):
                     base[0].addWidget(p)
                 base[0].addStretch()
 
-    def menupoint_changed(self, _id=None, value=None):
+    def menupoint_changed(self, _id: str = None, value: Union[str, int, float] = None) -> None:
         """
         Method to detect value changes of the settings widgets
 
@@ -1238,7 +1252,7 @@ class SettingsDialog(QDialog):
         self.changed[_id] = value
         self.data[_id] = value
 
-    def save_menu_settings(self):
+    def save_menu_settings(self) -> None:
         """
         Method to save the changes of the settings back to the defining JSON file
 
@@ -1263,7 +1277,7 @@ class SettingsDialog(QDialog):
 
 class ModificationDialog(QDialog):
 
-    def __init__(self, image=None, handler=None, parent=None):
+    def __init__(self, image: np.ndarray = None, handler: ROIHandler = None, parent: QWidget = None) -> None:
         super(ModificationDialog, self).__init__(parent)
         self.handler = handler
         self.image = image
@@ -1283,7 +1297,7 @@ class ModificationDialog(QDialog):
         self.btn_col = QColor(47, 167, 212)
         self.initialize_ui()
 
-    def accept(self):
+    def accept(self) -> None:
         for comm in self.commands:
             self.curs.execute(
                 comm[0],
@@ -1293,11 +1307,11 @@ class ModificationDialog(QDialog):
         self.conn.close()
         super(ModificationDialog, self).accept()
 
-    def reject(self):
+    def reject(self) -> None:
         self.handler = self.original
         super(ModificationDialog, self).reject()
 
-    def initialize_ui(self):
+    def initialize_ui(self) -> None:
         self.ui = uic.loadUi(ui_modification_dial, self)
         # Initialize channel selector
         chan_num = len(self.handler.idents)
@@ -1327,7 +1341,7 @@ class ModificationDialog(QDialog):
         # Initialize interactivity of graphics view
         self.set_current_image()
 
-    def set_list_images(self, images):
+    def set_list_images(self, images: List[np.ndarray]) -> None:
         self.lst_nuc_model.clear()
         for image in images:
             item = QStandardItem()
@@ -1342,11 +1356,15 @@ class ModificationDialog(QDialog):
             item.setIcon(ic)
             self.lst_nuc_model.appendRow(item)
 
-    def on_nucleus_selection_change(self):
+    def on_nucleus_selection_change(self) -> None:
         self.cur_channel = self.ui.sb_channel.value()
         self.set_current_image()
 
-    def on_button_click(self):
+    def on_button_click(self) -> None:
+        """
+        Method to handle button clicks
+        :return: None
+        """
         ident = self.sender().objectName()
         if ident == "btn_show":
             self.show = self.ui.btn_show.isChecked()
@@ -1454,17 +1472,29 @@ class ModificationDialog(QDialog):
                 self.view.split = False
         self.set_current_image()
 
-    def update_nucleus_list(self):
+    def update_nucleus_list(self) -> None:
+        """
+        Method to update the interface list after changes
+        :return: None
+        """
         self.set_list_images(self.view.images)
         self.cur_index = len(self.view.images) - 1
         self.update_list_indices()
         self.set_current_image()
 
-    def update_list_indices(self):
+    def update_list_indices(self) -> None:
+        """
+        Method to change the displayed indices in the interface list after changes
+        :return: None
+        """
         for a in range(len(self.view.main)):
             self.lst_nuc_model.item(a, 0).setText("Index: {}\nHash: {}".format(a, hash(self.view.main[a])))
 
-    def on_selection_change(self):
+    def on_selection_change(self) -> None:
+        """
+        Method to handle selection changes
+        :return: None
+        """
         index = self.ui.lst_nuc.selectionModel().selectedIndexes()
         self.ui.btn_merge.setEnabled(False)
         if index:
@@ -1474,19 +1504,28 @@ class ModificationDialog(QDialog):
             if len(index) > 1:
                 self.ui.btn_merge.setEnabled(True)
 
-    def set_current_image(self):
+    def set_current_image(self) -> None:
+        """
+        Method to change the displayed image
+        :return: None
+        """
         if self.cur_index < len(self.view.main):
             self.view.show_nucleus(self.cur_index, self.cur_channel)
             self.update_counting_label()
 
-    def update_counting_label(self):
+    def update_counting_label(self) -> None:
+        """
+        Method to update the counting label
+        :return:
+        """
         self.ui.lbl_number.setText("Foci: {}".format(self.view.cur_foc_num))
 
 
 class NucView(QGraphicsView):
 
-    def __init__(self, image, handler, commands, cur_channel=None, show=True, edit=False, max_channel=None,
-                 db_curs=None, parent=None):
+    def __init__(self, image: np.ndarray, handler: ROIHandler, commands: List[Tuple[str, Tuple[Any]]],
+                 cur_channel: int = None, show: bool = True, edit: bool = False, max_channel: int = None,
+                 db_curs: sqlite3.Cursor = None, parent: QWidget = None):
         super(NucView, self).__init__()
         self.par = parent
         self.setMouseTracking(True)
@@ -1528,7 +1567,13 @@ class NucView(QGraphicsView):
         self.sc_bckg = self.scene().addPixmap(QPixmap())
         self.show_nucleus(self.cur_ind, self.channel)
 
-    def show_nucleus(self, cur_ind, channel):
+    def show_nucleus(self, cur_ind: int, channel: int) -> None:
+        """
+        Method to show a channel of the nucleus specified by index
+        :param cur_ind: The index of the nucleus
+        :param channel: The channel to show
+        :return: None
+        """
         self.cur_ind = cur_ind
         self.cur_nuc = self.main[cur_ind]
         self.channel = channel
@@ -1567,7 +1612,7 @@ class NucView(QGraphicsView):
                     self.cur_foc_num += 1
 
     @staticmethod
-    def get_qimage_from_numpy(numpy, mode=None):
+    def get_qimage_from_numpy(numpy: np.ndarray, mode: str = None) -> ImageQt:
         """
         Method to convert a numpy array to an QImage
 
@@ -1579,15 +1624,19 @@ class NucView(QGraphicsView):
         qimg = ImageQt(img)
         return qimg
 
-    def clear_scene(self):
+    def clear_scene(self) -> None:
+        """
+        Method to remove all displayed foci from the screen
+        :return: None
+        """
         for item in self.foc_group:
             self.scene().removeItem(item)
         self.foc_group.clear()
 
-    def resizeEvent(self, event):
+    def resizeEvent(self, event: QResizeEvent) -> None:
         self.show_nucleus(self.cur_ind, self.channel)
 
-    def keyPressEvent(self, event):
+    def keyPressEvent(self, event: QKeyEvent) -> None:
         super(NucView, self).keyPressEvent(event)
         if event.key() == Qt.Key_Delete and not self.split:
             for item in self.foc_group:
@@ -1595,7 +1644,7 @@ class NucView(QGraphicsView):
                     # TODO Fehlerhaft
                     self.handler.remove_roi(self.map[item])
                     self.commands.extend((("DELETE FROM roi WHERE hash=?",
-                                          (hash(self.map[item]),)),
+                                         (hash(self.map[item]),)),
                                          ("DELETE FROM points WHERE hash=?",
                                           (hash(self.map[item]),))))
                     del self.map[item]
@@ -1603,7 +1652,7 @@ class NucView(QGraphicsView):
                     self.cur_foc_num -= 1
                     self.par.update_counting_label()
 
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, event: QMouseEvent) -> None:
         super(NucView, self).mousePressEvent(event)
         if self.edit and event.button() == Qt.LeftButton and \
                 self.channel < self.handler.idents.index(self.handler.main) and not self.split:
@@ -1636,7 +1685,7 @@ class NucView(QGraphicsView):
             self.temp_foc = None
             self.temp_split = None
 
-    def mouseMoveEvent(self, event):
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
         super(NucView, self).mouseMoveEvent(event)
         if self.temp_foc is not None:
             tw = max(event.pos().x(), self.pos.x()) - min(self.pos.x(), event.pos().x())
@@ -1655,7 +1704,7 @@ class NucView(QGraphicsView):
         elif self.temp_split is not None:
             self.temp_split.setLine(self.pos.x(), self.pos.y(), event.pos().x(), event.pos().y())
 
-    def mouseReleaseEvent(self, event):
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         super(NucView, self).mouseReleaseEvent(event)
 
         if self.temp_foc is not None:
@@ -1809,7 +1858,7 @@ class QGraphicsFocusItem(QGraphicsEllipseItem):
         QColor(0, 255, 255),  # Cyan
     ]
 
-    def __init__(self, color_index=0):
+    def __init__(self, color_index: int = 0):
         super(QGraphicsFocusItem, self).__init__()
         col_num = len(QGraphicsFocusItem.COLORS)
         self.main_color = QGraphicsFocusItem.COLORS[color_index if color_index < col_num else col_num % color_index]
@@ -1827,7 +1876,7 @@ class QGraphicsFocusItem(QGraphicsEllipseItem):
         self.cur_col = self.main_color
         self.update()
 
-    def paint(self, painter, style, widget=None):
+    def paint(self, painter: QPainter, style: QStyleOptionGraphicsItem, widget: QWidget = None) -> None:
         if self.isSelected():
             painter.setPen(QPen(self.sel_color, 6))
         else:

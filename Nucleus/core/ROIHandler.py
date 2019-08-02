@@ -2,6 +2,8 @@
 Created on 09.04.2019
 @author: Romano Weiss
 """
+from __future__ import annotations
+from typing import Union, Dict, List, Tuple
 import numpy as np
 import csv
 import datetime
@@ -17,7 +19,7 @@ class ROIHandler:
         "stats",
     ]
 
-    def __init__(self, ident=None):
+    def __init__(self, ident: int = None):
         self.ident = ident
         self.rois = []
         self.idents = []
@@ -42,7 +44,7 @@ class ROIHandler:
         self.rois.remove(roi)
         self.stats.clear()
 
-    def calculate_statistics(self):
+    def calculate_statistics(self) -> None:
         """
         Method to calculate statistics about the saved ROIs
         :return: dict -- A dictonary containing the calculated statistics
@@ -109,7 +111,7 @@ class ROIHandler:
             }
         return self.stats
 
-    def get_data_as_dict(self):
+    def get_data_as_dict(self) -> Dict[str, List[Union[str, int, float, Tuple[int, int]]]]:
         """
         Method to retrieve the stored ROI data as list
         :return: The data as dict
@@ -145,7 +147,8 @@ class ROIHandler:
                 tempdat["data"].append(row)
         return tempdat
 
-    def export_data_as_csv(self, path, delimiter=",", quotechar="|"):
+    def export_data_as_csv(self, path: str, delimiter: str = ",",
+                           quotechar: str = "|") -> bool:
         """
         Method to save the roi data to a csv table
         :param path: The folder to save the file in

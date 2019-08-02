@@ -2,6 +2,7 @@
 Created 09.04.2019
 @author Romano Weiss
 """
+from __future__ import annotations
 import os
 import hashlib
 
@@ -360,7 +361,7 @@ class Detector:
 
     @staticmethod
     def perform_labelling(local_maxima: List[np.ndarray],
-                          main_map: int = -1) -> Tuple[List[np.ndarray, int], List[Union[int, float]]]:
+                          main_map: int = -1) -> Tuple[List[Union[np.ndarray, int]], List[Union[int, float]]]:
         """
         Method to label a list of maps of local maxima with unique identifiers
 
@@ -464,7 +465,7 @@ class Detector:
     @staticmethod
     def adjusted_flood_fill(starting_point: Tuple[int, int],
                             region_map: np.ndarray,
-                            truth_table: List[bool]) -> Union[List[Tuple[int, int], None]]:
+                            truth_table: List[bool]) -> Union[List[Tuple[int, int]], None]:
         """
         Adjusted implementation of flood fill to extract a list of connected points
 
