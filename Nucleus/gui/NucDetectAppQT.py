@@ -1,5 +1,6 @@
 from __future__ import annotations
 import copy
+import datetime
 import json
 import os
 import sqlite3
@@ -205,7 +206,8 @@ class NucDetect(QMainWindow):
         file = temp[1]
         if os.path.splitext(file)[1] in Detector.FORMATS:
             d = Detector.get_image_data(path)
-            t = d["datetime"].decode("ascii").split(" ")
+            date = d["datetime"]
+            t = date.decode("ascii").split(" ") if not isinstance(date, datetime.datetime) else date.strftime("%d/%m/%Y, %H:%M:%S")
             item = QStandardItem()
             item_text = "Name: {}\nFolder: {}\nDate: {}\nTime: {}".format(file, folder, t[0], t[1])
             item.setText(item_text)

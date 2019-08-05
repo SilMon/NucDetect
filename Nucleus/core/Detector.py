@@ -3,6 +3,8 @@ Created 09.04.2019
 @author Romano Weiss
 """
 from __future__ import annotations
+
+import datetime
 import os
 import hashlib
 
@@ -158,11 +160,12 @@ class Detector:
     @staticmethod
     def perform_roi_quality_check(rois: List[ROI], max_focus_overlapp: float = .75, min_dist: int = 45,
                                   min_thresh: int = 25, max_thresh: int = 60, min_main_area: int = 400,
-                                  min_foc_area: int = 9, max_main_area: int = 16000, ws_line: bool = False,
+                                  min_foc_area: int = 5, max_main_area: int = 16000, ws_line: bool = False,
                                   logging: bool = True) -> None:
         """
         Method to check detected rois for their quality. Changes ROI in place.
 
+        :param min_foc_area: The minimal area of a focus
         :param rois: A list of detected rois
         :param max_focus_overlapp: The threshold used to determine if two rois are considered duplicates
         :param min_dist: The minimal distance between 2 nuclei
@@ -397,9 +400,22 @@ class Detector:
         edges_main = np.pad(channels[main_channel], pad_width=pad,
                             mode="constant", constant_values=0)
         # TODO Sobel eventuell mit Gabor tauschen
+        # TODO Funktioniert nicht bei sehr dunklen Bildern
         edges_main = (sobel(edges_main) * 255).astype("uint8")
+        hist = np.histogram(edges_main, bins=256)
+        sum = edges_main.shape[0] * edges_main.shape[1] * 0.05
+        dec = 0
+        ind = 0
+        for bar in hist[0]:
+            dec += bar
+            ind += 1
+            if dec > sum:
+                ind -= 1
+                break
         det: List[Tuple[int, int]] = []
-        ch_main_bin = edges_main > main_threshold
+        ch_main_bin = edges_main > ind
+        plt.imshow(ch_main_bin)
+        plt.show()
         ch_main_bin = ndi.binary_fill_holes(ch_main_bin)
         ch_main_bin = binary_opening(ch_main_bin)
         numpy_edm = ndi.distance_transform_edt(ch_main_bin)
@@ -555,7 +571,8 @@ class Detector:
         if file_extension in (".tiff", ".tif", ".jpg"):
             tags = piexif.load(path)
             image_data = {
-                "datetime": tags["0th"].get(piexif.ImageIFD.DateTime, os.path.getctime(path)),
+                "datetime": tags["0th"].get(piexif.ImageIFD.DateTime,
+                                            datetime.datetime.fromtimestamp(os.path.getctime(path))),
                 "height": tags["0th"].get(piexif.ImageIFD.ImageLength, img.shape[0]),
                 "width": tags["0th"].get(piexif.ImageIFD.ImageWidth, img.shape[1]),
                 "x_res": tags["0th"].get(piexif.ImageIFD.XResolution, -1),
