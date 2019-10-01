@@ -7,7 +7,7 @@ import sqlite3
 import sys
 import time
 from threading import Thread
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import Union, Dict, List, Tuple, Any
 
 import PyQt5
@@ -29,6 +29,7 @@ from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSpl
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
+from matplotlib.patches import Ellipse
 from qtconsole.qt import QtGui
 from skimage.draw import ellipse
 
@@ -306,12 +307,19 @@ class NucDetect(QMainWindow):
         s0 = time.time()
         self.prg_signal.emit("Creating result table", maxi * 0.65, maxi, "")
         self.create_result_table_from_list(data["handler"])
-        print("Creation result table: {:.4f}".format(time.time()-s0))
+        print(f"Creation result table: {time.time()-s0:.4f} secs")
         self.prg_signal.emit("Checking database", maxi * 0.75, maxi, "")
         s1 = time.time()
         self.save_rois_to_database(data)
-        print("Writing to database: {:.4f}".format(time.time() - s1))
-        self.prg_signal.emit(message.format("{:.2f} secs".format(time.time()-start)), percent, maxi, "")
+        print(f"Writing to database: {time.time() - s1:.4f} secs")
+        self.prg_signal.emit(f"Ellipse parameter calculation", maxi * 0.9, maxi, "")
+        with ThreadPoolExecutor(max_workers=None) as e:
+            for roi in self.roi_cache:
+                if roi.main:
+                    e.submit(roi.calculate_ellipse_parameters)
+        print(f"Calculation of ellipse parameters: {time.time() - s1:.4f}")
+        self.prg_signal.emit(message.format(f"{time.time()-start:.2f} secs"),
+                             percent, maxi, "")
         self.enable_buttons()
         self.ui.btn_analyse.setEnabled(False)
         self.ui.list_images.setEnabled(True)
@@ -326,8 +334,6 @@ class NucDetect(QMainWindow):
         con = sqlite3.connect(database)
         curs = con.cursor()
         key = data["id"]
-        self.roi_cache = data["handler"]
-        self.create_result_table_from_list(data["handler"])
         if curs.execute(
                 "SELECT analysed FROM images WHERE md5 = ?",
                 (key,)
@@ -367,6 +373,7 @@ class NucDetect(QMainWindow):
         )
         con.commit()
         con.close()
+        print("ROI saved to database")
 
     def create_result_table_from_list(self, handler: ROIHandler) -> None:
         """
@@ -436,7 +443,7 @@ class NucDetect(QMainWindow):
         :param symbol: The symbol printed after the displayed values
         :return: None
         """
-        self.ui.lbl_status.setText("{} -- {:.2f}% {}".format(text, (progress/maxi)*100, symbol))
+        self.ui.lbl_status.setText(f"{text} -- {(progress/maxi)*100:.2f}% {symbol}")
         self.ui.prg_bar.setMaximum(maxi)
         self.ui.prg_bar.setValue(progress)
 
@@ -466,9 +473,11 @@ class NucDetect(QMainWindow):
             ind = 1
             maxi = len(self.reg_images)
             for r in res:
-                self.prg_signal.emit("Analysed images: {}/{}".format(ind, maxi),
+                self.prg_signal.emit(f"Analysed images: {ind}/{maxi}",
                                      ind, maxi, "")
                 self.save_rois_to_database(r)
+                self.roi_cache = r["handler"]
+                self.create_result_table_from_list(r["handler"])
                 ind += 1
             self.roi_cache = list(res)[:-1]
             self.enable_buttons()
@@ -486,6 +495,7 @@ class NucDetect(QMainWindow):
         :param md5: The md5 hash of the image
         :return: A ROIHandler containing all roi
         """
+        print("Loaded roi from database")
         rois = ROIHandler(ident=md5)
         entries = self.cursor.execute(
             "SELECT * FROM roi WHERE image = ?",
@@ -995,14 +1005,14 @@ class BarChart(MPLPlot):
 
 class ImgDialog(QDialog):
     MARKERS = [
-        "ro",  # Red
-        "go",  # Green
-        "bo",  # Blue
-        "co",  # Cyan
-        "mo",  # Magenta
-        "yo",  # Yellow
-        "ko",  # Black
-        "wo"   # White
+        "r",  # Red
+        "g",  # Green
+        "b",  # Blue
+        "c",  # Cyan
+        "m",  # Magenta
+        "y",  # Yellow
+        "k",  # Black
+        "w"   # White
     ]
 
     def __init__(self, image: np.ndarray, handler: ROIHandler, parent: QWidget = None):
@@ -1049,30 +1059,71 @@ class ImgDialog(QDialog):
         cur_ind = self.ui.cbx_channels.currentIndex()
         # create an axis
         ax = self.figure.add_subplot(111)
-        # discards the old graph
+        # Discard old graph
         ax.clear()
         ax.imshow(self.image, cmap="gray" if cur_ind < len(self.handler.idents) else matplotlib.rcParams["image.cmap"])
-        dots_x = []
-        dots_y = []
+        dots = [[], [], [], []]
         for roi in self.handler.rois:
             center = roi.calculate_dimensions()["center"]
             ind = self.handler.idents.index(roi.ident)
-            if ind == cur_ind:
-                dots_x.append(center[0])
-                dots_y.append(center[1])
-            elif cur_ind == len(self.handler.idents):
-                if len(dots_x)-1 < ind:
-                    dots_x.append([center[0]])
-                    dots_y.append([center[1]])
+            mark = self.MARKERS[ind]
+            if cur_ind == len(self.handler.idents):
+                if roi.main:
+                    params = roi.calculate_ellipse_parameters()
+                    c = params["center"]
+                    cadj = c[1], c[0]
+                    d1 = params["major_length"]
+                    d2 = params["minor_length"]
+                    p0, p1 = params["major_axis"]
+                    p00, p10 = params["minor_axis"]
+                    slope = params["major_slope"]
+                    angle = params["major_angle"]
+                    ell = Ellipse(cadj, d1, d2, angle=angle if slope > 0 else 360 - angle,
+                                  color="gold", fill=None, linewidth=2, linestyle="--")
+                    ax.add_patch(ell)
+                    # Draw major axis
+                    x = (p0[1], p1[1])
+                    y = (p0[0], p1[0])
+                    ax.plot(x, y, "gold")
+                    # Draw minor axis
+                    x = (p00[1], p10[1])
+                    y = (p00[0], p10[0])
+                    ax.plot(x, y, "goldenrod")
                 else:
-                    dots_x[ind].append(center[0])
-                    dots_y[ind].append(center[1])
-        if cur_ind == len(self.handler.idents):
-            for x in range(len(self.handler.idents)):
-                ax.plot(dots_x[x], dots_y[x], self.MARKERS[x] if x != self.handler.idents.index(self.handler.main) else
-                self.MARKERS[7], markersize=4, label=self.handler.idents[x])
-        else:
-            ax.plot(dots_x, dots_y, self.MARKERS[cur_ind], markersize=4)
+                    dots[0].append(center[0])
+                    dots[1].append(center[1])
+                    dots[2].append(mark)
+            elif cur_ind == self.handler.idents.index(self.handler.main):
+                if roi.main:
+                    params = roi.calculate_ellipse_parameters()
+                    c = params["center"]
+                    cadj = c[1], c[0]
+                    p0, p1 = params["major_axis"]
+                    p00, p10 = params["minor_axis"]
+                    d1 = params["major_length"]
+                    d2 = params["minor_length"]
+                    slope = params["major_slope"]
+                    angle = params["major_angle"]
+                    # Draw calculated ellipse
+                    ell = Ellipse(cadj, d1, d2, angle=angle if slope > 0 else 360 - angle,
+                                  color="gold", fill=None, linewidth=2, linestyle="--")
+                    ax.add_patch(ell)
+                    # Draw major axis
+                    x = (p0[1], p1[1])
+                    y = (p0[0], p1[0])
+                    ax.plot(x, y, "gold")
+                    # Draw minor axis
+                    x = (p00[1], p10[1])
+                    y = (p00[0], p10[0])
+                    ax.plot(x, y, "goldenrod")
+            elif cur_ind == ind:
+                dots[0].append(center[0])
+                dots[1].append(center[1])
+                dots[2].append(mark)
+        ax.scatter(dots[0], dots[1], marker="o", c=dots[2], s=16)
+        ax.set_facecolor("#162a4b")
+        ax.set_ylim(0, len(self.image))
+        ax.set_xlim(0, len(self.image[0]))
         self.figure.tight_layout()
         self.canvas.draw()
 
