@@ -5,10 +5,11 @@ Created on 09.04.2019
 from __future__ import annotations
 from typing import Union, Dict, List, Tuple
 import numpy as np
+import math
 import hashlib
 import json
 from math import sqrt
-
+from skimage.filters import sobel
 
 class ROI:
     __slots__ = [
@@ -19,6 +20,7 @@ class ROI:
         "points",
         "inten",
         "stats",
+        "ell_params",
         "associated",
         "id",
         "marked"
@@ -42,6 +44,7 @@ class ROI:
         self.points = []
         self.inten = {}
         self.stats = {}
+        self.ell_params = {}
         self.associated = associated
         self.marked = marked
         self.id = None
@@ -80,9 +83,9 @@ class ROI:
     def __hash__(self):
         if self.id is None:
             md5 = hashlib.md5()
-            ident = "{}{}".format(sorted(self.inten.items(), key=lambda k: [k[0], k[1]]), self.ident).encode()
+            ident = f"{sorted(self.inten.items(), key=lambda k: [k[0], k[1]])}{self.ident}".encode()
             md5.update(ident)
-            self.id = int("0x" + md5.hexdigest(), 0)
+            self.id = int(f"0x{md5.hexdigest()}", 0)
         return self.id
 
     def merge(self, roi: ROI) -> None:
@@ -99,6 +102,7 @@ class ROI:
                 self.id = None
                 self.dims.clear()
                 self.stats.clear()
+                self.ell_params.clear()
             else:
                 raise Warning("ROIs have different channel IDs!")
         else:
@@ -117,6 +121,7 @@ class ROI:
         self.id = None
         self.dims.clear()
         self.stats.clear()
+        self.ell_params.clear()
 
     def set_points(self, point_list: List[tuple[int, int]],
                    original: Union[np.ndarray, Dict[Tuple[int, int], int]]) -> None:
@@ -133,6 +138,99 @@ class ROI:
         elif isinstance(original, dict):
             for p in point_list:
                 self.add_point(p, original[p])
+
+    def calculate_ellipse_parameters(self) -> Dict[str, Union[int, float]]:
+        """
+        Method to calculate the ellipse parameters of this ROI.
+        :return: a dictionary containing the calculated parameters
+        """
+        # Check if the current ROI is main
+        if not self.main:
+            raise Warning("ROI is not main")
+        # Check if the parameters are already calculated
+        if not self.ell_params:
+            # Calculate dimensions of ROI
+            dims = self.calculate_dimensions()
+            offset = dims["minY"], dims["minX"]
+            # Get the area of the ROI
+            bin_map = self.get_as_binary_map()
+            # Add padding for skimage sobel implementation
+            bin_map = np.pad(bin_map, pad_width=1,
+                            mode="constant", constant_values=0)
+            # Define method to calculate euclidean distance map
+            def eu_dist(p1, p2):
+                return math.sqrt(((p2[0] - p1[0]) ** 2) + ((p2[1] - p1[1]) ** 2))
+
+            # Get the edges of the area
+            edge_map = sobel(bin_map)
+            # Remove added padding
+            edge_map = np.array([x[1:-1] for x in edge_map[1:-1]])
+            # Extract edge pixels
+            points = []
+            for y in range(len(edge_map)):
+                for x in range(len(edge_map[0])):
+                    if edge_map[y][x] != 0:
+                        points.append((y, x))
+            # Calculate longest distance for each nucleus
+            max_d = 0.0
+            p0 = None
+            p1 = None
+            # Determine main axis
+            for r1 in range(len(points)):
+                point1 = points[r1]
+                for r2 in range(r1, len(points)):
+                    point2 = points[r2]
+                    dist = eu_dist(point1, point2)
+                    if dist > max_d:
+                        p0 = point1
+                        p1 = point2
+                        max_d = dist
+            # Determine minor axis
+            min_ang = 90
+            pmin = None
+            # Calculate slope of major axis
+            m_maj = (p1[0] - p0[0]) / (p1[1] - p0[1])
+            # Calculate center of major axis
+            center = (p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2
+            # Determine minor axis for each nucleus
+            for r in range(len(points)):
+                c = center
+                pm = points[r]
+                # Determine slope between point and center
+                if c[0] != pm[0] and c[1] != pm[1]:
+                    m_min = (c[0] - pm[0]) / (c[1] - pm[1])
+                    a = m_maj - m_min
+                    b = 1 + m_maj * m_min
+                    if b != 0:
+                        angle = math.degrees(math.atan(a / b))
+                    else:
+                        angle = 0
+                else:
+                    angle = 0
+                # Determine angle between line and major axis
+                if angle != 0 and angle / 90 < min_ang:
+                    pmin = pm
+                    min_ang = angle / 90
+            max_dist = (p0, p1)
+            min_dist = (center, pmin)
+            maj_length = eu_dist(max_dist[0], max_dist[1])
+            min_length = eu_dist(min_dist[0], min_dist[1]) * 2
+            # Calculate overlap between determined ellipse and actual set
+            ell_area = math.pi * maj_length/2 * min_length/2
+            s_area = len(self.points)
+            max_a = max((ell_area, s_area))
+            min_a = min((ell_area, s_area))
+            self.ell_params["center"] = center[0] + offset[0], center[1] + offset[1]
+            self.ell_params["major_axis"] = (max_dist[0][0] + offset[0], max_dist[0][1] + offset[1]),\
+                                   (max_dist[1][0] + offset[0], max_dist[1][1] + offset[1])
+            self.ell_params["major_length"] = maj_length
+            self.ell_params["major_slope"] = m_maj
+            self.ell_params["major_angle"] = math.degrees(math.atan(abs(self.ell_params["major_slope"])))
+            self.ell_params["minor_axis"] = (min_dist[0][0] + offset[0], min_dist[0][1] + offset[1]), \
+                                   (min_dist[1][0] + offset[0], min_dist[1][1] + offset[1])
+            self.ell_params["minor_length"] = min_length
+            self.ell_params["shape_match"] = min_a / max_a
+        return self.ell_params
 
     def calculate_roi_intersection(self, roi: ROI) -> float:
         """
@@ -264,7 +362,7 @@ class ROI:
                 raise Exception("ROI does not contain any points!")
         return self.dims
 
-    def calculate_statistics(self) -> dict[str, Union[int, float]]:
+    def calculate_statistics(self) -> Dict[str, Union[int, float]]:
         """
         Method to calculate statistics for this roi
 

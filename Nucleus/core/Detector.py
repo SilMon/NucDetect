@@ -188,34 +188,26 @@ class Detector:
                 temp.append(len(roi))
             else:
                 foci.append(roi)
-        if len(main) > 1:
-            min_main_area = max(np.percentile(temp, min_thresh), min_main_area)
-            max_main_area = min(np.percentile(temp, max_thresh), max_main_area)
-        else:
-            min_main_area = -1
-            max_main_area = len(main[0]) - 1
-        Detector.log("Detected nuclei:{}\nDetected foci: {}".format(len(main), len(foci)), logging)
+        Detector.log(f"Detected nuclei:{len(main)}\nDetected foci: {len(foci)}", logging)
         ws_list = []
         Detector.log("Checking for very small nuclei", logging)
         # Remove very small nuclei
-        # main = [x for x in main if len(x) > min_main_area]
-        Detector.log("Time: {:4f}\nRemove not associated foci".format(time.time() - s7), logging)
+        Detector.log(f"Time: {time.time() - s7:4f}\nRemove not associated foci", logging)
         s8 = time.time()
         # Remove foci that are either unassociated or whose nucleus was deleted
         maincop = main.copy()
         maincop.extend(foci)
         ass = {key: value for key, value in Detector.create_association_map(maincop).items() if
                len(key) > min_main_area}
-
-        Detector.log("Assmap-Creation: {}".format(time.time() - s8), logging)
+        Detector.log(f"Assmap-Creation: {time.time() - s8}", logging)
         mainlen = len(main)
         main = [x for x, _ in ass.items()]
-        Detector.log("Removed nuclei: {}".format(mainlen - len(main)), logging)
+        Detector.log(f"Removed nuclei: {mainlen - len(main)}", logging)
         foclen = len(foci)
         foci = [x for _, focs in ass.items() for x in focs if x.associated is not None]
         # Remove very small foci
         foci = [x for x in foci if len(x) > min_foc_area]
-        Detector.log("Removed foci: {}\nTime: {:4f}\nFocus Quality Check".format(foclen - len(foci), time.time() - s8),
+        Detector.log(f"Removed foci: {foclen - len(foci)}\nTime: {time.time() - s8:4f}\nFocus Quality Check",
                      logging)
         # Focus quality check
         s4 = time.time()
@@ -240,7 +232,7 @@ class Detector:
                                 break
         foci = [x for x in foci if not x.marked]
         rem_list.clear()
-        Detector.log("Time: {:4f}\nNucleus Quality Check".format(time.time() - s4), logging)
+        Detector.log(f"Time: {time.time() - s4:4f}\nNucleus Quality Check", logging)
         # Nucleus quality check
         s1 = time.time()
         ws_num = 0
@@ -281,8 +273,8 @@ class Detector:
                     foc_cop.extend(ass[nucleus])
             else:
                 foc_cop.extend(ass[nucleus])
-        Detector.log("Watershed applied to {} nuclei, creating {} potential nuclei\n"
-                     "Time: {:4f}\nAdd newly found nuclei".format(ws_num, res_nuc, time.time() - s1), logging)
+        Detector.log(f"Watershed applied to {ws_num} nuclei, creating {res_nuc} potential nuclei\n"
+                     f"Time: {time.time() - s1:4f}\nAdd newly found nuclei", logging)
         s2 = time.time()
         for t in ws_list:
             centers = []
@@ -299,7 +291,7 @@ class Detector:
         # TODO Reihenfolge wichtig, ausbessern da undynamisch
         rois.extend(foc_cop)
         rois.extend(main)
-        Detector.log("Time: {:4f}\nTotal Quality Check Time: {}".format(time.time() - s2, time.time() - s7), logging)
+        Detector.log(f"Time: {time.time() - s2:4f}\nTotal Quality Check Time: {time.time() - s7}", logging)
 
     @staticmethod
     def create_association_map(rois: List[ROI]) -> Dict[ROI, List[ROI]]:
@@ -336,7 +328,7 @@ class Detector:
         for ind in range(len(channels)):
             if ind != main_channel:
                 blobs = blob_log(channels[ind], min_sigma=min_sigma, max_sigma=max_sigma, num_sigma=num_sigma,
-                                 threshold=threshold)
+                                 threshold=threshold, exclude_border=False)
                 blob_map = Detector.create_blob_map(channels[ind].shape, blobs)
                 blob_num = len(blobs)
                 blob_maps.append(blob_map)
@@ -386,7 +378,7 @@ class Detector:
 
     @staticmethod
     def threshold_channels(channels: List[np.ndarray], main_channel: int = 2,
-                           main_threshold: int = 5, pad: int = 1) -> List[np.ndarray]:
+                           main_threshold: float = .05, pad: int = 1) -> List[np.ndarray]:
         """
         Method to threshold the channels to prepare for nuclei and foci detection
 
@@ -399,25 +391,12 @@ class Detector:
         thresh: List[Union[None, np.ndarray]] = [None] * len(channels)
         edges_main = np.pad(channels[main_channel], pad_width=pad,
                             mode="constant", constant_values=0)
-        # TODO Sobel eventuell mit Gabor tauschen
-        # TODO Funktioniert nicht bei sehr dunklen Bildern
-        edges_main = (sobel(edges_main) * 255).astype("uint8")
-        hist = np.histogram(edges_main, bins=256)
-        sum = edges_main.shape[0] * edges_main.shape[1] * 0.05
-        dec = 0
-        ind = 0
-        for bar in hist[0]:
-            dec += bar
-            ind += 1
-            if dec > sum:
-                ind -= 1
-                break
+        # Threshold image
+        hmax = np.amax(edges_main)
+        hmin = np.amin(edges_main)
+        threshold = hmin + round(main_threshold * hmax)
+        ch_main_bin = binary_opening(ndi.binary_fill_holes(edges_main > threshold), selem=np.ones((20, 20)))
         det: List[Tuple[int, int]] = []
-        ch_main_bin = edges_main > ind
-        plt.imshow(ch_main_bin)
-        plt.show()
-        ch_main_bin = ndi.binary_fill_holes(ch_main_bin)
-        ch_main_bin = binary_opening(ch_main_bin)
         numpy_edm = ndi.distance_transform_edt(ch_main_bin)
         points_loc_max = peak_local_max(numpy_edm, labels=ch_main_bin, indices=False,
                                         min_distance=45, exclude_border=False)
