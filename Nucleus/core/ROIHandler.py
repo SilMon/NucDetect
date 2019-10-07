@@ -156,7 +156,7 @@ class ROIHandler:
         :param quotechar: The char used as a substitute for \"\" or \'\'
         :return: True if the csv could be exported
         """
-        with open(os.path.join(path, "{}.csv".format(self.ident)), 'w', newline='') as file:
+        with open(os.path.join(path, f"{self.ident}.csv", 'w', newline='')) as file:
             writer = csv.writer(file, delimiter=delimiter,
                                 quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
             writer.writerow(["File id:", self.ident])

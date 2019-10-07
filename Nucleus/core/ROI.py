@@ -8,6 +8,7 @@ import numpy as np
 import math
 import hashlib
 import json
+import warnings
 from math import sqrt
 from skimage.filters import sobel
 
@@ -104,7 +105,8 @@ class ROI:
                 self.stats.clear()
                 self.ell_params.clear()
             else:
-                raise Warning("ROIs have different channel IDs!")
+                warnings.warn(f"The ROI {hash(self)} and  "
+                              f"{hash(roi)} have different channel IDs!({self.ident}, {roi.ident})")
         else:
             raise ValueError("Not an ROI")
 
@@ -142,11 +144,12 @@ class ROI:
     def calculate_ellipse_parameters(self) -> Dict[str, Union[int, float]]:
         """
         Method to calculate the ellipse parameters of this ROI.
+
         :return: a dictionary containing the calculated parameters
         """
-        # Check if the current ROI is main
+        # Check if the current ROI is main, else warn
         if not self.main:
-            raise Warning("ROI is not main")
+            warnings.warn("Ellipse Parameter Calculation: ROI is not marked as main")
         # Check if the parameters are already calculated
         if not self.ell_params:
             # Calculate dimensions of ROI

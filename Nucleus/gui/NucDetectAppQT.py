@@ -48,7 +48,9 @@ ui_class_dial = os.path.join(os.getcwd(), "classification_dialog.ui")
 ui_stat_dial = os.path.join(os.getcwd(), "statistics_dialog.ui")
 ui_settings_dial = os.path.join(os.getcwd(), "settings_dialog.ui")
 ui_modification_dial = os.path.join(os.getcwd(), "modification_dialog.ui")
-database = os.path.join(os.pardir, "database{}nucdetect.db".format(os.sep))
+database = os.path.join(os.pardir, f"database{os.sep}nucdetect.db")
+tablescript = os.path.join(os.pardir, f"database{os.sep}nucdetect.sql")
+settingsscript = os.path.join(os.pardir, f"database{os.sep}settings.sql")
 result_path = os.path.join(os.pardir, "results")
 
 
@@ -67,16 +69,27 @@ class NucDetect(QMainWindow):
         Constructor of the main window
         """
         QMainWindow.__init__(self)
+        # Connect to database
         self.connection = sqlite3.connect(database)
         self.cursor = self.connection.cursor()
+        # Create tables if they do not exists
+        tscript = open(tablescript, "r").read()
+        self.cursor.executescript(tscript)
+        # Insert standard settings into table if not already
+        setscript = open(settingsscript, "r").read()
+        self.cursor.executescript((setscript))
+        # Load the settings from database
         self.settings = self.load_settings()
-        print(self.settings)
-        self.detector = Detector(settings=[].extend(list(self.settings.values())), logging=self.settings["logging"])
+        # Create detector for analysis
+        self.detector = Detector(settings=[].extend(list(self.settings.values())),
+                                 logging=self.settings["logging"])
+        # Initialize needed variables
         self.reg_images = {}
         self.sel_images = []
         self.cur_img = None
         self.roi_cache = None
         self.unsaved_changes = False
+        # Setup UI
         self._setup_ui()
         self.setWindowTitle("NucDetect")
         self.setWindowIcon(QtGui.QIcon('logo.png'))
@@ -202,13 +215,15 @@ class NucDetect(QMainWindow):
         :param path: The path leading to the file
         :return: None
         """
+        # Fix loading of duplicate files
         temp = os.path.split(path)
         folder = temp[0].split(sep=os.sep)[-1]
         file = temp[1]
         if os.path.splitext(file)[1] in Detector.FORMATS:
             d = Detector.get_image_data(path)
             date = d["datetime"]
-            t = date.decode("ascii").split(" ") if not isinstance(date, datetime.datetime) else date.strftime("%d/%m/%Y, %H:%M:%S")
+            t = date.decode("ascii").split(" ") if not isinstance(date, datetime.datetime) \
+                else date.strftime("%d/%m/%Y, %H:%M:%S")
             item = QStandardItem()
             item_text = "Name: {}\nFolder: {}\nDate: {}\nTime: {}".format(file, folder, t[0], t[1])
             item.setText(item_text)
@@ -226,7 +241,7 @@ class NucDetect(QMainWindow):
                 self.cursor.execute(
                     "INSERT INTO images VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (key, d["datetime"], d["channels"], d["width"], d["height"],
-                     str(d["x_res"]), str(d["y_res"]), d["unit"], 0, -1)  # TODO settngs hashen
+                     str(d["x_res"]), str(d["y_res"]), d["unit"], 0, -1)
                 )
             self.connection.commit()
 
@@ -313,6 +328,7 @@ class NucDetect(QMainWindow):
         self.save_rois_to_database(data)
         print(f"Writing to database: {time.time() - s1:.4f} secs")
         self.prg_signal.emit(f"Ellipse parameter calculation", maxi * 0.9, maxi, "")
+        # TODO fixen
         with ThreadPoolExecutor(max_workers=None) as e:
             for roi in self.roi_cache:
                 if roi.main:
@@ -334,6 +350,7 @@ class NucDetect(QMainWindow):
         con = sqlite3.connect(database)
         curs = con.cursor()
         key = data["id"]
+        # Delete existing analysis data if image was already analysed
         if curs.execute(
                 "SELECT analysed FROM images WHERE md5 = ?",
                 (key,)
@@ -352,21 +369,36 @@ class NucDetect(QMainWindow):
             )
         for name in data["handler"].idents:
             curs.execute(
-                "INSERT INTO channels VALUES (?, ?, ?)",
+                "INSERT OR IGNORE INTO channels VALUES (?, ?, ?)",
                 (key, data["handler"].idents.index(name), name)
             )
         for roi in data["handler"].rois:
             dim = roi.calculate_dimensions()
+            # Calculate ellipse parameters if roi is main, else use template
+            if roi.main:
+                ellp = roi.calculate_ellipse_parameters()
+            else:
+                ellp = {"center": None, "major_axis": (None, None), "major_length": None, "major_slope": None,
+                        "major_angle": None, "minor_axis": (None, None), "minor_length": None, "shape_match": None}
+            stats = roi.calculate_statistics()
             asso = hash(roi.associated) if roi.associated is not None else None
             curs.execute(
-                "INSERT INTO roi VALUES (?, ?, ?, ?, ?, ?, ?,?)",
+                "INSERT OR IGNORE INTO roi VALUES (?, ?, ?, ?, ?, ?, ?,?)",
                 (hash(roi), key, True, roi.ident, str(dim["center"]), dim["width"], dim["height"], asso)
             )
             for p in roi.points:
                 curs.execute(
-                    "INSERT INTO points VALUES (?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO points VALUES (?, ?, ?, ?)",
                     (hash(roi), p[0], p[1], roi.inten[p])
                 )
+            curs.execute(
+                "INSERT OR IGNORE INTO statistics VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (hash(roi), key, stats["area"], stats["intensity average"], stats["intensity median"],
+                 stats["intensity maximum"], stats["intensity minimum"], stats["intensity std"],
+                 str(ellp["center"]), str(ellp["major axis"][0]), str(ellp["major axis"][1]),
+                 ellp["major slope"], ellp["major length"], str(ellp["minor axis"][0]), str(ellp["minor axis"][1]),
+                 ellp["minor axis length"])
+            )
         curs.execute(
             "UPDATE images SET analysed = ? WHERE md5 = ?",
             (True, key)
@@ -501,6 +533,10 @@ class NucDetect(QMainWindow):
             "SELECT * FROM roi WHERE image = ?",
             (md5, )
         ).fetchall()
+        stats = self.cursor.execute(
+            "SELECT * FROM statistics WHERE image = ?",
+            (md5, )
+        ).fetchall()
         names = self.cursor.execute(
             "SELECT * FROM channels WHERE md5 = ?",
             (md5, )
@@ -509,10 +545,20 @@ class NucDetect(QMainWindow):
             rois.idents.insert(name[1], name[2])
         main_ = []
         sec = []
+        statkeys = ("area", "intensity average",
+                    "intensity median", "intensity maximum",
+                    "intensity minimum", "intensity std")
+        ellkeys = ("center", "major_axis", "major_length", "major_slope", "minor_axis", "minor_length")
         for entry in entries:
             temproi = ROI(channel=entry[3], main=entry[7] is None, associated=entry[7])
+            temproi.id = entry[0]
+            temproi.stats = dict(zip(statkeys, stats[2:8]))
             if temproi.main:
                 main_.append(temproi)
+                major = tuple(stats[9]), tuple(stats[10])
+                minor = tuple(stats[13]), tuple(stats[14])
+                ellp = (stats[8], major, stats[14:16], minor, stats[16])
+                temproi.ell_params = dict(zip(ellkeys, ellp))
             else:
                 sec.append(temproi)
             for p in self.cursor.execute(
@@ -534,13 +580,12 @@ class NucDetect(QMainWindow):
         :return: None
         """
         image_dialog = ImgDialog(image=Detector.load_image(self.cur_img), handler=self.roi_cache)
-        image_dialog.setWindowTitle("Result Images for " + self.cur_img)
+        image_dialog.setWindowTitle(f"Result Images for {self.cur_img}")
         image_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
         image_dialog.setWindowFlags(image_dialog.windowFlags() |
                                     QtCore.Qt.WindowSystemMenuHint |
                                     QtCore.Qt.WindowMinMaxButtonsHint|
                                     QtCore.Qt.Window)
-
         image_dialog.exec_()
 
     def save_results(self) -> None:
@@ -575,7 +620,7 @@ class NucDetect(QMainWindow):
         :return: None
         """
         # TODO Implement & test
-        print(config)
+        print(f"Config:\n{config}")
         if section == "Analysis":
             self.detector.settings[key] = value
 
@@ -594,9 +639,9 @@ class NucDetect(QMainWindow):
         stat = self.roi_cache.calculate_statistics()
         assmap = self.detector.create_association_map(self.roi_cache)
         # Add labels to first tab
-        stat_dialog.ui.dist_par.addWidget(QLabel("Detected nuclei: {}".format(len(assmap))))
+        stat_dialog.ui.dist_par.addWidget(QLabel(f"Detected nuclei: {len(assmap)}"))
         empty = [x for x in assmap.values() if len(x) > 0]
-        stat_dialog.ui.dist_par.addWidget(QLabel("Thereof empty: {}".format(len(assmap) - len(empty))))
+        stat_dialog.ui.dist_par.addWidget(QLabel(f"Thereof empty: {len(assmap) - len(empty)}"))
         colmarks = ["ro", "go", "co", "mo", "yo", "ko"]
         roinum = {}
         poiss_plots = []
@@ -615,30 +660,24 @@ class NucDetect(QMainWindow):
                     roinum[roi.ident][roi.associated] = 1
         for x in self.roi_cache.idents:
             if x != self.roi_cache.main:
-                stat_dialog.ui.dist_par.addWidget(QLabel("Detected foci ({}): {}".format(x,
-                                                                                         stat["sec stats"][x]["number"])
-                                                         ))
-                stat_dialog.ui.dist_par.addWidget(QLabel("Std. Dev. ({}): {:.2f}".format(x,
-                                                                                         np.std(list(roinum[x].values())
-                                                                                         ))))
-                stat_dialog.ui.int_par.addWidget(QLabel("Average Intensity ({}): {:.2f}".format(x,
-                                                                            stat["sec stats"][x]["intensity average"])))
-                stat_dialog.ui.int_par.addWidget(QLabel("Std. Intensity ({}): {:.2f}".format(x,
-                                                                                stat["sec stats"][x]["intensity std"])))
-                stat_dialog.ui.val_par.addWidget(QLabel("Max. number ({}): {}".format(x,
-                                                                                      max(roinum[x].values()))))
-                stat_dialog.ui.val_par.addWidget(QLabel("Min. number ({}): {}".format(x,
-                                                                                      min(roinum[x].values()))))
-                stat_dialog.ui.val_par.addWidget(QLabel("Max. intensity ({}): {:.2f}".format(x,
-                                                                            stat["sec stats"][x]["intensity maximum"])))
-                stat_dialog.ui.val_par.addWidget(QLabel("Min. intensity ({}): {:.2f}".format(x,
-                                                                            stat["sec stats"][x]["intensity minimum"])))
+                stat_dialog.ui.dist_par.addWidget(QLabel(f"Detected foci ({x}): {stat['sec stats'][x]['number']}"))
+                stat_dialog.ui.dist_par.addWidget(QLabel(f"Std. Dev. ({x}): {np.std(list(roinum[x].values())):.2f}"))
+                stat_dialog.ui.int_par.addWidget(QLabel(f"Average Intensity ({x}):"
+                                                        f" {stat['sec stats'][x]['intensity average']:.2f}"))
+                stat_dialog.ui.int_par.addWidget(QLabel(f"Std. Intensity ({x}): "
+                                                        f"{stat['sec stats'][x]['intensity std']:.2f}"))
+                stat_dialog.ui.val_par.addWidget(QLabel(f"Max. number ({x}): {max(roinum[x].values())}"))
+                stat_dialog.ui.val_par.addWidget(QLabel(f"Min. number ({x}): {min(roinum[x].values())}"))
+                stat_dialog.ui.val_par.addWidget(QLabel(f"Max. intensity ({x}):"
+                                                        f" {stat['sec stats'][x]['intensity maximum']:.2f}"))
+                stat_dialog.ui.val_par.addWidget(QLabel(f"Min. intensity ({x}):"
+                                                        f" {stat['sec stats'][x]['intensity minimum']:.2f}"))
                 # Preparation of plots
                 poiss_plots.append(PoissonCanvas(np.average(list(roinum[x].values())),
                                                  max(roinum[x].values()),
                                                  list(roinum[x].values()),
-                                                 name="{} channel poisson - {}".format(x, self.cur_img),
-                                                 title="{} Channel".format(x)))
+                                                 name=f"{x} channel poisson - {self.cur_img}",
+                                                 title=f"{x} Channel"))
                 vals = []
                 for key, value in assmap.items():
                     temp = []
@@ -651,15 +690,15 @@ class NucDetect(QMainWindow):
                     else:
                         # TODO otherwise division by zero on second image
                         vals.append(0)
-                int = BarChart(name="r{} channel int - {}".format(x, self.cur_img),
-                               title="{} Channel - Average Focus Intensity".format(x),
+                int = BarChart(name=f"{x} channel int - {self.cur_img}",
+                               title=f"{x} Channel - Average Focus Intensity",
                                y_title="Average Intensity", x_title="Nucleus Index", x_label_rotation=45,
                                values=[vals],
                                colors=[colors[self.roi_cache.idents.index(x)]]*len(vals),
                                labels=[np.arange(len(vals))])
-                int.setToolTip(("Shows the average {} foci intensity for the nucleus with the given index.\n"
-                                "255 is the maximal possible value. If no intensity is shown, no {} foci were\n"
-                                "detected in the respective nucleus".format(x, x)))
+                int.setToolTip((f"Shows the average {x} foci intensity for the nucleus with the given index.\n"
+                                f"255 is the maximal possible value. If no intensity is shown, no {x} foci were\n"
+                                "detected in the respective nucleus"))
                 int_plots.append(int)
                 val_plots[0].append((np.arange(len(roinum[x].values()))))
                 val_plots[1].append(roinum[x].values())
@@ -668,7 +707,7 @@ class NucDetect(QMainWindow):
         chans = self.roi_cache.idents.copy()
         chans.remove(self.roi_cache.main)
         cnvs_num = XYChart(x_values=val_plots[0], y_values=val_plots[1], col_marks=colmarks[:len(chans)],
-                           dat_labels=chans, name="numbers - {}".format(self.cur_img),
+                           dat_labels=chans, name=f"numbers - {self.cur_img}",
                            title="Foci Number", x_title="Nucleus Index", y_title="Foci")
         ind = 0
         x_values = []
@@ -687,7 +726,7 @@ class NucDetect(QMainWindow):
         labels = self.roi_cache.idents[:len(self.roi_cache.idents)-1]
         cnvs_int = XYChart(x_values=x_values, y_values=y_values, col_marks=colm,
                            dat_labels=labels,
-                           name="intensities - {}".format(key), title="Intensity", x_title="Nucleus Index",
+                           name=f"intensities - {key}", title="Intensity", x_title="Nucleus Index",
                            y_title="Average Intensity")
         stat_dialog.ui.vl_vals.addWidget(NavigationToolbar(cnvs_num, stat_dialog))
         stat_dialog.ui.vl_vals.addWidget(cnvs_num)
@@ -1121,7 +1160,6 @@ class ImgDialog(QDialog):
                 dots[1].append(center[1])
                 dots[2].append(mark)
         ax.scatter(dots[0], dots[1], marker="o", c=dots[2], s=16)
-        ax.set_facecolor("#162a4b")
         ax.set_ylim(0, len(self.image))
         ax.set_xlim(0, len(self.image[0]))
         self.figure.tight_layout()
