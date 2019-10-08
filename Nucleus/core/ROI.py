@@ -10,7 +10,12 @@ import hashlib
 import json
 import warnings
 from math import sqrt
+
+from numba import jit
+from numba.typed import List
 from skimage.filters import sobel
+from collections import namedtuple
+
 
 class ROI:
     __slots__ = [
@@ -141,7 +146,7 @@ class ROI:
             for p in point_list:
                 self.add_point(p, original[p])
 
-    def calculate_ellipse_parameters(self) -> Dict[str, Union[int, float]]:
+    def calculate_ellipse_parameters(self) -> Dict[str, Union[int, float, Tuple]]:
         """
         Method to calculate the ellipse parameters of this ROI.
 
@@ -151,7 +156,7 @@ class ROI:
         if not self.main:
             warnings.warn("Ellipse Parameter Calculation: ROI is not marked as main")
         # Check if the parameters are already calculated
-        if not self.ell_params:
+        if not self.ell_params and self.main:
             # Calculate dimensions of ROI
             dims = self.calculate_dimensions()
             offset = dims["minY"], dims["minX"]
@@ -159,8 +164,10 @@ class ROI:
             bin_map = self.get_as_binary_map()
             # Add padding for skimage sobel implementation
             bin_map = np.pad(bin_map, pad_width=1,
-                            mode="constant", constant_values=0)
+                             mode="constant", constant_values=0)
+
             # Define method to calculate euclidean distance map
+            @jit(nopython=True)
             def eu_dist(p1, p2):
                 return math.sqrt(((p2[0] - p1[0]) ** 2) + ((p2[1] - p1[1]) ** 2))
 
@@ -178,6 +185,7 @@ class ROI:
             max_d = 0.0
             p0 = None
             p1 = None
+            # TODO reimplement using numba.typed.List
             # Determine main axis
             for r1 in range(len(points)):
                 point1 = points[r1]
@@ -219,20 +227,24 @@ class ROI:
             maj_length = eu_dist(max_dist[0], max_dist[1])
             min_length = eu_dist(min_dist[0], min_dist[1]) * 2
             # Calculate overlap between determined ellipse and actual set
-            ell_area = math.pi * maj_length/2 * min_length/2
+            ell_area = math.pi * maj_length / 2 * min_length / 2
             s_area = len(self.points)
             max_a = max((ell_area, s_area))
             min_a = min((ell_area, s_area))
             self.ell_params["center"] = center[0] + offset[0], center[1] + offset[1]
-            self.ell_params["major_axis"] = (max_dist[0][0] + offset[0], max_dist[0][1] + offset[1]),\
-                                   (max_dist[1][0] + offset[0], max_dist[1][1] + offset[1])
+            self.ell_params["major_axis"] = (max_dist[0][0] + offset[0], max_dist[0][1] + offset[1]), \
+                                            (max_dist[1][0] + offset[0], max_dist[1][1] + offset[1])
             self.ell_params["major_length"] = maj_length
             self.ell_params["major_slope"] = m_maj
             self.ell_params["major_angle"] = math.degrees(math.atan(abs(self.ell_params["major_slope"])))
             self.ell_params["minor_axis"] = (min_dist[0][0] + offset[0], min_dist[0][1] + offset[1]), \
-                                   (min_dist[1][0] + offset[0], min_dist[1][1] + offset[1])
+                                            (min_dist[1][0] + offset[0], min_dist[1][1] + offset[1])
             self.ell_params["minor_length"] = min_length
             self.ell_params["shape_match"] = min_a / max_a
+        else:
+            return {"center": None, "major_axis": ((None, None), (None, None)), "major_slope": None,
+                    "major_length": None, "minor_axis": ((None, None), (None, None)), "minor_length": None,
+                    "shape_match": None}
         return self.ell_params
 
     def calculate_roi_intersection(self, roi: ROI) -> float:

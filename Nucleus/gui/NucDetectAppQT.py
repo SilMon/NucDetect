@@ -225,7 +225,7 @@ class NucDetect(QMainWindow):
             t = date.decode("ascii").split(" ") if not isinstance(date, datetime.datetime) \
                 else date.strftime("%d/%m/%Y, %H:%M:%S")
             item = QStandardItem()
-            item_text = "Name: {}\nFolder: {}\nDate: {}\nTime: {}".format(file, folder, t[0], t[1])
+            item_text = f"Name: {file}\nFolder: {folder}\nDate: {t[0]}\nTime: {t[1]}"
             item.setText(item_text)
             item.setTextAlignment(QtCore.Qt.AlignLeft)
             icon = QIcon()
@@ -291,7 +291,7 @@ class NucDetect(QMainWindow):
         self.res_table_model.setRowCount(0)
         if not self.sel_images:
             self.ui.list_images.select(self.img_list_model.index(0, 0))
-        self.prg_signal.emit("Analysing " + str(self.sel_images[0]),
+        self.prg_signal.emit(f"Analysing {str(self.sel_images[0])}",
                              0, 100, "")
         self.cur_img = self.sel_images[0]
         self.sel_images.remove(self.sel_images[0])
@@ -320,20 +320,19 @@ class NucDetect(QMainWindow):
         data = self.detector.analyse_image(path)
         self.roi_cache = data["handler"]
         s0 = time.time()
+        self.prg_signal.emit(f"Ellipse parameter calculation", maxi * 0.9, maxi, "")
+        with ThreadPoolExecutor(max_workers=None) as e:
+            for roi in self.roi_cache:
+                if roi.main:
+                    e.submit(roi.calculate_ellipse_parameters)
         self.prg_signal.emit("Creating result table", maxi * 0.65, maxi, "")
+        print(f"Calculation of ellipse parameters: {time.time() - s0:.4f}")
         self.create_result_table_from_list(data["handler"])
         print(f"Creation result table: {time.time()-s0:.4f} secs")
         self.prg_signal.emit("Checking database", maxi * 0.75, maxi, "")
         s1 = time.time()
         self.save_rois_to_database(data)
         print(f"Writing to database: {time.time() - s1:.4f} secs")
-        self.prg_signal.emit(f"Ellipse parameter calculation", maxi * 0.9, maxi, "")
-        # TODO fixen
-        with ThreadPoolExecutor(max_workers=None) as e:
-            for roi in self.roi_cache:
-                if roi.main:
-                    e.submit(roi.calculate_ellipse_parameters)
-        print(f"Calculation of ellipse parameters: {time.time() - s1:.4f}")
         self.prg_signal.emit(message.format(f"{time.time()-start:.2f} secs"),
                              percent, maxi, "")
         self.enable_buttons()
@@ -375,11 +374,7 @@ class NucDetect(QMainWindow):
         for roi in data["handler"].rois:
             dim = roi.calculate_dimensions()
             # Calculate ellipse parameters if roi is main, else use template
-            if roi.main:
-                ellp = roi.calculate_ellipse_parameters()
-            else:
-                ellp = {"center": None, "major_axis": (None, None), "major_length": None, "major_slope": None,
-                        "major_angle": None, "minor_axis": (None, None), "minor_length": None, "shape_match": None}
+            ellp = roi.calculate_ellipse_parameters()
             stats = roi.calculate_statistics()
             asso = hash(roi.associated) if roi.associated is not None else None
             curs.execute(
@@ -395,9 +390,9 @@ class NucDetect(QMainWindow):
                 "INSERT OR IGNORE INTO statistics VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (hash(roi), key, stats["area"], stats["intensity average"], stats["intensity median"],
                  stats["intensity maximum"], stats["intensity minimum"], stats["intensity std"],
-                 str(ellp["center"]), str(ellp["major axis"][0]), str(ellp["major axis"][1]),
-                 ellp["major slope"], ellp["major length"], str(ellp["minor axis"][0]), str(ellp["minor axis"][1]),
-                 ellp["minor axis length"])
+                 str(ellp["center"]), str(ellp["major_axis"][0]), str(ellp["major_axis"][1]),
+                 ellp["major_slope"], ellp["major_length"], str(ellp["minor_axis"][0]), str(ellp["minor_axis"][1]),
+                 ellp["minor_length"])
             )
         curs.execute(
             "UPDATE images SET analysed = ? WHERE md5 = ?",
