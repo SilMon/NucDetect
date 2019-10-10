@@ -23,6 +23,7 @@ from Nucleus.core.ROIHandler import ROIHandler
 from Nucleus.core.ROI import ROI
 from skimage.morphology import watershed
 from skimage.feature import peak_local_max
+from Nucleus.core.JittedFunctions import eu_dist
 import matplotlib.pyplot as plt
 
 
@@ -222,7 +223,7 @@ class Detector:
                     focdim2 = focus2.calculate_dimensions()
                     maxdist2 = max(focdim2["height"], focdim2["width"])
                     c2 = focdim2["center"]
-                    rdist = math.sqrt((c[0] - c2[0]) ** 2 + (c[1] - c2[1]) ** 2) < maxdist / 2 + maxdist2 / 2
+                    rdist = eu_dist(c, c2) < maxdist / 2 + maxdist2 / 2
                     if focus.ident == focus2.ident and rdist:
                         if focus.calculate_roi_intersection(focus2) >= max_focus_overlapp:
                             if focus2.points >= focus.points:

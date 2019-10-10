@@ -1,4 +1,8 @@
 from __future__ import annotations
+
+import traceback
+
+import io
 import copy
 import datetime
 import json
@@ -1971,7 +1975,33 @@ class QGraphicsFocusItem(QGraphicsEllipseItem):
         self.scene().update()
 
 
+def exception_hook(exc_type, exc_value, traceback_obj) -> None:
+    """
+    General exception hook to display error message for user
+    :param exc_type: Type of the exception
+    :param exc_value: Value of the exception
+    :param traceback_obj: The traceback object associated with the exception
+    :return: None
+    """
+    # Print the traceback to console
+    tb_infofile = io.StringIO()
+    traceback.print_tb(traceback_obj, None, tb_infofile)
+    # Show error message in GUI
+    time_string = time.strftime("%Y-%m-%d, %H:%M:%S")
+    title = "An error occured during execution"
+    info = f"An {exc_type.__name__} occured at {time_string}"
+    text = "During the execution of the program, following error occured:\n" \
+           f"{''.join(traceback.format_exception(exc_type, exc_value, traceback_obj))}"
+    msg = QMessageBox()
+    msg.setIcon(QMessageBox.Critical)
+    msg.setText(text)
+    msg.setInformativeText(info)
+    msg.setWindowTitle(title)
+    msg.exec_()
+
+
 def main():
+    sys.excepthook = exception_hook
     app = QtWidgets.QApplication(sys.argv)
     pixmap = QPixmap("banner_norm.png")
     splash = QSplashScreen(pixmap)
@@ -1984,4 +2014,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+        main()
