@@ -22,6 +22,7 @@ Requirements
 * qtawesome
 * piexif
 * tensorflow == 1.13.1
+* numba >= 0.45.1
 
 Run the following commands to clone and install from GitHub.
 
