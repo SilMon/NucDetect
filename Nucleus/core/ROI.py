@@ -3,18 +3,19 @@ Created on 09.04.2019
 @author: Romano Weiss
 """
 from __future__ import annotations
-from typing import Union, Dict, List, Tuple
-import numpy as np
-import math
+
 import hashlib
 import json
+import math
 import warnings
-from math import sqrt
+from typing import Union, Dict, List, Tuple
 
-from numba import jit
+import numpy as np
 from numba.typed import List
 from skimage.filters import sobel
-from Nucleus.core.JittedFunctions import eu_dist
+
+from Nucleus.core.JittedFunctions import eu_dist, merge_lists
+
 
 class ROI:
     __slots__ = [
@@ -103,6 +104,8 @@ class ROI:
         # TODO jitten
         if isinstance(roi, ROI):
             if roi.ident == self.ident:
+                # TODO test
+                #self.points = merge_lists(self.points, roi.points)
                 self.points.extend(roi.points)
                 self.inten.update(roi.inten)
                 self.id = None
@@ -157,7 +160,7 @@ class ROI:
             warnings.warn("Ellipse Parameter Calculation: ROI is not marked as main")
         # Check if the parameters are already calculated
         if not self.ell_params:
-            if self.main:
+            if self.main  and len(self) >= 2:
                 # Calculate dimensions of ROI
                 dims = self.calculate_dimensions()
                 offset = dims["minY"], dims["minX"]
@@ -180,7 +183,6 @@ class ROI:
                 max_d = 0.0
                 p0 = None
                 p1 = None
-                # TODO reimplement using numba.typed.List
                 # Determine main axis
                 for r1 in range(len(points)):
                     point1 = points[r1]
@@ -197,7 +199,7 @@ class ROI:
                 # Calculate slope of major axis
                 m_maj = (p1[0] - p0[0]) / (p1[1] - p0[1])
                 # Calculate center of major axis
-                center = (p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2
+                center = int((p0[0] + p1[0]) / 2), int((p0[1] + p1[1]) / 2)
                 # Determine minor axis for each nucleus
                 for r in range(len(points)):
                     c = center
@@ -237,9 +239,9 @@ class ROI:
                 self.ell_params["minor_length"] = min_length
                 self.ell_params["shape_match"] = min_a / max_a
             else:
-                return {"center": None, "major_axis": ((None, None), (None, None)), "major_slope": None,
-                        "major_length": None, "minor_axis": ((None, None), (None, None)), "minor_length": None,
-                        "shape_match": None}
+                return {"center": (None, None), "major_axis": ((None, None), (None, None)), "major_slope": None,
+                        "major_length": None, "major_angle": None, "minor_axis": ((None, None), (None, None)),
+                        "minor_length": None, "shape_match": None}
         return self.ell_params
 
     def calculate_roi_intersection(self, roi: ROI) -> float:
@@ -352,4 +354,3 @@ class ROI:
         self.points = d["points"]
         self.inten = tempinten
         self.associated = ["associated"]
-

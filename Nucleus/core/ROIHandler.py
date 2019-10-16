@@ -3,11 +3,13 @@ Created on 09.04.2019
 @author: Romano Weiss
 """
 from __future__ import annotations
-from typing import Union, Dict, List, Tuple
-import numpy as np
+
 import csv
 import datetime
 import os
+from typing import Union, Dict, List, Tuple
+
+import numpy as np
 
 
 class ROIHandler:

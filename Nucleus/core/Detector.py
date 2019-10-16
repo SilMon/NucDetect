@@ -5,26 +5,28 @@ Created 09.04.2019
 from __future__ import annotations
 
 import datetime
-import os
 import hashlib
-
 import math
-import piexif
-import numpy as np
+import os
 import time
 from typing import Union, Dict, List, Tuple, Any
+
+import numpy as np
+import piexif
+import matplotlib.pyplot as plt
 from scipy import ndimage as ndi
 from skimage import io
-from skimage.feature import canny, blob_log
-from skimage.filters import sobel
 from skimage.draw import circle
-from skimage.morphology.binary import binary_opening
-from Nucleus.core.ROIHandler import ROIHandler
-from Nucleus.core.ROI import ROI
-from skimage.morphology import watershed
+from skimage.feature import canny, blob_log
 from skimage.feature import peak_local_max
-from Nucleus.core.JittedFunctions import eu_dist
-import matplotlib.pyplot as plt
+from skimage.filters import threshold_local
+from skimage.filters.rank import maximum
+from skimage.morphology import watershed
+from skimage.morphology.binary import binary_opening
+
+from Nucleus.core.JittedFunctions import eu_dist, create_circular_mask
+from Nucleus.core.ROI import ROI
+from Nucleus.core.ROIHandler import ROIHandler
 
 
 class Detector:
@@ -200,6 +202,7 @@ class Detector:
         maincop.extend(foci)
         ass = {key: value for key, value in Detector.create_association_map(maincop).items() if
                len(key) > min_main_area}
+        print(f"min_main_area: {min_main_area}")
         Detector.log(f"Assmap-Creation: {time.time() - s8}", logging)
         mainlen = len(main)
         main = [x for x, _ in ass.items()]
@@ -235,6 +238,7 @@ class Detector:
         rem_list.clear()
         Detector.log(f"Time: {time.time() - s4:4f}\nNucleus Quality Check", logging)
         # Nucleus quality check
+        """
         s1 = time.time()
         ws_num = 0
         res_nuc = 0
@@ -284,15 +288,16 @@ class Detector:
                 main.append(nuc)
             for focus in ass[t[1]]:
                 c = focus.calculate_dimensions()["center"]
-                min_dist = [math.sqrt((c[0] - c2[0]) ** 2 + (c[1] - c2[1]) ** 2) for c2 in centers]
+                min_dist = [eu_dist(c, c2) for c2 in centers]
                 focus.associated = t[2][min_dist.index(min(min_dist))]
                 foc_cop.append(focus)
             main.remove(t[1])
+        """
         rois.clear()
         # TODO Reihenfolge wichtig, ausbessern da undynamisch
-        rois.extend(foc_cop)
+        rois.extend(foci)
         rois.extend(main)
-        Detector.log(f"Time: {time.time() - s2:4f}\nTotal Quality Check Time: {time.time() - s7}", logging)
+        Detector.log(f"Total Quality Check Time: {time.time() - s7}", logging)
 
     @staticmethod
     def create_association_map(rois: List[ROI]) -> Dict[ROI, List[ROI]]:
@@ -390,29 +395,68 @@ class Detector:
         :return: The thresholded channels
         """
         thresh: List[Union[None, np.ndarray]] = [None] * len(channels)
-        edges_main = np.pad(channels[main_channel], pad_width=pad,
-                            mode="constant", constant_values=0)
-        # Threshold image
-        hmax = np.amax(edges_main)
-        hmin = np.amin(edges_main)
-        threshold = hmin + round(main_threshold * hmax)
-        ch_main_bin = binary_opening(ndi.binary_fill_holes(edges_main > threshold), selem=np.ones((20, 20)))
-        det: List[Tuple[int, int]] = []
-        numpy_edm = ndi.distance_transform_edt(ch_main_bin)
-        points_loc_max = peak_local_max(numpy_edm, labels=ch_main_bin, indices=False,
-                                        min_distance=45, exclude_border=False)
-        points_ws, num_labels = ndi.label(points_loc_max)
-        ch_main_bin = watershed(-numpy_edm, points_ws, mask=ch_main_bin, watershed_line=False)
-        # Removal of added padding
-        ch_main_bin = np.array([x[pad:-pad] for x in ch_main_bin[pad:-pad]])
-        truth_table = np.zeros(shape=ch_main_bin.shape, dtype=bool)
-        for i in range(len(ch_main_bin)):
-            for ii in range(len(ch_main_bin[0])):
-                if ch_main_bin[i][ii] and not truth_table[i][ii]:
-                    nuc = Detector.adjusted_flood_fill((i, ii), ch_main_bin, truth_table)
-                    if nuc is not None:
-                        det.append(nuc)
-        thresh[main_channel] = ch_main_bin
+        iterations = 5
+        size = 7
+        selem = create_circular_mask(size, size)
+        # Load image
+        orig = channels[main_channel]
+        area = orig.shape[0] * orig.shape[1]
+        lim = 1500 * (area / 1500000)
+        hmax = np.amax(orig)
+        hmin = np.amin(orig)
+        threshold = hmin + round(0.05 * hmax)
+        ch_main_bin = ndi.binary_fill_holes(orig > threshold)
+        # Calculate the euclidean distance map
+        edm = ndi.distance_transform_edt(ch_main_bin)
+        # Normalize edm
+        xmax, xmin = edm.max(), edm.min()
+        x = (edm - xmin) / (xmax - xmin)
+        # Determine maxima of EDM
+        maxi = maximum(x, selem=selem)
+        # Iteratively determine maximum
+        for _ in range(iterations):
+            maxi = maximum(maxi, selem=selem)
+        thresh_ = threshold_local(maxi, block_size=size * 8 + 1)
+        maxi = ndi.binary_fill_holes(maxi > thresh_)
+
+        # Calculate second threshold
+        mini = np.amin(orig) + 0.005 * np.amax(orig)
+        for y in range(len(orig)):
+            for x in range(len(orig[0])):
+                pix = orig[y][x]
+                if pix <= mini:
+                    maxi[y][x] = 0
+        # Open maxi to remove noise
+        maxi = binary_opening(maxi, selem=create_circular_mask(size * 2, size * 2))
+
+        # Extract nuclei from map
+        area, labels = ndi.label(maxi)
+        nucs = [None] * (labels + 1)
+        det: List[Tuple[int, int]] = [None] * (labels + 1)
+        for y in range(len(area)):
+            for x in range(len(area[0])):
+                pix = area[y][x]
+                if nucs[pix] is None:
+                    det[pix] = []
+                    nucs[pix] = [[], []]
+                nucs[pix][0].append(y)
+                nucs[pix][1].append(x)
+                det[pix].append((y, x))
+
+        # Remove background
+        del nucs[0]
+        centers = [(np.average(x[0]), np.average(x[1])) for x in nucs if len(x[0]) > lim]
+
+        cmask = np.zeros(shape=orig.shape)
+        ind = 10
+        for c in centers:
+            cmask[int(c[0])][int(c[1])] = ind
+            ind += 1
+
+        # Create watershed segmentation based on centers
+        ws = watershed(-edm, cmask, mask=ch_main_bin, watershed_line=True)
+        thresh[main_channel] = ws
+
         for ind in range(len(channels)):
             if ind != main_channel:
                 thresh[ind] = Detector.calculate_local_region_threshold(det, channels[ind])

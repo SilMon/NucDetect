@@ -1,21 +1,21 @@
 from __future__ import annotations
 
-import traceback
-
-import io
 import copy
 import datetime
+import io
 import json
+import math
 import os
 import sqlite3
 import sys
 import time
-from threading import Thread
+import traceback
+import re
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from threading import Thread
 from typing import Union, Dict, List, Tuple, Any
 
 import PyQt5
-import math
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
@@ -226,8 +226,12 @@ class NucDetect(QMainWindow):
         if os.path.splitext(file)[1] in Detector.FORMATS:
             d = Detector.get_image_data(path)
             date = d["datetime"]
-            t = date.decode("ascii").split(" ") if not isinstance(date, datetime.datetime) \
-                else date.strftime("%d/%m/%Y, %H:%M:%S")
+            if isinstance(date, datetime.datetime):
+                t = (date.strftime("%d.%m.%Y"), date.strftime("%H:%M:%S"))
+            else:
+                t = date.decode("ascii").split(" ")
+                temp = t[0].split(":")
+                t[0] = f"{temp[2]}.{temp[1]}.{temp[0]}"
             item = QStandardItem()
             item_text = f"Name: {file}\nFolder: {folder}\nDate: {t[0]}\nTime: {t[1]}"
             item.setText(item_text)
@@ -324,7 +328,7 @@ class NucDetect(QMainWindow):
         data = self.detector.analyse_image(path)
         self.roi_cache = data["handler"]
         s0 = time.time()
-        self.prg_signal.emit(f"Ellipse parameter calculation", maxi * 0.9, maxi, "")
+        self.prg_signal.emit(f"Ellipse parameter calculation", maxi * 0.75, maxi, "")
         with ThreadPoolExecutor(max_workers=None) as e:
             for roi in self.roi_cache:
                 if roi.main:
@@ -333,7 +337,7 @@ class NucDetect(QMainWindow):
         print(f"Calculation of ellipse parameters: {time.time() - s0:.4f}")
         self.create_result_table_from_list(data["handler"])
         print(f"Creation result table: {time.time()-s0:.4f} secs")
-        self.prg_signal.emit("Checking database", maxi * 0.75, maxi, "")
+        self.prg_signal.emit("Checking database", maxi * 0.9, maxi, "")
         s1 = time.time()
         self.save_rois_to_database(data)
         print(f"Writing to database: {time.time() - s1:.4f} secs")
@@ -377,7 +381,6 @@ class NucDetect(QMainWindow):
             )
         for roi in data["handler"].rois:
             dim = roi.calculate_dimensions()
-            # Calculate ellipse parameters if roi is main, else use template
             ellp = roi.calculate_ellipse_parameters()
             stats = roi.calculate_statistics()
             asso = hash(roi.associated) if roi.associated is not None else None
@@ -391,12 +394,12 @@ class NucDetect(QMainWindow):
                     (hash(roi), p[0], p[1], roi.inten[p])
                 )
             curs.execute(
-                "INSERT OR IGNORE INTO statistics VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT OR IGNORE INTO statistics VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (hash(roi), key, stats["area"], stats["intensity average"], stats["intensity median"],
                  stats["intensity maximum"], stats["intensity minimum"], stats["intensity std"],
                  str(ellp["center"]), str(ellp["major_axis"][0]), str(ellp["major_axis"][1]),
-                 ellp["major_slope"], ellp["major_length"], str(ellp["minor_axis"][0]), str(ellp["minor_axis"][1]),
-                 ellp["minor_length"])
+                 ellp["major_slope"], ellp["major_length"], ellp["major_angle"], str(ellp["minor_axis"][0]),
+                 str(ellp["minor_axis"][1]), ellp["minor_length"], ellp["shape_match"])
             )
         curs.execute(
             "UPDATE images SET analysed = ? WHERE md5 = ?",
@@ -532,10 +535,6 @@ class NucDetect(QMainWindow):
             "SELECT * FROM roi WHERE image = ?",
             (md5, )
         ).fetchall()
-        stats = self.cursor.execute(
-            "SELECT * FROM statistics WHERE image = ?",
-            (md5, )
-        ).fetchall()
         names = self.cursor.execute(
             "SELECT * FROM channels WHERE md5 = ?",
             (md5, )
@@ -547,17 +546,18 @@ class NucDetect(QMainWindow):
         statkeys = ("area", "intensity average",
                     "intensity median", "intensity maximum",
                     "intensity minimum", "intensity std")
-        ellkeys = ("center", "major_axis", "major_length", "major_slope", "minor_axis", "minor_length")
+        ellkeys = ("center", "major_axis", "major_slope", "major_length",
+                   "major_angle", "minor_axis", "minor_length", "shape_match")
         for entry in entries:
             temproi = ROI(channel=entry[3], main=entry[7] is None, associated=entry[7])
             temproi.id = entry[0]
+            stats = self.cursor.execute(
+                "SELECT * FROM statistics WHERE hash = ?",
+                (entry[0],)
+            ).fetchall()[0]
             temproi.stats = dict(zip(statkeys, stats[2:8]))
             if temproi.main:
                 main_.append(temproi)
-                major = tuple(stats[9]), tuple(stats[10])
-                minor = tuple(stats[13]), tuple(stats[14])
-                ellp = (stats[8], major, stats[14:16], minor, stats[16])
-                temproi.ell_params = dict(zip(ellkeys, ellp))
             else:
                 sec.append(temproi)
             for p in self.cursor.execute(
@@ -565,6 +565,19 @@ class NucDetect(QMainWindow):
                     (entry[0], )
             ).fetchall():
                 temproi.add_point((p[1], p[2]), p[3])
+            if temproi.main:
+                center = re.search(r"\((\d*)\D*(\d*)\)?", stats[8])
+                maj = re.search(r"\((\d*)\D*(\d*)\)?", stats[9]), re.search(r"\((\d*)\D*(\d*)\)?", stats[10])
+                mino = re.search(r"\((\d*)\D*(\d*)\)?", stats[14]), re.search(r"\((\d*)\D*(\d*)\)?", stats[15])
+                center = (int(center.group(1)), int(center.group(2)))
+                major = (int(maj[0].group(1)), int(maj[0].group(2))), (int(maj[1].group(1)), int(maj[1].group(2)))
+                minor = (int(mino[0].group(1)), int(mino[0].group(2))), (int(mino[1].group(1)), int(mino[1].group(2)))
+            else:
+                center = (None, None)
+                major = (None, None), (None, None)
+                minor = (None, None), (None, None)
+            ellp = (center, major, stats[11], stats[12], stats[13], minor, stats[16], stats[17])
+            temproi.ell_params = dict(zip(ellkeys, ellp))
             rois.add_roi(temproi)
         for m in main_:
             for s in sec:
@@ -1159,7 +1172,7 @@ class ImgDialog(QDialog):
                 dots[1].append(center[1])
                 dots[2].append(mark)
         ax.scatter(dots[0], dots[1], marker="o", c=dots[2], s=16)
-        ax.set_ylim(0, len(self.image))
+        ax.set_ylim(len(self.image), 0)
         ax.set_xlim(0, len(self.image[0]))
         self.figure.tight_layout()
         self.canvas.draw()
