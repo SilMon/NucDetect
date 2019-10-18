@@ -837,7 +837,7 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        mod = ModificationDialog(image=Detector.load_image(self.cur_img), handler=self.roi_cache)
+        mod = ModificationDialog(image=Detector.load_image(self.cur_img["path"]), handler=self.roi_cache)
         mod.setWindowTitle("Modification")
         mod.setWindowIcon(QtGui.QIcon("logo.png"))
         mod.setWindowFlags(mod.windowFlags() |
