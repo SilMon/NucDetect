@@ -120,7 +120,7 @@ class ROIHandler:
         """
         print(self.idents)
         tempdat = {}
-        header = ["Hash", "Width", "Height", "Center"]
+        header = ["Image", "Center[(y, x)]", "Area [px]", "Ellipticity[%]"]
         header.extend(self.idents)
         header.remove(self.main)
         tempdat["header"] = header
@@ -128,11 +128,12 @@ class ROIHandler:
         for roi in self.rois:
             if roi.main:
                 tempstat = roi.calculate_dimensions()
+                tempell = roi.calculate_ellipse_parameters()
                 row = [
-                    hash(roi),
-                    tempstat["width"],
-                    tempstat["height"],
-                    tempstat["center"]
+                    self.ident,
+                    f"{str(int(tempstat['center'][0])):^5s}|{str(int(tempstat['center'][1])):^5s}",
+                    tempstat["area"],
+                    f"{tempell['shape_match'] * 100:.3f}"
                 ]
                 secstat = {}
                 for roi2 in self.rois:

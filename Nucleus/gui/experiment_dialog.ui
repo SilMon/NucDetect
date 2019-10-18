@@ -19,7 +19,7 @@
      <item>
       <layout class="QGridLayout" name="gridLayout">
        <item row="1" column="1">
-        <widget class="QTextEdit" name="textEdit">
+        <widget class="QTextEdit" name="te_details">
          <property name="placeholderText">
           <string>Enter details about the experiment</string>
          </property>
@@ -33,7 +33,7 @@
         </widget>
        </item>
        <item row="2" column="1">
-        <widget class="QTextEdit" name="textEdit_2">
+        <widget class="QTextEdit" name="te_notes">
          <property name="placeholderText">
           <string>Enter additional notes about the experiment</string>
          </property>
@@ -54,7 +54,7 @@
         </widget>
        </item>
        <item row="0" column="1">
-        <widget class="QLineEdit" name="lineEdit">
+        <widget class="QLineEdit" name="le_name">
          <property name="placeholderText">
           <string>Enter a unique identifier for the experiment</string>
          </property>
@@ -68,7 +68,7 @@
         </widget>
        </item>
        <item row="3" column="1">
-        <widget class="QLineEdit" name="lineEdit_2">
+        <widget class="QLineEdit" name="le_groups">
          <property name="text">
           <string/>
          </property>
@@ -89,7 +89,7 @@
         </widget>
        </item>
        <item>
-        <widget class="QListView" name="listView">
+        <widget class="QListView" name="lv_images">
          <property name="selectionMode">
           <enum>QAbstractItemView::MultiSelection</enum>
          </property>

@@ -52,6 +52,7 @@ ui_class_dial = os.path.join(os.getcwd(), "classification_dialog.ui")
 ui_stat_dial = os.path.join(os.getcwd(), "statistics_dialog.ui")
 ui_settings_dial = os.path.join(os.getcwd(), "settings_dialog.ui")
 ui_modification_dial = os.path.join(os.getcwd(), "modification_dialog.ui")
+ui_list_item = os.path.join(os.getcwd(), "image_list_widget.ui")
 database = os.path.join(os.pardir, f"database{os.sep}nucdetect.db")
 tablescript = os.path.join(os.pardir, f"database{os.sep}nucdetect.sql")
 settingsscript = os.path.join(os.pardir, f"database{os.sep}settings.sql")
@@ -81,15 +82,14 @@ class NucDetect(QMainWindow):
         self.cursor.executescript(tscript)
         # Insert standard settings into table if not already
         setscript = open(settingsscript, "r").read()
-        self.cursor.executescript((setscript))
+        self.cursor.executescript(setscript)
         # Load the settings from database
         self.settings = self.load_settings()
         # Create detector for analysis
         self.detector = Detector(settings=[].extend(list(self.settings.values())),
                                  logging=self.settings["logging"])
         # Initialize needed variables
-        self.reg_images = {}
-        self.sel_images = []
+        self.reg_images = []
         self.cur_img = None
         self.roi_cache = None
         self.unsaved_changes = False
@@ -98,7 +98,7 @@ class NucDetect(QMainWindow):
         self.setWindowTitle("NucDetect")
         self.setWindowIcon(QtGui.QIcon('logo.png'))
 
-    def load_settings(self) -> None:
+    def load_settings(self) -> Dict:
         """
         Method to load the saved Settings
         :return: None
@@ -131,7 +131,8 @@ class NucDetect(QMainWindow):
         self.ui.list_images.setIconSize(QSize(75, 75))
         # Initialization of the result table
         self.res_table_model = QStandardItemModel(self.ui.table_results)
-        self.res_table_model.setHorizontalHeaderLabels(["Index", "Width", "Height", "Center", "Foci"])
+        self.res_table_model.setHorizontalHeaderLabels(["Image", "Center[(y, x)]", "Area [px]", "Ellipticity[%]",
+                                                        "Foci"])
         self.ui.table_results.setModel(self.res_table_model)
         self.ui.table_results.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         # Addition of on click listeners
@@ -172,11 +173,10 @@ class NucDetect(QMainWindow):
         Will be called if a new image is selected
         :return: None
         """
-        self.sel_images.clear()
         for index in self.ui.list_images.selectionModel().selectedIndexes():
-            self.sel_images.append(self.reg_images[self.img_list_model.item(index.row()).text()])
-        if len(self.sel_images) > 0:
-            hash_ = Detector.calculate_image_id(self.reg_images[self.img_list_model.item(index.row()).text()])
+            self.cur_img = self.img_list_model.item(index.row()).data()
+        if self.cur_img:
+            hash_ = self.cur_img["key"]
             # TODO Settings mit einbeziehen
             ana = self.cursor.execute(
                 "SELECT analysed FROM images WHERE md5 = ?",
@@ -187,7 +187,6 @@ class NucDetect(QMainWindow):
                 self.create_result_table_from_list(self.roi_cache)
                 self.enable_buttons()
                 self.ui.btn_analyse.setEnabled(False)
-                self.cur_img = self.sel_images[0]
                 self.ui.lbl_status.setText("Loaded analysis results from database")
             else:
                 self.ui.lbl_status.setText("Program ready")
@@ -232,26 +231,34 @@ class NucDetect(QMainWindow):
                 t = date.decode("ascii").split(" ")
                 temp = t[0].split(":")
                 t[0] = f"{temp[2]}.{temp[1]}.{temp[0]}"
-            item = QStandardItem()
-            item_text = f"Name: {file}\nFolder: {folder}\nDate: {t[0]}\nTime: {t[1]}"
-            item.setText(item_text)
-            item.setTextAlignment(QtCore.Qt.AlignLeft)
-            icon = QIcon()
-            icon.addFile(path)
-            item.setIcon(icon)
-            self.img_list_model.appendRow(item)
-            self.reg_images[item_text] = path
             key = Detector.calculate_image_id(path)
-            if not self.cursor.execute(
-                "SELECT * FROM images WHERE md5 = ?",
-                    (key, )
-            ).fetchall():
-                self.cursor.execute(
-                    "INSERT INTO images VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (key, d["datetime"], d["channels"], d["width"], d["height"],
-                     str(d["x_res"]), str(d["y_res"]), d["unit"], 0, -1)
-                )
-            self.connection.commit()
+            if key not in self.reg_images:
+                item = QStandardItem()
+                item_text = f"Name: {file}\nFolder: {folder}\nDate: {t[0]}\nTime: {t[1]}"
+                item.setText(item_text)
+                item.setTextAlignment(QtCore.Qt.AlignLeft)
+                item.setData({
+                    "key": key,
+                    "path": path,
+                    "file_name": file,
+                    "folder": folder
+                })
+                icon = QIcon()
+                icon.addFile(path)
+                item.setIcon(icon)
+                self.img_list_model.appendRow(item)
+                self.reg_images.append(key)
+
+                if not self.cursor.execute(
+                    "SELECT * FROM images WHERE md5 = ?",
+                        (key, )
+                ).fetchall():
+                    self.cursor.execute(
+                        "INSERT INTO images VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (key, d["datetime"], d["channels"], d["width"], d["height"],
+                         str(d["x_res"]), str(d["y_res"]), d["unit"], 0, -1)
+                    )
+                self.connection.commit()
 
     def add_images_from_folder(self, url: str) -> None:
         """
@@ -297,14 +304,12 @@ class NucDetect(QMainWindow):
         :return: None
         """
         self.res_table_model.setRowCount(0)
-        if not self.sel_images:
+        if not self.cur_img:
             self.ui.list_images.select(self.img_list_model.index(0, 0))
-        self.prg_signal.emit(f"Analysing {str(self.sel_images[0])}",
+        self.prg_signal.emit(f"Analysing {self.cur_img['file_name']}",
                              0, 100, "")
-        self.cur_img = self.sel_images[0]
-        self.sel_images.remove(self.sel_images[0])
         thread = Thread(target=self.analyze_image,
-                        args=(self.cur_img,
+                        args=(self.cur_img["path"],
                               "Analysis finished in {} -- Program ready",
                               100, 100,))
         thread.start()
@@ -591,7 +596,7 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        image_dialog = ImgDialog(image=Detector.load_image(self.cur_img), handler=self.roi_cache)
+        image_dialog = ImgDialog(image=Detector.load_image(self.cur_img["path"]), handler=self.roi_cache)
         image_dialog.setWindowTitle(f"Result Images for {self.cur_img}")
         image_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
         image_dialog.setWindowFlags(image_dialog.windowFlags() |

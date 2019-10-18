@@ -60,6 +60,7 @@ class Detector:
         :param logging: Enables logging
         :return: The analysis results as dict
         """
+        start = time.time()
         logging = logging if self.logging is None else self.logging
         imgdat = Detector.get_image_data(path)
         imgdat["id"] = Detector.calculate_image_id(path)
@@ -81,6 +82,7 @@ class Detector:
         for roi in rois:
             handler.add_roi(roi)
         imgdat["handler"] = handler
+        print(f"Total analysis time: {time.time()-start}")
         return imgdat
 
     @staticmethod
@@ -113,6 +115,7 @@ class Detector:
                         main[lab] = roi
                     else:
                         main[lab].add_point((x, y), int(channels[main_map][y][x]))
+        print(f"Finished main ROI extraction {time.time()-s0:.4f}")
         for ind in range(len(markers)):
             if ind != main_map:
                 temprois = [None] * (lab_nums[ind] + 1)
@@ -133,7 +136,9 @@ class Detector:
                                 temprois[lab].add_point((x, y), int(channels[ind][y][x]))
                 del temprois[0]
                 rois.extend(temprois)
+        print(f"Finished first focus extraction {time.time() - s0:.4f}")
         # Second round of ROI detection
+        # TODO Make faster
         markers, lab_nums = Detector.detect_blobs(channels, main_channel=main_map)
         for ind in range(len(markers)):
             temprois = [None] * (lab_nums[ind] + 1)
@@ -156,7 +161,7 @@ class Detector:
             rois.extend(temprois)
         del main[0]
         rois.extend(main)
-        Detector.log("Analysis time: {:.4f}".format(time.time() - s0), logging)
+        print(f"Finished second focus extraction {time.time() - s0:.4f}")
         Detector.perform_roi_quality_check(rois, logging=logging)
         return rois
 
@@ -192,7 +197,6 @@ class Detector:
             else:
                 foci.append(roi)
         Detector.log(f"Detected nuclei:{len(main)}\nDetected foci: {len(foci)}", logging)
-        ws_list = []
         Detector.log("Checking for very small nuclei", logging)
         # Remove very small nuclei
         Detector.log(f"Time: {time.time() - s7:4f}\nRemove not associated foci", logging)
@@ -236,63 +240,7 @@ class Detector:
                                 break
         foci = [x for x in foci if not x.marked]
         rem_list.clear()
-        Detector.log(f"Time: {time.time() - s4:4f}\nNucleus Quality Check", logging)
-        # Nucleus quality check
-        """
-        s1 = time.time()
-        ws_num = 0
-        res_nuc = 0
-        maincop = main.copy()
-        maincop.extend(foci)
-        ass = Detector.create_association_map(maincop)
-        foc_cop = []
-        for nucleus in main:
-            if len(nucleus) > max_main_area:
-                numpy_bin = nucleus.get_as_binary_map()
-                numpy_edm = ndi.distance_transform_edt(numpy_bin)
-                points_loc_max = peak_local_max(numpy_edm, labels=numpy_bin, indices=False,
-                                                min_distance=min_dist)
-                points_labels, num_labels = ndi.label(points_loc_max)
-                if num_labels > 1:
-                    res_nuc += num_labels
-                    index = main.index(nucleus)
-                    dims = nucleus.calculate_dimensions()
-                    offset = (dims["minX"], dims["minY"])
-                    points_ws = watershed(-numpy_edm, points_labels, mask=numpy_bin, watershed_line=ws_line)
-                    # Extraction of ROI from watershed
-                    lab_num = np.amax(points_ws)
-                    nucs = [None] * lab_num
-                    for i in range(len(points_ws)):
-                        for ii in range(len(points_ws[0])):
-                            if points_ws[i][ii] > 0:
-                                if nucs[points_ws[i][ii] - 1] is None:
-                                    nucs[points_ws[i][ii] - 1] = ROI(channel=nucleus.ident)
-                                    p = (ii + offset[0], i + offset[1])
-                                    nucs[points_ws[i][ii] - 1].add_point(p, nucleus.inten[p])
-                                else:
-                                    p = (ii + offset[0], i + offset[1])
-                                    nucs[points_ws[i][ii] - 1].add_point(p, nucleus.inten[p])
-                    ws_list.append((index, nucleus, nucs))
-                    ws_num += 1
-                else:
-                    foc_cop.extend(ass[nucleus])
-            else:
-                foc_cop.extend(ass[nucleus])
-        Detector.log(f"Watershed applied to {ws_num} nuclei, creating {res_nuc} potential nuclei\n"
-                     f"Time: {time.time() - s1:4f}\nAdd newly found nuclei", logging)
-        s2 = time.time()
-        for t in ws_list:
-            centers = []
-            for nuc in t[2]:
-                centers.append(nuc.calculate_dimensions()["center"])
-                main.append(nuc)
-            for focus in ass[t[1]]:
-                c = focus.calculate_dimensions()["center"]
-                min_dist = [eu_dist(c, c2) for c2 in centers]
-                focus.associated = t[2][min_dist.index(min(min_dist))]
-                foc_cop.append(focus)
-            main.remove(t[1])
-        """
+        Detector.log(f"Time: {time.time() - s4:4f}", logging)
         rois.clear()
         # TODO Reihenfolge wichtig, ausbessern da undynamisch
         rois.extend(foci)
@@ -333,9 +281,13 @@ class Detector:
         blob_nums = []
         for ind in range(len(channels)):
             if ind != main_channel:
+                start = time.time()
                 blobs = blob_log(channels[ind], min_sigma=min_sigma, max_sigma=max_sigma, num_sigma=num_sigma,
                                  threshold=threshold, exclude_border=False)
+                print(f"Blob_log time: {time.time() - start:.4f}")
+                start2 = time.time()
                 blob_map = Detector.create_blob_map(channels[ind].shape, blobs)
+                print(f"Blob_map time: {time.time() - start2:.4f}")
                 blob_num = len(blobs)
                 blob_maps.append(blob_map)
                 blob_nums.append(blob_num)
@@ -401,7 +353,6 @@ class Detector:
         # Load image
         orig = channels[main_channel]
         area = orig.shape[0] * orig.shape[1]
-        lim = 1500 * (area / 1500000)
         hmax = np.amax(orig)
         hmin = np.amin(orig)
         threshold = hmin + round(0.05 * hmax)
@@ -445,7 +396,7 @@ class Detector:
 
         # Remove background
         del nucs[0]
-        centers = [(np.average(x[0]), np.average(x[1])) for x in nucs if len(x[0]) > lim]
+        centers = [(np.average(x[0]), np.average(x[1])) for x in nucs]
 
         cmask = np.zeros(shape=orig.shape)
         ind = 10
@@ -618,7 +569,7 @@ class Detector:
         return image_data
 
     @staticmethod
-    def load_image(path:str) -> np.ndarray:
+    def load_image(path: str) -> np.ndarray:
         """
         Method to load an image given by path. Method will only load image formats specified by Detector.FORMATS
 

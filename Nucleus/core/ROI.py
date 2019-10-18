@@ -104,8 +104,6 @@ class ROI:
         # TODO jitten
         if isinstance(roi, ROI):
             if roi.ident == self.ident:
-                # TODO test
-                #self.points = merge_lists(self.points, roi.points)
                 self.points.extend(roi.points)
                 self.inten.update(roi.inten)
                 self.id = None
@@ -304,6 +302,7 @@ class ROI:
                 self.dims["width"] = self.dims["maxX"] - self.dims["minX"] + 1
                 self.dims["height"] = self.dims["maxY"] - self.dims["minY"] + 1
                 self.dims["center"] = (round(np.average(xvals), 2), round(np.average(yvals), 2))
+                self.dims["area"] = len(self.points)
             else:
                 raise Exception("ROI does not contain any points!")
         return self.dims
