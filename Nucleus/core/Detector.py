@@ -6,25 +6,23 @@ from __future__ import annotations
 
 import datetime
 import hashlib
-import math
 import os
 import time
 from typing import Union, Dict, List, Tuple, Any
 
 import numpy as np
 import piexif
-import matplotlib.pyplot as plt
+from numba.typed import List as numList
 from scipy import ndimage as ndi
 from skimage import io
 from skimage.draw import circle
 from skimage.feature import canny, blob_log
-from skimage.feature import peak_local_max
 from skimage.filters import threshold_local
 from skimage.filters.rank import maximum
 from skimage.morphology import watershed
 from skimage.morphology.binary import binary_opening
 
-from Nucleus.core.JittedFunctions import eu_dist, create_circular_mask
+from Nucleus.core.JittedFunctions import eu_dist, create_circular_mask, relabel_array, imprint_data_into_channel
 from Nucleus.core.ROI import ROI
 from Nucleus.core.ROIHandler import ROIHandler
 
@@ -101,7 +99,7 @@ class Detector:
         # First round of ROI detection
         s0 = time.time()
         rois = []
-        markers, lab_nums = Detector.perform_labelling(bin_maps)
+        markers, lab_nums = Detector.perform_labelling(bin_maps, main_map=main_map)
         main_markers = markers[main_map]
         main = [None] * (lab_nums[main_map] + 1)
         # Extraction of main rois
@@ -115,7 +113,8 @@ class Detector:
                         main[lab] = roi
                     else:
                         main[lab].add_point((x, y), int(channels[main_map][y][x]))
-        print(f"Finished main ROI extraction {time.time()-s0:.4f}")
+        Detector.log(f"Finished main ROI extraction {time.time()-s0:.4f}", logging)
+        s1 = time.time()
         for ind in range(len(markers)):
             if ind != main_map:
                 temprois = [None] * (lab_nums[ind] + 1)
@@ -127,18 +126,18 @@ class Detector:
                                 roi = ROI(channel=names[ind], main=False)
                                 roi.add_point((x, y), int(channels[ind][y][x]))
                                 temprois[lab] = roi
-                                if main_markers[y][x] != 0:
+                                if main_markers[y][x] > 0:
                                     roi.associated = main[main_markers[y][x]]
                             else:
                                 if temprois[lab].associated is None:
-                                    if main_markers[y][x] != 0:
+                                    if main_markers[y][x] > 0:
                                         roi.associated = main[main_markers[y][x]]
                                 temprois[lab].add_point((x, y), int(channels[ind][y][x]))
                 del temprois[0]
                 rois.extend(temprois)
-        print(f"Finished first focus extraction {time.time() - s0:.4f}")
+        Detector.log(f"Finished first focus extraction {time.time() - s1:.4f}", logging)
+        s2 = time.time()
         # Second round of ROI detection
-        # TODO Make faster
         markers, lab_nums = Detector.detect_blobs(channels, main_channel=main_map)
         for ind in range(len(markers)):
             temprois = [None] * (lab_nums[ind] + 1)
@@ -150,18 +149,18 @@ class Detector:
                             roi = ROI(channel=names[ind], main=False)
                             roi.add_point((x, y), int(channels[ind][y][x]))
                             temprois[lab] = roi
-                            if main_markers[y][x] != 0:
+                            if main_markers[y][x] > 0:
                                 roi.associated = main[main_markers[y][x]]
                         else:
                             if temprois[lab].associated is None:
-                                if main_markers[y][x] != 0:
+                                if main_markers[y][x] > 0:
                                     roi.associated = main[main_markers[y][x]]
                             temprois[lab].add_point((x, y), int(channels[ind][y][x]))
             del temprois[0]
             rois.extend(temprois)
         del main[0]
         rois.extend(main)
-        print(f"Finished second focus extraction {time.time() - s0:.4f}")
+        Detector.log(f"Finished second focus extraction {time.time() - s2:.4f}")
         Detector.perform_roi_quality_check(rois, logging=logging)
         return rois
 
@@ -205,17 +204,17 @@ class Detector:
         maincop = main.copy()
         maincop.extend(foci)
         ass = {key: value for key, value in Detector.create_association_map(maincop).items() if
-               len(key) > min_main_area}
-        print(f"min_main_area: {min_main_area}")
+              len(key) > min_main_area}
         Detector.log(f"Assmap-Creation: {time.time() - s8}", logging)
         mainlen = len(main)
         main = [x for x, _ in ass.items()]
         Detector.log(f"Removed nuclei: {mainlen - len(main)}", logging)
         foclen = len(foci)
         foci = [x for _, focs in ass.items() for x in focs if x.associated is not None]
+        Detector.log(f"Removed unassociated foci: {foclen - len(foci)}", logging)
         # Remove very small foci
         foci = [x for x in foci if len(x) > min_foc_area]
-        Detector.log(f"Removed foci: {foclen - len(foci)}\nTime: {time.time() - s8:4f}\nFocus Quality Check",
+        Detector.log(f"Total Removed foci: {foclen - len(foci)}\nTime: {time.time() - s8:4f}\nFocus Quality Check",
                      logging)
         # Focus quality check
         s4 = time.time()
@@ -255,6 +254,7 @@ class Detector:
         :param rois: The list of roi to create the association map from
         :return: The association map as dict
         """
+        # TODO fix
         ass = {x: [] for x in rois if x.main}
         for roi in rois:
             if roi.associated is not None:
@@ -352,7 +352,6 @@ class Detector:
         selem = create_circular_mask(size, size)
         # Load image
         orig = channels[main_channel]
-        area = orig.shape[0] * orig.shape[1]
         hmax = np.amax(orig)
         hmin = np.amin(orig)
         threshold = hmin + round(0.05 * hmax)
@@ -383,31 +382,45 @@ class Detector:
         # Extract nuclei from map
         area, labels = ndi.label(maxi)
         nucs = [None] * (labels + 1)
-        det: List[Tuple[int, int]] = [None] * (labels + 1)
+
         for y in range(len(area)):
             for x in range(len(area[0])):
                 pix = area[y][x]
                 if nucs[pix] is None:
-                    det[pix] = []
                     nucs[pix] = [[], []]
                 nucs[pix][0].append(y)
                 nucs[pix][1].append(x)
-                det[pix].append((y, x))
 
         # Remove background
         del nucs[0]
         centers = [(np.average(x[0]), np.average(x[1])) for x in nucs]
 
         cmask = np.zeros(shape=orig.shape)
-        ind = 10
+        ind = 1
         for c in centers:
             cmask[int(c[0])][int(c[1])] = ind
             ind += 1
 
         # Create watershed segmentation based on centers
-        ws = watershed(-edm, cmask, mask=ch_main_bin, watershed_line=True)
+        ws = watershed(-edm, cmask, mask=ch_main_bin, watershed_line=False)
+        # Check number of unique watershed labels
+        unique = list(np.unique(ws))
+        t = time.time()
+        relabel_array(ws)
+        Detector.log(f"Time relabeling: {time.time() - t}")
         thresh[main_channel] = ws
-
+        # Extract nuclei from watershed
+        det: List[Tuple[int, int]] = [None] * len(unique)
+        detpix = []
+        for y in range(len(ws)):
+            for x in range(len(ws[0])):
+                pix = ws[y][x]
+                if pix not in detpix:
+                    detpix.append(pix)
+                if det[pix] is None:
+                    det[pix] = []
+                det[pix].append((y, x))
+        del det[0]
         for ind in range(len(channels)):
             if ind != main_channel:
                 thresh[ind] = Detector.calculate_local_region_threshold(det, channels[ind])
@@ -423,19 +436,27 @@ class Detector:
         :param channel: The corresponding channel
         :return: The foci map for the nucleus
         """
+        impr_time = 0
+        nfpl_time = 0
+        start = time.time()
         chan = np.zeros(shape=channel.shape)
         for nuc in nuclei:
             thresh = []
             for p in nuc:
                 thresh.append((p, channel[p[0]][p[1]]))
             if thresh:
+                t1 = time.time()
                 thresh_np, offset = Detector.create_numpy_from_point_list(thresh)
+                nfpl_time += time.time() - t1
                 edges = Detector.detect_edges(thresh_np)
                 if np.max(edges) > 0:
                     chan_fill = ndi.binary_fill_holes(edges)
                     chan_open = ndi.binary_opening(chan_fill)
                     if np.max(chan_open) > 0:
-                        Detector.imprint_data_into_channel(chan, chan_open, offset)
+                        t = time.time()
+                        imprint_data_into_channel(chan, chan_open, offset)
+                        impr_time += time.time() - t
+        print(f"Imprinting time: {impr_time:.4f} NFPL Time: {nfpl_time:.4f} Total: {time.time() - start:.4f}")
         return chan
 
     @staticmethod
@@ -454,54 +475,6 @@ class Detector:
         return canny(channel.astype("float64"), sigma, low_threshold, high_threshold)
 
     @staticmethod
-    def adjusted_flood_fill(starting_point: Tuple[int, int],
-                            region_map: np.ndarray,
-                            truth_table: List[bool]) -> Union[List[Tuple[int, int]], None]:
-        """
-        Adjusted implementation of flood fill to extract a list of connected points
-
-        :param starting_point: The point to start flood fill from
-        :param region_map: The region to check
-        :param truth_table: The table to indicate already checked points
-        :param labelled: Indicates if the region map is binary or contain labelled areas
-        :return: A list of connected points
-        """
-        points = [
-            starting_point
-        ]
-        height = len(region_map)
-        width = len(region_map[0])
-        nuc = []
-        while points:
-            p = points.pop()
-            y = p[0]
-            x = p[1]
-            if (x >= 0) and (x < width) and (y >= 0) and (y < height):
-                if region_map[y][x] and not truth_table[y][x]:
-                    truth_table[y][x] = True
-                    nuc.append(p)
-                    points.append((y + 1, x))
-                    points.append((y, x + 1))
-                    points.append((y, x - 1))
-                    points.append((y - 1, x))
-        return nuc if nuc else None
-
-    @staticmethod
-    def imprint_data_into_channel(channel: np.ndarray, data: np.ndarray, offset: int) -> None:
-        """
-        Method to transfer the information stored in data into channel. Works in place
-
-        :param channel: The image channel as ndarray
-        :param data: The data to transfer as ndarray
-        :param offset: The offset of the data
-        :return: None
-        """
-        for i in range(len(data)):
-            for ii in range(len(data[0])):
-                if data[i][ii] != 0:
-                    channel[i + offset[0]][ii + offset[1]] = data[i][ii]
-
-    @staticmethod
     def get_channels(img: np.ndarray) -> List[np.ndarray]:
         """
         Method to extract the channels of the given image
@@ -509,6 +482,7 @@ class Detector:
         :param img: The image as ndarray
         :return: A list of all channels
         """
+        t = time.time()
         channels = []
         for ind in range(img.shape[2]):
             channels.append(img[..., ind])

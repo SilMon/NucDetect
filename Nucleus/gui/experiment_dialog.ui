@@ -6,20 +6,122 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>764</width>
-    <height>454</height>
+    <width>1175</width>
+    <height>866</height>
    </rect>
   </property>
   <property name="windowTitle">
    <string>Dialog</string>
   </property>
+  <property name="styleSheet">
+   <string notr="true">QPushButton{
+	color: White;
+	background-color: rgba(22, 42, 75 , 255);
+	border: none;
+	font-size: 14px;
+ 	text-align: center;
+     display: inline-block;
+	min-height: 25;
+	min-width: 40;
+}
+
+QPushButton:hover{
+	background-color:  rgba(15, 35, 68 , 255);
+}
+
+QPushButton:pressed{
+	background-color:  rgba(8, 28, 61 , 255);
+}
+
+QPushButton:disabled{
+	background-color:  rgba(40, 60, 100 , 255);
+}
+
+QTableView, QListView{
+	color: White;
+	background-color: rgba(77, 77, 77, 128)
+}
+
+QLabel{
+	color:White;
+}
+
+QProgressBar {
+	color: White;
+    border: 1px solid grey;
+    background-color: rgb(10, 60, 110);
+ }
+
+ QProgressBar::chunk {
+     background-color: rgba(77, 77, 77, 128);
+ }
+
+QMainWindow{
+	background-color: rgb(0, 51, 102);
+}
+
+QDialog{
+	background-color: rgb(0, 51, 102);
+}</string>
+  </property>
+  <property name="sizeGripEnabled">
+   <bool>false</bool>
+  </property>
   <layout class="QHBoxLayout" name="horizontalLayout_2">
    <item>
-    <layout class="QHBoxLayout" name="horizontalLayout" stretch="65,35">
+    <layout class="QHBoxLayout" name="horizontalLayout" stretch="20,70,30">
+     <property name="spacing">
+      <number>10</number>
+     </property>
      <item>
-      <layout class="QGridLayout" name="gridLayout">
+      <layout class="QVBoxLayout" name="verticalLayout_2">
+       <item>
+        <widget class="QLabel" name="label_6">
+         <property name="text">
+          <string>Experiments</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QListView" name="lv_experiments">
+         <property name="minimumSize">
+          <size>
+           <width>300</width>
+           <height>0</height>
+          </size>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="horizontalLayout_3">
+         <item>
+          <widget class="QPushButton" name="btn_add">
+           <property name="text">
+            <string>+</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="btn_remove">
+           <property name="text">
+            <string>-</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+      </layout>
+     </item>
+     <item>
+      <layout class="QGridLayout" name="gridLayout" columnstretch="0,1">
        <item row="1" column="1">
         <widget class="QTextEdit" name="te_details">
+         <property name="minimumSize">
+          <size>
+           <width>500</width>
+           <height>400</height>
+          </size>
+         </property>
          <property name="placeholderText">
           <string>Enter details about the experiment</string>
          </property>
@@ -34,6 +136,12 @@
        </item>
        <item row="2" column="1">
         <widget class="QTextEdit" name="te_notes">
+         <property name="minimumSize">
+          <size>
+           <width>500</width>
+           <height>400</height>
+          </size>
+         </property>
          <property name="placeholderText">
           <string>Enter additional notes about the experiment</string>
          </property>
@@ -55,6 +163,12 @@
        </item>
        <item row="0" column="1">
         <widget class="QLineEdit" name="le_name">
+         <property name="minimumSize">
+          <size>
+           <width>500</width>
+           <height>0</height>
+          </size>
+         </property>
          <property name="placeholderText">
           <string>Enter a unique identifier for the experiment</string>
          </property>
@@ -69,6 +183,12 @@
        </item>
        <item row="3" column="1">
         <widget class="QLineEdit" name="le_groups">
+         <property name="minimumSize">
+          <size>
+           <width>500</width>
+           <height>0</height>
+          </size>
+         </property>
          <property name="text">
           <string/>
          </property>
@@ -90,6 +210,12 @@
        </item>
        <item>
         <widget class="QListView" name="lv_images">
+         <property name="minimumSize">
+          <size>
+           <width>300</width>
+           <height>0</height>
+          </size>
+         </property>
          <property name="selectionMode">
           <enum>QAbstractItemView::MultiSelection</enum>
          </property>

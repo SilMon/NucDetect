@@ -5,9 +5,6 @@ NucDetect is a Python package to detect and quantify intranuclear DNA repair pro
 ### Note
 The current release is a very early alpha version. Please report report any detected bugs and/or improvement suggestions.
 
-### Warning
-NucDetect is currently not adapted for screens with a resolution over full HD.
-
 Requirements
 ============
 

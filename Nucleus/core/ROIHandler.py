@@ -11,6 +11,8 @@ from typing import Union, Dict, List, Tuple
 
 import numpy as np
 
+from Nucleus.core.ROI import ROI
+
 
 class ROIHandler:
     __slots__ = [
@@ -22,10 +24,10 @@ class ROIHandler:
     ]
 
     def __init__(self, ident: int = None):
-        self.ident = ident
-        self.rois = []
-        self.idents = []
-        self.stats = {}
+        self.ident: str = ident
+        self.rois: List[ROI] = []
+        self.idents: List[str] = []
+        self.stats: Dict[str, Union[int, float]] = {}
         self.main = ""
 
     def __len__(self):
@@ -34,7 +36,13 @@ class ROIHandler:
     def __getitem__(self, item):
         return self.rois[item]
 
-    def add_roi(self, roi):
+    def add_roi(self, roi: ROI) -> None:
+        """
+        Method to add a ROI to this handler
+
+        :param roi: The ROI to add
+        :return: None
+        """
         self.rois.append(roi)
         if roi.ident not in self.idents:
             self.idents.append(roi.ident)
@@ -42,13 +50,24 @@ class ROIHandler:
             self.main = roi.ident
         self.stats.clear()
 
-    def remove_roi(self, roi):
+    def remove_roi(self, roi: ROI, cascade: bool = False) -> None:
+        """
+        Method to remove a ROI from this handler
+
+        :param roi: The ROI to remove
+        :param cascade: If the roi is main, cascade can be used to delete all associated ROI
+        :return: None
+        """
         self.rois.remove(roi)
+        if roi.main and cascade:
+            # If cascadian deletion is activated, delete all associated roi
+            self.rois = [x for x in self.rois if x.associated is not roi]
         self.stats.clear()
 
-    def calculate_statistics(self) -> None:
+    def calculate_statistics(self) -> Dict[str, Union[int, float]]:
         """
         Method to calculate statistics about the saved ROIs
+
         :return: dict -- A dictonary containing the calculated statistics
         """
         if not self.stats:
@@ -116,9 +135,9 @@ class ROIHandler:
     def get_data_as_dict(self) -> Dict[str, List[Union[str, int, float, Tuple[int, int]]]]:
         """
         Method to retrieve the stored ROI data as list
+
         :return: The data as dict
         """
-        print(self.idents)
         tempdat = {}
         header = ["Image", "Center[(y, x)]", "Area [px]", "Ellipticity[%]"]
         header.extend(self.idents)
@@ -131,9 +150,9 @@ class ROIHandler:
                 tempell = roi.calculate_ellipse_parameters()
                 row = [
                     self.ident,
-                    f"{str(int(tempstat['center'][0])):^5s}|{str(int(tempstat['center'][1])):^5s}",
+                    tempstat["center"],
                     tempstat["area"],
-                    f"{tempell['shape_match'] * 100:.3f}"
+                    tempell["shape_match"]
                 ]
                 secstat = {}
                 for roi2 in self.rois:
@@ -150,44 +169,25 @@ class ROIHandler:
                 tempdat["data"].append(row)
         return tempdat
 
-    def export_data_as_csv(self, path: str, delimiter: str = ",",
+    def export_data_as_csv(self, path: str, delimiter: str = ";",
                            quotechar: str = "|") -> bool:
         """
         Method to save the roi data to a csv table
+
         :param path: The folder to save the file in
         :param delimiter: The char used to separate cells
         :param quotechar: The char used as a substitute for \"\" or \'\'
         :return: True if the csv could be exported
         """
-        with open(os.path.join(path, f"{self.ident}.csv", 'w', newline='')) as file:
+        with open(os.path.join(path, f"{self.ident}.csv"), 'w', newline='') as file:
             writer = csv.writer(file, delimiter=delimiter,
                                 quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
             writer.writerow(["File id:", self.ident])
             writer.writerow(["Date:", datetime.datetime.now().strftime("%d.%m.%Y, %H:%M:%S")])
             writer.writerow(["Channels:", self.idents])
             writer.writerow(["Main Channel:", self.main])
-            row = ["Index", "Width", "Height", "Center"]
-            row.extend(self.idents)
-            row.remove(self.main)
-            writer.writerow(row)
-            for roi in self.rois:
-                if roi.main:
-                    tempstat = roi.calculate_dimensions()
-                    row = [
-                        hash(roi),
-                        tempstat["width"],
-                        tempstat["height"],
-                        tempstat["center"]
-                    ]
-                    secstat = {}
-                    for roi2 in self.rois:
-                        if roi2.associated is roi:
-                            if roi2.ident in secstat:
-                                secstat[roi2.ident] += 1
-                            else:
-                                secstat[roi2.ident] = 1
-                    for chan in self.idents:
-                        if chan in secstat.keys():
-                            row.append(secstat[chan])
-                    writer.writerow(row)
+            dat = self.get_data_as_dict()
+            writer.writerow(dat["header"])
+            for data in dat["data"]:
+                writer.writerow(data)
         return True

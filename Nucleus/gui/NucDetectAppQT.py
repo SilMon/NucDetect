@@ -24,7 +24,7 @@ from PIL import Image
 from PIL.ImageQt import ImageQt
 from PyQt5 import QtCore, QtWidgets
 from PyQt5 import uic
-from PyQt5.QtCore import QSize, Qt, pyqtSignal, QRectF, QItemSelectionModel
+from PyQt5.QtCore import QSize, Qt, pyqtSignal, QRectF, QItemSelectionModel, QSortFilterProxyModel, QItemSelection
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon, QPixmap, QColor, QBrush, QPen, QResizeEvent, \
     QKeyEvent, QMouseEvent, QPainter
 from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, QSizePolicy, QWidget, \
@@ -49,10 +49,10 @@ PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, False)
 ui_main = os.path.join(os.getcwd(), "nucdetect.ui")
 ui_result_image_dialog = os.path.join(os.getcwd(), "result_image_dialog.ui")
 ui_class_dial = os.path.join(os.getcwd(), "classification_dialog.ui")
+ui_exp_dial = os.path.join(os.getcwd(), "experiment_dialog.ui")
 ui_stat_dial = os.path.join(os.getcwd(), "statistics_dialog.ui")
 ui_settings_dial = os.path.join(os.getcwd(), "settings_dialog.ui")
 ui_modification_dial = os.path.join(os.getcwd(), "modification_dialog.ui")
-ui_list_item = os.path.join(os.getcwd(), "image_list_widget.ui")
 database = os.path.join(os.pardir, f"database{os.sep}nucdetect.db")
 tablescript = os.path.join(os.pardir, f"database{os.sep}nucdetect.sql")
 settingsscript = os.path.join(os.pardir, f"database{os.sep}settings.sql")
@@ -95,8 +95,10 @@ class NucDetect(QMainWindow):
         self.unsaved_changes = False
         # Setup UI
         self._setup_ui()
+        self.icon = QtGui.QIcon('logo.png')
         self.setWindowTitle("NucDetect")
-        self.setWindowIcon(QtGui.QIcon('logo.png'))
+        self.setWindowIcon(self.icon)
+        self.showMaximized()
 
     def load_settings(self) -> Dict:
         """
@@ -131,12 +133,15 @@ class NucDetect(QMainWindow):
         self.ui.list_images.setIconSize(QSize(75, 75))
         # Initialization of the result table
         self.res_table_model = QStandardItemModel(self.ui.table_results)
-        self.res_table_model.setHorizontalHeaderLabels(["Image", "Center[(y, x)]", "Area [px]", "Ellipticity[%]",
+        self.res_table_model.setHorizontalHeaderLabels(["Image", "Center[(y, x)]", "Area [px]", "Ellipticity [%]",
                                                         "Foci"])
-        self.ui.table_results.setModel(self.res_table_model)
+        self.res_table_sort_model = TableFilterModel(self)
+        self.res_table_sort_model.setSourceModel(self.res_table_model)
+        self.ui.table_results.setModel(self.res_table_sort_model)
         self.ui.table_results.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         # Addition of on click listeners
         self.ui.btn_load.clicked.connect(self._show_loading_dialog)
+        self.ui.btn_experiments.clicked.connect(self.show_experiment_dialog)
         self.ui.btn_save.clicked.connect(self.save_results)
         self.ui.btn_analyse.clicked.connect(self.analyze)
         self.ui.btn_images.clicked.connect(self.show_result_image)
@@ -150,6 +155,7 @@ class NucDetect(QMainWindow):
         # Add button icons
         btn_col = QColor(47, 167, 212)
         self.ui.btn_load.setIcon(qta.icon("fa5.folder-open", color=btn_col))
+        self.ui.btn_experiments.setIcon(qta.icon("fa5s.flask", color=btn_col))
         self.ui.btn_save.setIcon(qta.icon("fa5.save", color=btn_col))
         self.ui.btn_images.setIcon(qta.icon("fa5s.microscope", color=btn_col))
         self.ui.btn_statistics.setIcon(qta.icon("fa5.chart-bar", color=btn_col))
@@ -196,6 +202,149 @@ class NucDetect(QMainWindow):
         else:
             self.ui.btn_analyse.setEnabled(False)
 
+    def show_experiment_dialog(self) -> None:
+        """
+        Method to show the experiment dialog
+        :return: None
+        """
+        exp_dialog = QDialog()
+        exp_dialog.ui = uic.loadUi(ui_exp_dial, exp_dialog)
+        img_model = QStandardItemModel(exp_dialog.ui.lv_images)
+        exp_model = QStandardItemModel(exp_dialog.ui.lv_experiments)
+        exp_dialog.ui.lv_images.setModel(img_model)
+        exp_dialog.ui.lv_experiments.setModel(exp_model)
+        exp_dialog.ui.lv_images.setIconSize(QSize(75, 75))
+        exp_dialog.ui.lv_experiments.setIconSize(QSize(75, 75))
+        ic_col = QColor(47, 167, 212)
+        ico = qta.icon("fa5.clipboard", color=ic_col)
+        icon = self.icon
+
+        def on_exp_selection_change(selected: QItemSelection, deselected: QItemSelection) -> None:
+            """
+            Function to react to changed experiment selection
+            :param selected: The selected item
+            :param deselected: The deselected item
+            :return: None
+            """
+            # Get selected experiment
+            selected = selected.indexes()
+            deselected = deselected.indexes()
+            # Store the current data to the deselected item
+            if deselected:
+                item = exp_model.item(deselected[0].row())
+                name = exp_dialog.ui.le_name.text()
+                if name != item.data()["name"]:
+                    # TODO react to identifier changes -> important for database
+                    pass
+                details = exp_dialog.ui.te_details.toPlainText()
+                notes = exp_dialog.ui.te_notes.toPlainText()
+                groups = exp_dialog.ui.le_groups.text()
+                keys = []
+                for ind in exp_dialog.ui.lv_images.selectionModel().selectedIndexes():
+                    keys.append(img_model.item(ind.row()).data()["key"])
+                item.setData(
+                    {
+                        "name": name,
+                        "details": details,
+                        "notes": notes,
+                        "groups": groups,
+                        "keys": keys
+                    }
+                )
+                text = f"{name}\n{details[:47]}...\nGroups: {groups}"
+                item.setText(text)
+
+            exp_dialog.ui.lv_images.selectionModel().clear()
+            if selected:
+                data = exp_model.item(selected[0].row()).data()
+                # Insert data into textfields
+                exp_dialog.ui.le_name.setText(data["name"])
+                exp_dialog.ui.te_details.setPlainText(data["details"])
+                exp_dialog.ui.te_notes.setPlainText(data["notes"])
+                exp_dialog.ui.le_groups.setText(data["groups"])
+                keys = data["keys"]
+                # Check the stored keys and select images accordingly
+                for ind in range(img_model.rowCount()):
+                    item = img_model.item(ind)
+                    key = item.data()["key"]
+                    if key in keys:
+                        index = img_model.createIndex(ind, 0)
+                        exp_dialog.ui.lv_images.selectionModel().select(index, QItemSelectionModel.Select)
+            else:
+                # Clear everything if selection was cleared
+                exp_dialog.ui.le_name.clear()
+                exp_dialog.ui.te_details.clear()
+                exp_dialog.ui.te_notes.clear()
+                exp_dialog.ui.le_groups.clear()
+
+        def add() -> None:
+            """
+            Inner function to add a new experiment to the xp. list
+            :return: None
+            """
+            name = exp_dialog.ui.le_name.text()
+            selected = exp_dialog.ui.lv_images.selectionModel().selectedIndexes()
+            if name and selected:
+                details = exp_dialog.ui.te_details.toPlainText()
+                notes = exp_dialog.ui.te_notes.toPlainText()
+                groups = exp_dialog.ui.le_groups.text()
+                keys = []
+                for ind in selected:
+                    keys.append(img_model.item(ind.row()).data()["key"])
+                exp_dialog.ui.lv_images.selectionModel().clear()
+                add_item = QStandardItem()
+                text = f"{name}\n{details[:47]}...\nGroups: {groups}"
+                add_item.setText(text)
+                add_item.setData(
+                    {
+                        "name": name,
+                        "details": details,
+                        "notes": notes,
+                        "groups": groups,
+                        "keys": keys
+                    }
+                )
+                add_item.setIcon(ico)
+                exp_model.appendRow(add_item)
+                exp_dialog.ui.le_name.clear()
+                exp_dialog.ui.te_details.clear()
+                exp_dialog.ui.te_notes.clear()
+                exp_dialog.ui.le_groups.clear()
+            else:
+                msg = QMessageBox()
+                msg.setWindowIcon(icon)
+                msg.setIcon(QMessageBox.Critical)
+                if not name:
+                    msg.setText("All experiments need an identifier!")
+                else:
+                    msg.setText("Images have to be assigned to the experiment!")
+                msg.setWindowTitle("Warning")
+                msg.exec_()
+
+        exp_dialog.ui.btn_add.clicked.connect(add)
+        exp_dialog.ui.lv_experiments.selectionModel().selectionChanged.connect(on_exp_selection_change)
+        for index in range(self.img_list_model.rowCount()):
+            item = self.img_list_model.item(index)
+            data = item.data()
+            item = QStandardItem()
+            item_text = f"Name: {data['file_name']}\nFolder: {data['folder']}\n" \
+                        f"Date: {data['date']}\nTime: {data['time']}"
+            item.setText(item_text)
+            item.setTextAlignment(QtCore.Qt.AlignLeft)
+            item.setIcon(data["icon"])
+            item.setData(data)
+            img_model.appendRow(item)
+        exp_dialog.setWindowTitle("Experiment Dialog")
+        exp_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
+        code = exp_dialog.exec()
+        if code == QDialog.Accepted:
+            # TODO Save changes to database
+            for ind in range(exp_model.rowCount()):
+                item = exp_model.item(ind)
+                data = item.data()
+                print(data)
+            print("Exp Dial Accepted")
+
     def _show_loading_dialog(self) -> None:
         """
         Method to show a file loading dialog, which allows the user to select images.
@@ -237,15 +386,19 @@ class NucDetect(QMainWindow):
                 item_text = f"Name: {file}\nFolder: {folder}\nDate: {t[0]}\nTime: {t[1]}"
                 item.setText(item_text)
                 item.setTextAlignment(QtCore.Qt.AlignLeft)
+                icon = QIcon()
+                icon.addFile(path)
+                item.setIcon(icon)
                 item.setData({
                     "key": key,
                     "path": path,
                     "file_name": file,
-                    "folder": folder
+                    "folder": folder,
+                    "date": t[0],
+                    "time": t[1],
+                    "icon": icon
                 })
-                icon = QIcon()
-                icon.addFile(path)
-                item.setIcon(icon)
+
                 self.img_list_model.appendRow(item)
                 self.reg_images.append(key)
 
@@ -278,7 +431,7 @@ class NucDetect(QMainWindow):
         :return: None
         """
         cur_ind = self.ui.list_images.currentIndex()
-        del self.reg_images[self.img_list_model.item(cur_ind.row()).text()]
+        del self.reg_images[self.img_list_model.item(cur_ind.row()).tdata["key"]]
         self.img_list_model.removeRow(cur_ind.row())
         if cur_ind.row() < self.img_list_model.rowCount():
             self.ui.list_images.selectionModel().select(cur_ind, QItemSelectionModel.Select)
@@ -384,28 +537,36 @@ class NucDetect(QMainWindow):
                 "INSERT OR IGNORE INTO channels VALUES (?, ?, ?)",
                 (key, data["handler"].idents.index(name), name)
             )
+        roidat = []
+        pdat = []
+        elldat = []
         for roi in data["handler"].rois:
             dim = roi.calculate_dimensions()
             ellp = roi.calculate_ellipse_parameters()
             stats = roi.calculate_statistics()
             asso = hash(roi.associated) if roi.associated is not None else None
-            curs.execute(
-                "INSERT OR IGNORE INTO roi VALUES (?, ?, ?, ?, ?, ?, ?,?)",
-                (hash(roi), key, True, roi.ident, str(dim["center"]), dim["width"], dim["height"], asso)
-            )
+            roidat.append((hash(roi), key, True, roi.ident, str(dim["center"]), dim["width"], dim["height"], asso))
             for p in roi.points:
-                curs.execute(
-                    "INSERT OR IGNORE INTO points VALUES (?, ?, ?, ?)",
-                    (hash(roi), p[0], p[1], roi.inten[p])
-                )
-            curs.execute(
-                "INSERT OR IGNORE INTO statistics VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                pdat.append((hash(roi), p[0], p[1], roi.inten[p]))
+            elldat.append(
                 (hash(roi), key, stats["area"], stats["intensity average"], stats["intensity median"],
                  stats["intensity maximum"], stats["intensity minimum"], stats["intensity std"],
                  str(ellp["center"]), str(ellp["major_axis"][0]), str(ellp["major_axis"][1]),
                  ellp["major_slope"], ellp["major_length"], ellp["major_angle"], str(ellp["minor_axis"][0]),
                  str(ellp["minor_axis"][1]), ellp["minor_length"], ellp["shape_match"])
             )
+        curs.executemany(
+            "INSERT OR IGNORE INTO roi VALUES (?, ?, ?, ?, ?, ?, ?,?)",
+            roidat
+        )
+        curs.executemany(
+            "INSERT OR IGNORE INTO points VALUES (?, ?, ?, ?)",
+            pdat
+        )
+        curs.executemany(
+            "INSERT OR IGNORE INTO statistics VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            elldat
+        )
         curs.execute(
             "UPDATE images SET analysed = ? WHERE md5 = ?",
             (True, key)
@@ -427,9 +588,15 @@ class NucDetect(QMainWindow):
         self.res_table_model.setColumnCount(len(tabdat["header"]))
         for x in range(len(tabdat["data"])):
             row = []
-            for text in tabdat["data"][x]:
+            for dat in tabdat["data"][x]:
                 item = QStandardItem()
-                item.setText(str(text))
+                show_text = str(dat)
+                if isinstance(dat, tuple):
+                    show_text = f"{int(dat[1]):#>5d} | {int(dat[0]):#<5d}"
+                elif isinstance(dat, float):
+                    show_text = f"{dat * 100:.3f}"
+                item.setText(show_text)
+                item.setData(dat)
                 item.setTextAlignment(QtCore.Qt.AlignCenter)
                 item.setSelectable(False)
                 row.append(item)
@@ -508,7 +675,10 @@ class NucDetect(QMainWindow):
             logstate = self.detector.logging
             self.detector.logging = False
             self.prg_signal.emit("Starting multi image analysis", 0, 100, "")
-            res = e.map(self.detector.analyse_image, self.reg_images.values())
+            paths = []
+            for ind in range(self.img_list_model.rowCount()):
+                paths.append(self.img_list_model.item(ind).data()["path"])
+            res = e.map(self.detector.analyse_image, paths)
             ind = 1
             maxi = len(self.reg_images)
             for r in res:
@@ -689,10 +859,10 @@ class NucDetect(QMainWindow):
                                                         f" {stat['sec stats'][x]['intensity maximum']:.2f}"))
                 stat_dialog.ui.val_par.addWidget(QLabel(f"Min. intensity ({x}):"
                                                         f" {stat['sec stats'][x]['intensity minimum']:.2f}"))
-                # Preparation of plots
-                poiss_plots.append(PoissonCanvas(np.average(list(roinum[x].values())),
-                                                 max(roinum[x].values()),
-                                                 list(roinum[x].values()),
+                vals = list(roinum[x].values())
+                poiss_plots.append(PoissonCanvas(np.var(vals),
+                                                 len(vals),
+                                                 list(vals),
                                                  name=f"{x} channel poisson - {self.cur_img}",
                                                  title=f"{x} Channel"))
                 vals = []
@@ -770,15 +940,14 @@ class NucDetect(QMainWindow):
         cl_dialog.ui = uic.loadUi(ui_class_dial, cl_dialog)
         cl_dialog.setWindowTitle("Classification")
         cl_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
-        # categories = self.detector.get_categories(self.cur_img["key"])
-        hash_ = Detector.calculate_image_id(self.cur_img)
+        hash_ = self.cur_img["key"]
         categories = self.cursor.execute(
             "SELECT category FROM categories WHERE image = ?",
             (hash_,)
-        )
+        ).fetchall()
         cate = ""
         for cat in categories:
-            cate += str(cat) + "\n"
+            cate += str(cat[0]) + "\n"
         cl_dialog.ui.te_cat.setPlainText(cate)
         code = cl_dialog.exec()
         if code == QDialog.Accepted:
@@ -793,16 +962,18 @@ class NucDetect(QMainWindow):
         """
         if categories is not "":
             categories = categories.split('\n')
-            hash_ = Detector.calculate_image_id(self.cur_img)
+            hash_ = self.cur_img["key"]
             self.cursor.execute(
                 "DELETE FROM categories WHERE image = ?",
                 (hash_,)
             )
             for cat in categories:
-                self.cursor.execute(
-                    "INSERT INTO categories VALUES(?, ?)",
-                    (hash_, cat)
-                )
+                if cat:
+                    self.cursor.execute(
+                        "INSERT INTO categories VALUES(?, ?)",
+                        (hash_, cat)
+                    )
+            self.connection.commit()
 
     def show_settings(self) -> None:
         """
@@ -838,7 +1009,7 @@ class NucDetect(QMainWindow):
         :return: None
         """
         mod = ModificationDialog(image=Detector.load_image(self.cur_img["path"]), handler=self.roi_cache)
-        mod.setWindowTitle("Modification")
+        mod.setWindowTitle("Modification Dialog")
         mod.setWindowIcon(QtGui.QIcon("logo.png"))
         mod.setWindowFlags(mod.windowFlags() |
                            QtCore.Qt.WindowSystemMenuHint |
@@ -857,6 +1028,24 @@ class NucDetect(QMainWindow):
         :return:
         """
         self.connection.close()
+
+
+class TableFilterModel(QSortFilterProxyModel):
+    """
+    Model used to enable tuple sorting
+    """
+
+    def __init__(self, parent):
+        super(TableFilterModel, self).__init__(parent)
+
+    def lessThan(self, ind1, ind2):
+        ldat = self.sourceModel().itemData(ind1)[257]
+        rdat = self.sourceModel().itemData(ind2)[257]
+        if isinstance(ldat, tuple):
+            if ldat[1] == rdat[1]:
+                return ldat[0] < rdat[0]
+            return ldat[1] < rdat[1]
+        return ldat < rdat
 
 
 class ResultFigure(FigureCanvas):
@@ -904,159 +1093,6 @@ class ResultFigure(FigureCanvas):
         self.fig.set_size_inches(30, 15)
         self.fig.set_dpi(450)
         self.fig.savefig(pathresult)
-
-
-class MPLPlot(FigureCanvas):
-
-    def __init__(self, name: str, width: Union[int, float] = 4, height: Union[int, float] = 4,
-                 dpi: Union[int, float] = 65, parent: QWidget=None):
-        self.fig = Figure(figsize=(width, height), dpi=dpi)
-        self.name = name
-        self.axes = self.fig.add_subplot(111)
-        FigureCanvas.__init__(self, self.fig)
-        self.setParent(parent)
-        FigureCanvas.setSizePolicy(self,
-                                   QSizePolicy.Expanding,
-                                   QSizePolicy.Expanding)
-
-    def save(self) -> None:
-        """
-        Method to save the plot as image
-
-        :return: None
-        """
-        pardir = os.getcwd()
-        pathpardir = os.path.join(os.path.dirname(pardir),
-                                  r"results/images/statistics")
-        os.makedirs(pathpardir, exist_ok=True)
-        pathresult = os.path.join(pathpardir,
-                                  "result - {}.png".format(self.name))
-        self.fig.set_size_inches(30, 15)
-        self.fig.set_dpi(450)
-        self.fig.savefig(pathresult)
-
-
-class PoissonCanvas(MPLPlot):
-
-    def __init__(self, _lambda: Union[int, float], k: int, values: List[Union[int, float]],
-                 title: str = "", name: str = "", parent: QWidget = None, width: Union[int, float] = 4,
-                 height: Union[int, float] = 4, dpi: Union[int, float] = 65):
-        super(PoissonCanvas, self).__init__(name, width, height, dpi, parent)
-        self.title = title
-        self.plot(_lambda, k, values)
-
-    def plot(self, _lambda: Union[int, float], k: int, values: List[Union[int, float]]) -> None:
-        poisson = np.random.poisson(_lambda, k)
-        ax = self.figure.add_subplot(111)
-        objects = np.arange(k)
-        x_pos = np.arange(max(values))
-        conv_values = np.zeros(max(values))
-        for val in values:
-            conv_values[val - 1] += 1
-        s = sum(conv_values)
-        conv_values = [(x/s)*100 for x in conv_values]
-        ax.set_title("Poisson Distribution - " + self.title)
-        ax.bar(x_pos, poisson, align="center", alpha=0.5, label="Poisson Distribution")
-        ax.bar(x_pos, conv_values, align="center", alpha=0.5, label="Actual Distribution")
-        ax.set_xticks(x_pos)
-        ax.set_xticklabels(objects, rotation=45)
-        ax.set_ylabel("Probability [%]")
-        ax.set_xlabel("Foci number [N]")
-        ax.legend()
-        self.draw()
-
-
-class XYChart(MPLPlot):
-
-    def __init__(self, x_values: List[Union[int, float]], y_values: List[Union[int, float]], dat_labels: List[str],
-                 col_marks: List[str] = ("ro",), parent: QWidget = None, name: str = "", title: str = "",
-                 x_title: str = "", y_title: str = "", width: Union[int, float] = 4, height: Union[int, float] = 4,
-                 dpi: Union[int, float] = 65, x_label_max_num: int = 20, y_label_max_num: int = 20,
-                 x_label_rotation: Union[int, float] = 0, y_label_rotation: Union[int, float] = 0):
-        super(XYChart, self).__init__(name, width, height, dpi, parent)
-        self.name = name
-        self.title = title
-        self.x_label_max_num = x_label_max_num
-        self.y_label_max_num = y_label_max_num
-        self.x_title = x_title
-        self.y_title = y_title
-        self.x_label_rotation = x_label_rotation
-        self.y_label_rotation = y_label_rotation
-        self.x_values = x_values
-        self.y_values = y_values
-        self.dat_label = dat_labels
-        self.colmarks = col_marks
-        self.lines = []
-        self.plot()
-
-    def plot(self) -> None:
-        ax = self.figure.add_subplot(111)
-        ax.set_title(self.title)
-        ax.set_ylabel(self.y_title)
-        ax.set_xlabel(self.x_title)
-        x_ticks = 0
-        y_ticks = 0
-        for x_val in self.x_values:
-            for x in x_val:
-                if x > x_ticks:
-                    x_ticks = x
-        for y_val in self.y_values:
-            for y in y_val:
-                if y > y_ticks:
-                    y_ticks = y
-        ax.xaxis.set_major_locator(plt.MaxNLocator(self.x_label_max_num))
-        ax.yaxis.set_major_locator(plt.MaxNLocator(self.y_label_max_num))
-        for ind in range(len(self.x_values)):
-            if len(self.colmarks) is len(self.x_values):
-                ax.plot(self.x_values[ind], self.y_values[ind], self.colmarks[ind])
-            else:
-                ax.plot(self.x_values[ind], self.y_values[ind])
-        if self.dat_label:
-            ax.legend(self.dat_label)
-        self.draw()
-
-
-class BarChart(MPLPlot):
-
-    def __init__(self, values: List[int], labels: List[str], colors: List[str] = (), parent: QWidget = None,
-                 overlay: bool = True, name: str = "", title: str = "", x_title: str = "", y_title: str = "",
-                 width: Union[int, float] = 4, height: Union[int, float] = 4, dpi: Union[int, float] = 65,
-                 x_label_rotation: Union[int, float] = 0, y_label_rotation: Union[int, float] = 0):
-        super(BarChart, self).__init__(name, width, height, dpi, parent)
-        self.title = title
-        self.x_title = x_title
-        self.y_title = y_title
-        self.y_label_rotation = y_label_rotation
-        self.x_label_rotation = x_label_rotation
-        self.labels = labels
-        self.values = values
-        self.colors = colors
-        self.overlay = overlay
-        self.plot()
-
-    def plot(self) -> None:
-        ax = self.figure.add_subplot(111)
-        ax.set_title(self.title)
-        ax.set_ylabel(self.y_title)
-        ax.set_xlabel(self.x_title)
-        bar_width = max(0.8/len(self.values), 0.25)
-        if not self.overlay:
-            x_pos = np.arange(len(self.values))
-            for lst in self.values:
-                ax.bar(x_pos, lst, width=bar_width, align="center", alpha=1)
-                x_pos = np.arange(x + bar_width for x in x_pos)
-        else:
-            alph = max(1/len(self.values), 0.2)
-            x_pos = np.arange(len(self.values[0]))
-            for lst in self.values:
-                ax.bar(x_pos, lst, width=bar_width, align="center", alpha=alph, color=self.colors)
-        if len(self.values) > 1:
-            x_ticks_lst = [r + bar_width for r in range(len(self.values[0]))]
-        else:
-            x_ticks_lst = np.arange(len(self.values[0]))
-        ax.set_xticks(x_ticks_lst)
-        ax.set_xticklabels(x_ticks_lst, rotation=self.x_label_rotation)
-        self.draw()
 
 
 class ImgDialog(QDialog):
@@ -1496,10 +1532,9 @@ class ModificationDialog(QDialog):
                                             QMessageBox.Yes | QMessageBox.No)
                 if code == QMessageBox.Yes:
                     offset = 0
-
                     for ind in sorted(sel):
                         nuc = self.view.main[ind + offset]
-                        self.handler.rois.remove(nuc)
+                        self.handler.remove_roi(nuc, cascade=True)
                         self.view.main.remove(nuc)
                         self.lst_nuc_model.removeRow(ind + offset)
                         del self.view.images[ind + offset]
@@ -1747,18 +1782,22 @@ class NucView(QGraphicsView):
     def keyPressEvent(self, event: QKeyEvent) -> None:
         super(NucView, self).keyPressEvent(event)
         if event.key() == Qt.Key_Delete and not self.split:
+            rem = []
             for item in self.foc_group:
                 if item.isSelected():
-                    # TODO Fehlerhaft
                     self.handler.remove_roi(self.map[item])
                     self.commands.extend((("DELETE FROM roi WHERE hash=?",
                                          (hash(self.map[item]),)),
                                          ("DELETE FROM points WHERE hash=?",
                                           (hash(self.map[item]),))))
+                    self.assmap[self.map[item].associated].remove(self.map[item])
                     del self.map[item]
+                    rem.append(item)
                     self.scene().removeItem(item)
                     self.cur_foc_num -= 1
                     self.par.update_counting_label()
+            for item in rem:
+                self.foc_group.remove(item)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         super(NucView, self).mousePressEvent(event)
@@ -1814,9 +1853,8 @@ class NucView(QGraphicsView):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         super(NucView, self).mouseReleaseEvent(event)
-
         if self.temp_foc is not None:
-            cur_nump = self.main[self.cur_ind].get_as_numpy()
+            cur_nump = self.convert_roi_to_numpy(self.main[self.cur_ind])
             offset_factor = self.sc_bckg.boundingRect().height() / len(cur_nump)
             hard_offset = self.sc_bckg.pos()
             bbox = self.temp_foc.boundingRect()
@@ -1826,10 +1864,11 @@ class NucView(QGraphicsView):
             y_center = (ty - hard_offset.y()) / offset_factor
             height = bbox.height() / offset_factor / 2
             width = bbox.width() / offset_factor / 2
-            mask = np.zeros(shape=cur_nump.shape)
+            mask = np.zeros(shape=(len(cur_nump), len(cur_nump[0])))
             rr, cc = ellipse(y_center, x_center, height, width, shape=mask.shape)
             mask[rr, cc] = 1
-            cur_roi = ROI(auto=False, channel=self.handler.idents[self.channel], associated=self.cur_nuc)
+            cur_roi = ROI(main=False, auto=False, channel=self.handler.idents[self.channel],
+                          associated=self.cur_nuc)
             nuc_dat = self.cur_nuc.calculate_dimensions()
             x_offset = nuc_dat["minX"]
             y_offset = nuc_dat["minY"]
@@ -1840,7 +1879,7 @@ class NucView(QGraphicsView):
                         cur_roi.add_point((x + x_offset, y + y_offset), inten)
                         self.commands.append(
                             ("INSERT INTO points VALUES(?, ?, ?, ?)",
-                             (-1, x + x_offset, y + y_offset, np.int(inten)))
+                            (-1, x + x_offset, y + y_offset, np.int(inten)))
                         )
             self.handler.rois.append(cur_roi)
             roidat = cur_roi.calculate_dimensions()
@@ -1916,22 +1955,22 @@ class NucView(QGraphicsView):
             for p, inten in aroi.inten.items():
                 self.commands.append(
                     ("INSERT INTO points VALUES (?, ?, ?, ?)",
-                     (hash(aroi), p[0], p[1], inten))
+                    (hash(aroi), p[0], p[1], inten))
                 )
             for p, inten in broi.inten.items():
                 self.commands.append(
                     ("INSERT INTO points VALUES (?, ?, ?, ?)",
-                     (hash(broi), p[0], p[1], inten))
+                    (hash(broi), p[0], p[1], inten))
                 )
             for foc in self.assmap[aroi]:
                 self.commands.append(
                     ("UPDATE roi SET associated=? WHERE hash=?",
-                     (hash(aroi), hash(foc)))
+                    (hash(aroi), hash(foc)))
                 )
             for foc in self.assmap[broi]:
                 self.commands.append(
                     ("UPDATE roi SET associated=? WHERE hash=?",
-                     (hash(broi), hash(foc)))
+                    (hash(broi), hash(foc)))
                 )
             self.main.remove(self.cur_nuc)
             self.main.extend((aroi, broi))
@@ -1993,6 +2032,156 @@ class QGraphicsFocusItem(QGraphicsEllipseItem):
         self.scene().update()
 
 
+class MPLPlot(FigureCanvas):
+
+    def __init__(self, name: str, width: Union[int, float] = 4, height: Union[int, float] = 4,
+                 dpi: Union[int, float] = 65, parent: QWidget=None):
+        self.fig = Figure(figsize=(width, height), dpi=dpi)
+        self.name = name
+        self.axes = self.fig.add_subplot(111)
+        FigureCanvas.__init__(self, self.fig)
+        self.setParent(parent)
+        FigureCanvas.setSizePolicy(self,
+                                   QSizePolicy.Expanding,
+                                   QSizePolicy.Expanding)
+
+    def save(self) -> None:
+        """
+        Method to save the plot as image
+
+        :return: None
+        """
+        pardir = os.getcwd()
+        pathpardir = os.path.join(os.path.dirname(pardir),
+                                  r"results/images/statistics")
+        os.makedirs(pathpardir, exist_ok=True)
+        pathresult = os.path.join(pathpardir,
+                                  "result - {}.png".format(self.name))
+        self.fig.set_size_inches(30, 15)
+        self.fig.set_dpi(450)
+        self.fig.savefig(pathresult)
+
+
+class PoissonCanvas(MPLPlot):
+
+    def __init__(self, _lambda: Union[int, float], k: Union[int, float], values: List[Union[int, float]],
+                 title: str = "", name: str = "", parent: QWidget = None, width: Union[int, float] = 4,
+                 height: Union[int, float] = 4, dpi: Union[int, float] = 65):
+        super(PoissonCanvas, self).__init__(name, width, height, dpi, parent)
+        self.title = title
+        self.plot(_lambda, k, values)
+
+    def plot(self, _lambda: Union[int, float], k: int, values: List[Union[int, float]]) -> None:
+        poisson = np.random.poisson(_lambda, k)
+        ax = self.figure.add_subplot(111)
+        # Get unique items and counts
+        items, counts = np.unique(values, return_counts=True)
+        x_pos = np.arange(k)
+        conv_values = [y/k for y in counts]
+        ax.set_title("Poisson Distribution - " + self.title)
+        ax.bar(x_pos, poisson, align="center", alpha=0.5, label="Poisson Distribution")
+        #ax.bar(x_pos, conv_values, align="center", alpha=0.5, label="Actual Distribution")
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(x_pos, rotation=45)
+        ax.set_ylabel("Probability [%]")
+        ax.set_xlabel("Foci number [N]")
+        ax.legend()
+        self.draw()
+
+
+class XYChart(MPLPlot):
+
+    def __init__(self, x_values: List[Union[int, float]], y_values: List[Union[int, float]], dat_labels: List[str],
+                 col_marks: List[str] = ("ro",), parent: QWidget = None, name: str = "", title: str = "",
+                 x_title: str = "", y_title: str = "", width: Union[int, float] = 4, height: Union[int, float] = 4,
+                 dpi: Union[int, float] = 65, x_label_max_num: int = 20, y_label_max_num: int = 20,
+                 x_label_rotation: Union[int, float] = 0, y_label_rotation: Union[int, float] = 0):
+        super(XYChart, self).__init__(name, width, height, dpi, parent)
+        self.name = name
+        self.title = title
+        self.x_label_max_num = x_label_max_num
+        self.y_label_max_num = y_label_max_num
+        self.x_title = x_title
+        self.y_title = y_title
+        self.x_label_rotation = x_label_rotation
+        self.y_label_rotation = y_label_rotation
+        self.x_values = x_values
+        self.y_values = y_values
+        self.dat_label = dat_labels
+        self.colmarks = col_marks
+        self.lines = []
+        self.plot()
+
+    def plot(self) -> None:
+        ax = self.figure.add_subplot(111)
+        ax.set_title(self.title)
+        ax.set_ylabel(self.y_title)
+        ax.set_xlabel(self.x_title)
+        x_ticks = 0
+        y_ticks = 0
+        for x_val in self.x_values:
+            for x in x_val:
+                if x > x_ticks:
+                    x_ticks = x
+        for y_val in self.y_values:
+            for y in y_val:
+                if y > y_ticks:
+                    y_ticks = y
+        ax.xaxis.set_major_locator(plt.MaxNLocator(self.x_label_max_num))
+        ax.yaxis.set_major_locator(plt.MaxNLocator(self.y_label_max_num))
+        for ind in range(len(self.x_values)):
+            if len(self.colmarks) is len(self.x_values):
+                ax.plot(self.x_values[ind], self.y_values[ind], self.colmarks[ind])
+            else:
+                ax.plot(self.x_values[ind], self.y_values[ind])
+        if self.dat_label:
+            ax.legend(self.dat_label)
+        self.draw()
+
+
+class BarChart(MPLPlot):
+
+    def __init__(self, values: List[int], labels: List[str], colors: List[str] = (), parent: QWidget = None,
+                 overlay: bool = True, name: str = "", title: str = "", x_title: str = "", y_title: str = "",
+                 width: Union[int, float] = 4, height: Union[int, float] = 4, dpi: Union[int, float] = 65,
+                 x_label_rotation: Union[int, float] = 0, y_label_rotation: Union[int, float] = 0):
+        super(BarChart, self).__init__(name, width, height, dpi, parent)
+        self.title = title
+        self.x_title = x_title
+        self.y_title = y_title
+        self.y_label_rotation = y_label_rotation
+        self.x_label_rotation = x_label_rotation
+        self.labels = labels
+        self.values = values
+        self.colors = colors
+        self.overlay = overlay
+        self.plot()
+
+    def plot(self) -> None:
+        ax = self.figure.add_subplot(111)
+        ax.set_title(self.title)
+        ax.set_ylabel(self.y_title)
+        ax.set_xlabel(self.x_title)
+        bar_width = max(0.8/len(self.values), 0.25)
+        if not self.overlay:
+            x_pos = np.arange(len(self.values))
+            for lst in self.values:
+                ax.bar(x_pos, lst, width=bar_width, align="center", alpha=1)
+                x_pos = np.arange(x + bar_width for x in x_pos)
+        else:
+            alph = max(1/len(self.values), 0.2)
+            x_pos = np.arange(len(self.values[0]))
+            for lst in self.values:
+                ax.bar(x_pos, lst, width=bar_width, align="center", alpha=alph, color=self.colors)
+        if len(self.values) > 1:
+            x_ticks_lst = [r + bar_width for r in range(len(self.values[0]))]
+        else:
+            x_ticks_lst = np.arange(len(self.values[0]))
+        ax.set_xticks(x_ticks_lst)
+        ax.set_xticklabels(x_ticks_lst, rotation=self.x_label_rotation)
+        self.draw()
+
+
 def exception_hook(exc_type, exc_value, traceback_obj) -> None:
     """
     General exception hook to display error message for user
@@ -2003,13 +2192,14 @@ def exception_hook(exc_type, exc_value, traceback_obj) -> None:
     """
     # Print the traceback to console
     tb_infofile = io.StringIO()
-    traceback.print_tb(traceback_obj, None, tb_infofile)
+    #traceback.print_tb(''.join(traceback_obj, None, tb_infofile))
     # Show error message in GUI
     time_string = time.strftime("%Y-%m-%d, %H:%M:%S")
     title = "An error occured during execution"
     info = f"An {exc_type.__name__} occured at {time_string}"
     text = "During the execution of the program, following error occured:\n" \
            f"{''.join(traceback.format_exception(exc_type, exc_value, traceback_obj))}"
+    print(text)
     msg = QMessageBox()
     msg.setIcon(QMessageBox.Critical)
     msg.setText(text)

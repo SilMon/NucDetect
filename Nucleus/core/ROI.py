@@ -7,14 +7,15 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import time
 import warnings
 from typing import Union, Dict, List, Tuple
+from numba.typed import List as numList
 
 import numpy as np
-from numba.typed import List
 from skimage.filters import sobel
 
-from Nucleus.core.JittedFunctions import eu_dist, merge_lists
+from Nucleus.core.JittedFunctions import eu_dist, get_major_axis, get_minor_axis
 
 
 class ROI:
@@ -101,9 +102,9 @@ class ROI:
         :param roi: The roi to merge with this
         :return: None
         """
-        # TODO jitten
         if isinstance(roi, ROI):
             if roi.ident == self.ident:
+                t = time.time()
                 self.points.extend(roi.points)
                 self.inten.update(roi.inten)
                 self.id = None
@@ -172,51 +173,14 @@ class ROI:
                 # Remove added padding
                 edge_map = np.array([x[1:-1] for x in edge_map[1:-1]])
                 # Extract edge pixels
-                points = []
+                points = numList()
                 for y in range(len(edge_map)):
                     for x in range(len(edge_map[0])):
                         if edge_map[y][x] != 0:
                             points.append((y, x))
-                # Calculate longest distance for each nucleus
-                max_d = 0.0
-                p0 = None
-                p1 = None
-                # Determine main axis
-                for r1 in range(len(points)):
-                    point1 = points[r1]
-                    for r2 in range(r1, len(points)):
-                        point2 = points[r2]
-                        dist = eu_dist(point1, point2)
-                        if dist > max_d:
-                            p0 = point1
-                            p1 = point2
-                            max_d = dist
-                # Determine minor axis
-                min_ang = 90
-                pmin = None
-                # Calculate slope of major axis
-                m_maj = (p1[0] - p0[0]) / (p1[1] - p0[1])
-                # Calculate center of major axis
-                center = int((p0[0] + p1[0]) / 2), int((p0[1] + p1[1]) / 2)
-                # Determine minor axis for each nucleus
-                for r in range(len(points)):
-                    c = center
-                    pm = points[r]
-                    # Determine slope between point and center
-                    if c[0] != pm[0] and c[1] != pm[1]:
-                        m_min = (c[0] - pm[0]) / (c[1] - pm[1])
-                        a = m_maj - m_min
-                        b = 1 + m_maj * m_min
-                        if b != 0:
-                            angle = math.degrees(math.atan(a / b))
-                        else:
-                            angle = 0
-                    else:
-                        angle = 0
-                    # Determine angle between line and major axis
-                    if angle != 0 and angle / 90 < min_ang:
-                        pmin = pm
-                        min_ang = angle / 90
+                # Determine major axis
+                p0, p1 = get_major_axis(points)
+                center, pmin = get_minor_axis(points, p0, p1)
                 max_dist = (p0, p1)
                 min_dist = (center, pmin)
                 maj_length = eu_dist(max_dist[0], max_dist[1])
@@ -230,7 +194,7 @@ class ROI:
                 self.ell_params["major_axis"] = (max_dist[0][0] + offset[0], max_dist[0][1] + offset[1]), \
                                                 (max_dist[1][0] + offset[0], max_dist[1][1] + offset[1])
                 self.ell_params["major_length"] = maj_length
-                self.ell_params["major_slope"] = m_maj
+                self.ell_params["major_slope"] = (p1[0] - p0[0]) / (p1[1] - p0[1])
                 self.ell_params["major_angle"] = math.degrees(math.atan(abs(self.ell_params["major_slope"])))
                 self.ell_params["minor_axis"] = (min_dist[0][0] + offset[0], min_dist[0][1] + offset[1]), \
                                                 (min_dist[1][0] + offset[0], min_dist[1][1] + offset[1])
@@ -249,23 +213,17 @@ class ROI:
         :param roi: The other ROI
         :return: The degree of intersection as float
         """
-        selfdat = self.calculate_dimensions()
-        otherdat = roi.calculate_dimensions()
-        selfc = selfdat["center"]
-        otherc = otherdat["center"]
-        dist = eu_dist(selfc, otherc)
-        if dist <= max(selfdat["width"], selfdat["height"])/2 + max(otherdat["width"], otherdat["height"])/2:
-            max_intersection = min(len(self), len(roi))
-            intersection = set(self.points).intersection(set(roi.points))
-            return len(intersection) / max_intersection
-        return 0.0
+        max_intersection = min(len(self), len(roi))
+        intersection = set(self.points).intersection(set(roi.points))
+        return len(intersection) / max_intersection
 
-    def get_as_numpy(self) -> None:
+    def get_as_numpy(self) -> np.ndarray:
         """
         Method to get this roi as numpy array
 
         :return: The created numpy array
         """
+        t = time.time()
         self.calculate_dimensions()
         array = np.zeros(shape=(self.dims["height"], self.dims["width"]), dtype="uint8")
         for point in self.points:
@@ -274,9 +232,9 @@ class ROI:
 
     def get_as_binary_map(self) -> np.ndarray:
         """
-        Method to get this roi as binary map (ndarray)
+        Method to get this roi as binary map
 
-        :return: The created binary map
+        :return: The created binary map as ndarray
         """
         self.calculate_dimensions()
         array = np.zeros(shape=(self.dims["height"], self.dims["width"]))

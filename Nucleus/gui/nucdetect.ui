@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1000</width>
+    <width>1036</width>
     <height>800</height>
    </rect>
   </property>
@@ -124,6 +124,13 @@ QDialog{
             </property>
             <property name="text">
              <string>Load Image</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="btn_experiments">
+            <property name="text">
+             <string>Experiments</string>
             </property>
            </widget>
           </item>
@@ -252,7 +259,7 @@ QDialog{
          <widget class="QTableView" name="table_results">
           <property name="minimumSize">
            <size>
-            <width>550</width>
+            <width>700</width>
             <height>0</height>
            </size>
           </property>
