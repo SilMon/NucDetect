@@ -216,6 +216,9 @@ QDialog{
           </item>
           <item>
            <widget class="QPushButton" name="btn_settings">
+            <property name="enabled">
+             <bool>false</bool>
+            </property>
             <property name="maximumSize">
              <size>
               <width>16777215</width>
@@ -520,6 +523,22 @@ QDialog{
             </property>
             <property name="toolTip">
              <string>Delete all images from the list</string>
+            </property>
+            <property name="text">
+             <string/>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QPushButton" name="btn_reload">
+            <property name="maximumSize">
+             <size>
+              <width>16777215</width>
+              <height>25</height>
+             </size>
+            </property>
+            <property name="toolTip">
+             <string>Check if new images are in the image folder</string>
             </property>
             <property name="text">
              <string/>

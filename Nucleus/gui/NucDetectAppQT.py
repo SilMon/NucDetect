@@ -46,17 +46,19 @@ from Nucleus.gui.settings.Settings import SettingsShowWidget, SettingsSlider, Se
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, False)
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, False)
 
-ui_main = os.path.join(os.getcwd(), "nucdetect.ui")
-ui_result_image_dialog = os.path.join(os.getcwd(), "result_image_dialog.ui")
-ui_class_dial = os.path.join(os.getcwd(), "classification_dialog.ui")
-ui_exp_dial = os.path.join(os.getcwd(), "experiment_dialog.ui")
-ui_stat_dial = os.path.join(os.getcwd(), "statistics_dialog.ui")
-ui_settings_dial = os.path.join(os.getcwd(), "settings_dialog.ui")
-ui_modification_dial = os.path.join(os.getcwd(), "modification_dialog.ui")
-database = os.path.join(os.pardir, f"database{os.sep}nucdetect.db")
-tablescript = os.path.join(os.pardir, f"database{os.sep}nucdetect.sql")
-settingsscript = os.path.join(os.pardir, f"database{os.sep}settings.sql")
-result_path = os.path.join(os.pardir, "results")
+# Define folders that contain database, results and the scripts
+nuc_detect_dir = os.path.join(os.path.expanduser("~"), "NucDetect")
+script_dir = sys.path[0]
+ui_main = os.path.join(script_dir, "nucdetect.ui")
+ui_result_image_dialog = os.path.join(script_dir, "result_image_dialog.ui")
+ui_class_dial = os.path.join(script_dir, "classification_dialog.ui")
+ui_exp_dial = os.path.join(script_dir, "experiment_dialog.ui")
+ui_stat_dial = os.path.join(script_dir, "statistics_dialog.ui")
+ui_settings_dial = os.path.join(script_dir, "settings_dialog.ui")
+ui_modification_dial = os.path.join(script_dir, "modification_dialog.ui")
+database = os.path.join(nuc_detect_dir, "nucdetect.db")
+result_path = os.path.join(nuc_detect_dir, "results")
+images_path = os.path.join(nuc_detect_dir, "images")
 
 
 class NucDetect(QMainWindow):
@@ -74,15 +76,13 @@ class NucDetect(QMainWindow):
         Constructor of the main window
         """
         QMainWindow.__init__(self)
+        # Create working directories
+        self.create_required_dirs()
         # Connect to database
         self.connection = sqlite3.connect(database)
         self.cursor = self.connection.cursor()
         # Create tables if they do not exists
-        tscript = open(tablescript, "r").read()
-        self.cursor.executescript(tscript)
-        # Insert standard settings into table if not already
-        setscript = open(settingsscript, "r").read()
-        self.cursor.executescript(setscript)
+        self.create_tables(self.cursor)
         # Load the settings from database
         self.settings = self.load_settings()
         # Create detector for analysis
@@ -99,6 +99,128 @@ class NucDetect(QMainWindow):
         self.setWindowTitle("NucDetect")
         self.setWindowIcon(self.icon)
         self.showMaximized()
+
+    @staticmethod
+    def create_tables(cursor: sqlite3.Cursor) -> None:
+        """
+        Method to create the tables in the database
+
+        :param cursor: Cursor for the database
+        :return: None
+        """
+        # Create the tables
+        cursor.executescript(
+            '''
+            BEGIN TRANSACTION;
+            CREATE TABLE IF NOT EXISTS "statistics" (
+                "hash"	INTEGER,
+                "image"	INTEGER,
+                "area"	INTEGER,
+                "intensity_average"	INTEGER,
+                "intensity_median"	INTEGER,
+                "intensity_maximum"	INTEGER,
+                "intensity_minimum"	INTEGER,
+                "intensity_std"	INTEGER,
+                "ellipse_center"	INTEGER,
+                "ellipse_major_axis_p0"	INTEGER,
+                "ellipse_major_axis_p1"	INTEGER,
+                "ellipse_major_axis_slope"	INTEGER,
+                "ellipse_major_axis_length"	INTEGER,
+                "ellipse_major_axis_angle"	INTEGER,
+                "ellipse_minor_axis_p0"	INTEGER,
+                "ellipse_minor_axis_p1"	INTEGER,
+                "ellipse_minor_axis_length"	INTEGER,
+                "ellipticity"	INTEGER,
+                PRIMARY KEY("hash","image")
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS "groups" (
+                "image"	INTEGER,
+                "experiment"	INTEGER,
+                "name"	INTEGER,
+                PRIMARY KEY("image","experiment")
+            );
+            CREATE TABLE IF NOT EXISTS "roi" (
+                "hash"	INTEGER,
+                "image"	INTEGER,
+                "auto"	INTEGER,
+                "channel"	TEXT,
+                "center"	TEXT,
+                "width"	INTEGER,
+                "height"	INTEGER,
+                "associated"	INTEGER,
+                PRIMARY KEY("hash","image")
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS "images" (
+                "md5"	INTEGER,
+                "datetime"	TEXT,
+                "channels"	INTEGER NOT NULL,
+                "width"	INTEGER NOT NULL,
+                "height"	INTEGER NOT NULL,
+                "x_res"	INTEGER,
+                "y_res"	INTEGER,
+                "unit"	INTEGER,
+                "analysed"	INTEGER NOT NULL,
+                "settings"	TEXT,
+                PRIMARY KEY("md5")
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS "channels" (
+                "md5"	INTEGER,
+                "index"	INTEGER,
+                "name"	INTEGER,
+                PRIMARY KEY("md5","index")
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS "categories" (
+                "image"	INTEGER,
+                "category"	TEXT,
+                PRIMARY KEY("image","category")
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS "experiments" (
+                "image"	INTEGER,
+                "name"	INTEGER,
+                "details"	INTEGER,
+                "notes"	INTEGER,
+                PRIMARY KEY("image","name")
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS "settings" (
+                "key_"	TEXT,
+                "value"	TEXT,
+                PRIMARY KEY("key_")
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS "points" (
+                "hash"	INTEGER,
+                "x"	INTEGER,
+                "y"	INTEGER,
+                "intensity"	INTEGER,
+                PRIMARY KEY("hash","x","y")
+            ) WITHOUT ROWID;
+            COMMIT;
+            '''
+        )
+        # Create the standard settings
+        cursor.executescript(
+            '''
+            BEGIN TRANSACTION;
+            INSERT OR IGNORE INTO settings (key_, value) VALUES ("logging", 1);
+            INSERT OR IGNORE INTO settings (key_, value) VALUES ("res_path", "./results");
+            INSERT OR IGNORE INTO settings (key_, value) VALUES ("names", "Blue;Red;Green");
+            INSERT OR IGNORE INTO settings (key_, value) VALUES ("main_channel", 2);
+            COMMIT;
+            '''
+        )
+
+    @staticmethod
+    def create_required_dirs() -> None:
+        """
+        Method to create the working dirs of this program
+
+        :return: None
+        """
+        if not os.path.isdir(nuc_detect_dir):
+            os.mkdir(nuc_detect_dir)
+        if not os.path.isdir(result_path):
+            os.mkdir(result_path)
+        if not os.path.isdir(images_path):
+            os.mkdir(images_path)
 
     def load_settings(self) -> Dict:
         """
@@ -152,6 +274,7 @@ class NucDetect(QMainWindow):
         self.ui.btn_analyse_all.clicked.connect(self.analyze_all)
         self.ui.btn_delete_from_list.clicked.connect(self.remove_image_from_list)
         self.ui.btn_clear_list.clicked.connect(self.clear_image_list)
+        self.ui.btn_reload.clicked.connect(self.reload)
         # Add button icons
         btn_col = QColor(47, 167, 212)
         self.ui.btn_load.setIcon(qta.icon("fa5.folder-open", color=btn_col))
@@ -166,17 +289,24 @@ class NucDetect(QMainWindow):
         self.ui.btn_analyse_all.setIcon(qta.icon("fa5s.hat-wizard", color="red"))
         self.ui.btn_delete_from_list.setIcon(qta.icon("fa5s.times", color=btn_col))
         self.ui.btn_clear_list.setIcon(qta.icon("fa5s.trash-alt", color=btn_col))
+        self.ui.btn_reload.setIcon(qta.icon("fa5s.sync", color=btn_col))
         # Create signal for thread-safe gui updates
         self.prg_signal.connect(self._set_progress)
         self.selec_signal.connect(self._select_next_image)
-        pardir = os.getcwd()
-        imgdir = os.path.join(os.path.dirname(pardir),
-                              r"images")
-        self.add_images_from_folder(imgdir)
+        self.add_images_from_folder(images_path)
+
+    def reload(self) -> None:
+        """
+        Method to reload the images folder
+
+        :return: None
+        """
+        self.add_images_from_folder(images_path)
 
     def on_image_selection_change(self) -> None:
         """
         Will be called if a new image is selected
+
         :return: None
         """
         for index in self.ui.list_images.selectionModel().selectedIndexes():
@@ -205,6 +335,7 @@ class NucDetect(QMainWindow):
     def show_experiment_dialog(self) -> None:
         """
         Method to show the experiment dialog
+
         :return: None
         """
         exp_dialog = QDialog()
@@ -348,6 +479,7 @@ class NucDetect(QMainWindow):
     def _show_loading_dialog(self) -> None:
         """
         Method to show a file loading dialog, which allows the user to select images.
+
         :return: None
         """
         options = QFileDialog.Options()
@@ -364,6 +496,7 @@ class NucDetect(QMainWindow):
     def add_image_to_list(self, path: str) -> None:
         """
         Method to add an image to the list of loaded files. The image will be processed, added and loaded.
+
         :param path: The path leading to the file
         :return: None
         """
@@ -767,7 +900,7 @@ class NucDetect(QMainWindow):
         :return: None
         """
         image_dialog = ImgDialog(image=Detector.load_image(self.cur_img["path"]), handler=self.roi_cache)
-        image_dialog.setWindowTitle(f"Result Images for {self.cur_img}")
+        image_dialog.setWindowTitle(f"Result Images for {self.cur_img['file_name']}")
         image_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
         image_dialog.setWindowFlags(image_dialog.windowFlags() |
                                     QtCore.Qt.WindowSystemMenuHint |
@@ -820,7 +953,7 @@ class NucDetect(QMainWindow):
         # TODO Poisson überprüfen
         stat_dialog = QDialog()
         stat_dialog.ui = uic.loadUi(ui_stat_dial, stat_dialog)
-        stat_dialog.setWindowTitle("Statistics")
+        stat_dialog.setWindowTitle(f"Statistics for {self.cur_img['file_name']}")
         stat_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
         # Add statistics to list
         stat = self.roi_cache.calculate_statistics()
@@ -938,7 +1071,7 @@ class NucDetect(QMainWindow):
         """
         cl_dialog = QDialog()
         cl_dialog.ui = uic.loadUi(ui_class_dial, cl_dialog)
-        cl_dialog.setWindowTitle("Classification")
+        cl_dialog.setWindowTitle(f"Classification of {self.cur_img['file_name']}")
         cl_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
         hash_ = self.cur_img["key"]
         categories = self.cursor.execute(
@@ -1009,7 +1142,7 @@ class NucDetect(QMainWindow):
         :return: None
         """
         mod = ModificationDialog(image=Detector.load_image(self.cur_img["path"]), handler=self.roi_cache)
-        mod.setWindowTitle("Modification Dialog")
+        mod.setWindowTitle(f"Modification Dialog for {self.cur_img['file_name']}")
         mod.setWindowIcon(QtGui.QIcon("logo.png"))
         mod.setWindowFlags(mod.windowFlags() |
                            QtCore.Qt.WindowSystemMenuHint |
@@ -1275,7 +1408,7 @@ class SettingsDialog(QDialog):
             tab.setWidget(kernel)
             self.ui.settings.addTab(tab, section)
 
-    def add_menu_point(self, section:str, menupoint: Dict[str, Union[str, float, int]]) -> None:
+    def add_menu_point(self, section: str, menupoint: Dict[str, Union[str, float, int]]) -> None:
         """
         Method to add a menu point to the settings section
 
@@ -2190,9 +2323,6 @@ def exception_hook(exc_type, exc_value, traceback_obj) -> None:
     :param traceback_obj: The traceback object associated with the exception
     :return: None
     """
-    # Print the traceback to console
-    tb_infofile = io.StringIO()
-    #traceback.print_tb(''.join(traceback_obj, None, tb_infofile))
     # Show error message in GUI
     time_string = time.strftime("%Y-%m-%d, %H:%M:%S")
     title = "An error occured during execution"
@@ -2208,18 +2338,23 @@ def exception_hook(exc_type, exc_value, traceback_obj) -> None:
     msg.exec_()
 
 
-def main():
+def main() -> None:
+    """
+    Function to start the program
+
+    :return: None
+    """
     sys.excepthook = exception_hook
     app = QtWidgets.QApplication(sys.argv)
     pixmap = QPixmap("banner_norm.png")
     splash = QSplashScreen(pixmap)
     splash.show()
     splash.showMessage("Loading...")
-    mainWin = NucDetect()
-    splash.finish(mainWin)
-    mainWin.show()
+    main_win = NucDetect()
+    splash.finish(main_win)
+    main_win.show()
     sys.exit(app.exec_())
 
 
 if __name__ == '__main__':
-        main()
+    main()

@@ -5,10 +5,7 @@
       <driver-ref>sqlite.xerial</driver-ref>
       <synchronize>true</synchronize>
       <jdbc-driver>org.sqlite.JDBC</jdbc-driver>
-      <jdbc-url>jdbc:sqlite:$PROJECT_DIR$/Nucleus/database/nucdetect.db</jdbc-url>
-      <driver-properties>
-        <property name="enable_load_extension" value="true" />
-      </driver-properties>
+      <jdbc-url>jdbc:sqlite:$USER_HOME$/NucDetect/nucdetect.db</jdbc-url>
     </data-source>
   </component>
 </project>
