@@ -1,3 +1,4 @@
+[![PyPI version](https://badge.fury.io/py/NucDetect.svg)](https://badge.fury.io/py/NucDetect)
 # *NucDetect* - A python package for Detection and Quantification of DNA Doublestrand Breaks (v0.5)
 
 NucDetect is a Python package for the detection and quantification of γH2AX and 53BP1 foci inside nuclei. Its written in 
