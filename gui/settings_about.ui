@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Form</class>
+ <widget class="QWidget" name="Form">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>529</width>
+    <height>449</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Form</string>
+  </property>
+  <widget class="QLabel" name="label_3">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>140</y>
+     <width>531</width>
+     <height>311</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;table border=&quot;0&quot; style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px;&quot; cellspacing=&quot;2&quot; cellpadding=&quot;0&quot;&gt;&lt;tr&gt;&lt;td bgcolor=&quot;#c0c0c0&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; font-weight:600; background-color:#c0c0c0;&quot;&gt;Used Libraries&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;td bgcolor=&quot;#c0c0c0&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; font-weight:600; background-color:#c0c0c0;&quot;&gt;URL&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;td bgcolor=&quot;#c0c0c0&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; font-weight:600; background-color:#c0c0c0;&quot;&gt;Licence&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td bgcolor=&quot;#efefef&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; background-color:#efefef;&quot;&gt;scikit-image&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;td bgcolor=&quot;#efefef&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; background-color:#efefef;&quot;&gt;https://scikit-image.org/&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;td bgcolor=&quot;#efefef&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; background-color:#efefef;&quot;&gt;BSD&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td bgcolor=&quot;#efefef&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; background-color:#efefef;&quot;&gt;NumPy&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;td bgcolor=&quot;#efefef&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; background-color:#efefef;&quot;&gt;http://www.numpy.org/&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;td bgcolor=&quot;#efefef&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; background-color:#efefef;&quot;&gt;BSD&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td bgcolor=&quot;#efefef&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; background-color:#efefef;&quot;&gt;SciPy&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;td bgcolor=&quot;#efefef&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; background-color:#efefef;&quot;&gt;https://www.scipy.org/&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;td bgcolor=&quot;#efefef&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; background-color:#efefef;&quot;&gt;BSD&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td bgcolor=&quot;#efefef&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; background-color:#efefef;&quot;&gt;PyQT5&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;td bgcolor=&quot;#efefef&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; background-color:#efefef;&quot;&gt;https://www.riverbankcomputing.com/&lt;/span&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px;&quot;&gt;&lt;br/&gt;software/pyqt/download5&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;td bgcolor=&quot;#efefef&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; background-color:#efefef;&quot;&gt;LGPL&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td bgcolor=&quot;#efefef&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; background-color:#efefef;&quot;&gt;Pillow&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;td bgcolor=&quot;#efefef&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; background-color:#efefef;&quot;&gt;https://github.com/python-pillow/Pillow&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;td bgcolor=&quot;#efefef&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; background-color:#efefef;&quot;&gt;PIL Software License&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;/tr&gt;&lt;tr&gt;&lt;td bgcolor=&quot;#efefef&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; background-color:#efefef;&quot;&gt;qtawesome&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;td bgcolor=&quot;#efefef&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; background-color:#efefef;&quot;&gt;https://github.com/spyder-ide/qtawesome&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;td bgcolor=&quot;#efefef&quot; style=&quot; vertical-align:top; padding-left:5; padding-right:5; padding-top:10; padding-bottom:10;&quot;&gt;&lt;p&gt;&lt;span style=&quot; font-family:'Arial,sans-serif'; font-size:14px; background-color:#efefef;&quot;&gt;MIT&lt;/span&gt;&lt;/p&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;&lt;/body&gt;&lt;/html&gt;</string>
+   </property>
+   <property name="textFormat">
+    <enum>Qt::RichText</enum>
+   </property>
+   <property name="alignment">
+    <set>Qt::AlignLeading|Qt::AlignLeft|Qt::AlignTop</set>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label">
+   <property name="geometry">
+    <rect>
+     <x>210</x>
+     <y>0</y>
+     <width>311</width>
+     <height>131</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string/>
+   </property>
+   <property name="pixmap">
+    <pixmap>banner_norm.png</pixmap>
+   </property>
+   <property name="scaledContents">
+    <bool>true</bool>
+   </property>
+  </widget>
+  <widget class="QLabel" name="label_2">
+   <property name="geometry">
+    <rect>
+     <x>10</x>
+     <y>0</y>
+     <width>261</width>
+     <height>121</height>
+    </rect>
+   </property>
+   <property name="text">
+    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;span style=&quot; font-weight:600;&quot;&gt;NucDetect Version 0.5&lt;/span&gt;&lt;/p&gt;&lt;p&gt;Developed by: Romano Weiss&lt;/p&gt;&lt;p&gt;Repository: https://github.com/SilMon/NucDetect&lt;/p&gt;&lt;p&gt;Licence: GPL-3.0&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+   </property>
+   <property name="textFormat">
+    <enum>Qt::RichText</enum>
+   </property>
+  </widget>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

@@ -4,6 +4,6 @@
     <file url="PROJECT" dialect="SQLite" />
   </component>
   <component name="SqlResolveMappings">
-    <file url="file://$PROJECT_DIR$/Nucleus/gui/NucDetectAppQT.py" scope="{&quot;node&quot;:{  &quot;@negative&quot;:&quot;1&quot;,  &quot;group&quot;:{   &quot;@kind&quot;:&quot;root&quot;,   &quot;node&quot;:{    &quot;@negative&quot;:&quot;1&quot;   }  } }}" />
+    <file url="file://$PROJECT_DIR$/gui/NucDetectAppQT.py" scope="{&quot;node&quot;:{  &quot;@negative&quot;:&quot;1&quot;,  &quot;group&quot;:{   &quot;@kind&quot;:&quot;root&quot;,   &quot;node&quot;:{    &quot;@negative&quot;:&quot;1&quot;   }  } }}" />
   </component>
 </project>

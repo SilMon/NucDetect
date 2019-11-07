@@ -11,7 +11,7 @@ from typing import Union, Dict, List, Tuple
 
 import numpy as np
 
-from Nucleus.core.ROI import ROI
+from core.ROI import ROI
 
 
 class ROIHandler:
@@ -144,7 +144,10 @@ class ROIHandler:
         header.remove(self.main)
         tempdat["header"] = header
         tempdat["data"] = []
+        tempdat["footer"] = []
+        stats = [0] * len(self.idents)
         for roi in self.rois:
+            stats[self.idents.index(roi.ident)] += 1
             if roi.main:
                 tempstat = roi.calculate_dimensions()
                 tempell = roi.calculate_ellipse_parameters()
@@ -167,19 +170,24 @@ class ROIHandler:
                     elif chan != self.main:
                         row.append(0)
                 tempdat["data"].append(row)
+        tempdat["footer"].append(("Detected Nuclei:",  stats[self.idents.index(self.main)]))
+        for chan in self.idents:
+            if chan != self.main:
+                tempdat["footer"].append((f"Detected {chan} foci:",  stats[self.idents.index(chan)]))
         return tempdat
 
     def export_data_as_csv(self, path: str, delimiter: str = ";",
-                           quotechar: str = "|") -> bool:
+                           quotechar: str = "|", ident: str = None) -> bool:
         """
         Method to save the roi data to a csv table
 
         :param path: The folder to save the file in
         :param delimiter: The char used to separate cells
         :param quotechar: The char used as a substitute for \"\" or \'\'
+        :param ident: Optional identifier used for the file name
         :return: True if the csv could be exported
         """
-        with open(os.path.join(path, f"{self.ident}.csv"), 'w', newline='') as file:
+        with open(os.path.join(path, f"{self.ident if ident is None else ident}.csv"), 'w', newline='') as file:
             writer = csv.writer(file, delimiter=delimiter,
                                 quotechar=quotechar, quoting=csv.QUOTE_MINIMAL)
             writer.writerow(["File id:", self.ident])
@@ -187,7 +195,11 @@ class ROIHandler:
             writer.writerow(["Channels:", self.idents])
             writer.writerow(["Main Channel:", self.main])
             dat = self.get_data_as_dict()
+            for data in dat["footer"]:
+                writer.writerow(data)
             writer.writerow(dat["header"])
             for data in dat["data"]:
+                if ident is not None:
+                    data[0] = ident
                 writer.writerow(data)
         return True

@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>629</width>
+    <height>534</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Dialog</string>
+  </property>
+  <property name="styleSheet">
+   <string notr="true">QPushButton{
+	color: White;
+	background-color: rgba(22, 42, 75,255);
+	border: none;
+	font-size: 14px;
+ 	text-align: center;
+     display: inline-block;
+	min-height: 25;
+	min-width: 60;
+}
+
+QPushButton:hover{
+	background-color: rgb(15,35,68)
+}
+
+QPushButton:pressed{
+	background-color: rgb(8,28,61)
+}
+
+QPushButton:disabled{
+	background-color: rgb(40,60,100)
+}
+
+QScrollArea{
+	background-color: rgba(77, 77, 77, 128)
+}
+
+QScrollArea &gt; QWidget &gt;QWidget{
+	background-color: rgba(77, 77, 77, 128)
+}
+
+QScrollArea &gt; QWidget &gt; QScrollBar{
+	background-color: palette(base)
+}
+
+QTabWidget::pane{
+	border-top: 1px solid #c7c7c7
+}
+
+QTabBar::tab{
+	color: white;
+	border: 1px solid #c4c4c3;
+	border-bottom: 0px solid #000000;	
+	font-size: 12vw;
+	min-width: 40;
+	min-height: 25;
+	padding-right: 1px;
+	margin: 1px
+}
+
+QTabBar::tab:!selected:hover{
+	background-color: rgba(92,92,92,128);
+}
+
+QTabBar::tab:selected{
+	background-color: rgba(102,102,102,128);
+	border-bottom-color: #c2c7cb
+}
+
+QTabBar::tab:selected:hover{
+	background-color: rgba(102,102,102, 128)
+}
+
+QTabBar::tab:!selected {
+	background-color: rgba(82,82,82,128);
+	margin-top: 3px
+}
+
+QLabel{
+	color:white
+}
+
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox{
+	color:white;
+	background-color: rgba(128, 128, 128, 128);
+	border: none
+}
+
+QSpinBox, QDoubleSpinBox{
+	min-width: 80%
+}
+
+QCheckBox::indicator{
+	width: 15 px;
+	height: 15px;
+}
+
+QComboBox{
+	min-width: 80%;
+}
+
+QComboBox QAbstractItemView{
+	background-color: rgba(128,128,128,128);
+	color: white;
+}
+
+QSlider::groove{
+	height: 80px;
+}
+
+QSlider::handle{
+	width: 40 px;
+	height: 40px;
+}
+
+QDialog{
+	background-color: rgb(0,51,102);
+}</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QTabWidget" name="settings">
+     <property name="tabPosition">
+      <enum>QTabWidget::North</enum>
+     </property>
+     <property name="tabShape">
+      <enum>QTabWidget::Rounded</enum>
+     </property>
+     <property name="currentIndex">
+      <number>-1</number>
+     </property>
+     <property name="tabsClosable">
+      <bool>false</bool>
+     </property>
+     <property name="tabBarAutoHide">
+      <bool>false</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="orientation">
+      <enum>Qt::Horizontal</enum>
+     </property>
+     <property name="standardButtons">
+      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections>
+  <connection>
+   <sender>buttonBox</sender>
+   <signal>accepted()</signal>
+   <receiver>Dialog</receiver>
+   <slot>accept()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>248</x>
+     <y>254</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>157</x>
+     <y>274</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>buttonBox</sender>
+   <signal>rejected()</signal>
+   <receiver>Dialog</receiver>
+   <slot>reject()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>316</x>
+     <y>260</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>286</x>
+     <y>274</y>
+    </hint>
+   </hints>
+  </connection>
+ </connections>
+</ui>
