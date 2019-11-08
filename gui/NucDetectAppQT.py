@@ -1623,8 +1623,6 @@ class ModificationDialog(QDialog):
         self.lst_nuc_model.clear()
         for image in images:
             item = QStandardItem()
-            # TODO test3.tif
-            # ValueError: The truth value of an array with more than one element is ambiguous. Use a.any() or a.all()
             item.setTextAlignment(QtCore.Qt.AlignLeft)
             pmap = QPixmap()
             pmap.convertFromImage(NucView.get_qimage_from_numpy(image[...,
@@ -1641,6 +1639,7 @@ class ModificationDialog(QDialog):
     def on_button_click(self) -> None:
         """
         Method to handle button clicks
+
         :return: None
         """
         ident = self.sender().objectName()
@@ -2011,19 +2010,26 @@ class NucView(QGraphicsView):
                     if mask[y][x] > 0:
                         inten = cur_nump[y][x]
                         cur_roi.add_point((x + x_offset, y + y_offset), inten)
-                        self.commands.append(
-                            ("INSERT INTO points VALUES(?, ?, ?, ?)",
-                            (-1, x + x_offset, y + y_offset, np.int(inten)))
-                        )
+                        self.commands.append(("INSERT INTO points VALUES(?, ?, ?, ?)",
+                                              (-1, x + x_offset, y + y_offset, np.int(inten))))
             self.handler.rois.append(cur_roi)
+            # TODO
             roidat = cur_roi.calculate_dimensions()
+            stats = cur_roi.calculate_statistics()
+            ellp = cur_roi.calculate_ellipse_parameters()
             imghash = self.handler.ident
             self.commands.extend(
                 (("INSERT INTO roi VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
                  (hash(cur_roi), imghash, False, cur_roi.ident, str(roidat["center"]), roidat["width"],
                   roidat["height"], hash(self.cur_nuc))),
                  ("UPDATE points SET hash=? WHERE hash=-1",
-                 (hash(cur_roi),)))
+                 (hash(cur_roi),)),
+                 ("INSERT OR IGNORE INTO statistics VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (hash(cur_roi), imghash, stats["area"], stats["intensity average"], stats["intensity median"],
+                  stats["intensity maximum"], stats["intensity minimum"], stats["intensity std"],
+                  str(ellp["center"]), str(ellp["major_axis"][0]), str(ellp["major_axis"][1]),
+                  ellp["major_slope"], ellp["major_length"], ellp["major_angle"], str(ellp["minor_axis"][0]),
+                  str(ellp["minor_axis"][1]), ellp["minor_length"], ellp["shape_match"])))
             )
             self.foc_group.append(self.temp_foc)
             self.map[self.temp_foc] = cur_roi
