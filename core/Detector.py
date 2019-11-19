@@ -79,7 +79,7 @@ class Detector:
         for roi in rois:
             handler.add_roi(roi)
         imgdat["handler"] = handler
-        print(f"Total analysis time: {time.time()-start}")
+        Detector.log(f"Total analysis time: {time.time()-start}", logging)
         return imgdat
 
     @staticmethod
@@ -159,7 +159,7 @@ class Detector:
             rois.extend(temprois)
         del main[0]
         rois.extend(main)
-        Detector.log(f"Finished second focus extraction {time.time() - s2:.4f}")
+        Detector.log(f"Finished second focus extraction {time.time() - s2:.4f}", logging)
         Detector.perform_roi_quality_check(rois, logging=logging)
         return rois
 
@@ -280,13 +280,9 @@ class Detector:
         blob_nums = []
         for ind in range(len(channels)):
             if ind != main_channel:
-                start = time.time()
                 blobs = blob_log(channels[ind], min_sigma=min_sigma, max_sigma=max_sigma, num_sigma=num_sigma,
                                  threshold=threshold, exclude_border=False)
-                print(f"Blob_log time: {time.time() - start:.4f}")
-                start2 = time.time()
                 blob_map = Detector.create_blob_map(channels[ind].shape, blobs)
-                print(f"Blob_map time: {time.time() - start2:.4f}")
                 blob_num = len(blobs)
                 blob_maps.append(blob_map)
                 blob_nums.append(blob_num)
@@ -401,12 +397,13 @@ class Detector:
             ind += 1
 
         # Create watershed segmentation based on centers
-        ws = watershed(-edm, cmask, mask=ch_main_bin, watershed_line=False)
+        ws = watershed(-edm, cmask, mask=ch_main_bin, watershed_line=True)
         # Check number of unique watershed labels
         unique = list(np.unique(ws))
         t = time.time()
         relabel_array(ws)
-        Detector.log(f"Time relabeling: {time.time() - t}")
+        # TODO
+        Detector.log(f"Time relabeling: {time.time() - t}", False)
         thresh[main_channel] = ws
         # Extract nuclei from watershed
         det: List[Tuple[int, int]] = [None] * len(unique)
@@ -455,7 +452,6 @@ class Detector:
                         t = time.time()
                         imprint_data_into_channel(chan, chan_open, offset)
                         impr_time += time.time() - t
-        print(f"Imprinting time: {impr_time:.4f} NFPL Time: {nfpl_time:.4f} Total: {time.time() - start:.4f}")
         return chan
 
     @staticmethod

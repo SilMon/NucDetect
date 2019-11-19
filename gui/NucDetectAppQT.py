@@ -639,11 +639,12 @@ class NucDetect(QMainWindow):
         self.ui.btn_analyse.setEnabled(False)
         self.ui.list_images.setEnabled(True)
 
-    def save_rois_to_database(self, data: Dict[str, Union[int, float, str]]) -> None:
+    def save_rois_to_database(self, data: Dict[str, Union[int, float, str]], all=False) -> None:
         """
         Method to save the data stored in the ROIHandler rois to the database
 
         :param data: The data dict returned by the Detector class
+        :param all: Deactivates printing to console
         :return: None
         """
         con = sqlite3.connect(database)
@@ -707,7 +708,8 @@ class NucDetect(QMainWindow):
         )
         con.commit()
         con.close()
-        print("ROI saved to database")
+        if not all:
+            print("ROI saved to database")
 
     def create_result_table_from_list(self, handler: ROIHandler) -> None:
         """
@@ -799,12 +801,13 @@ class NucDetect(QMainWindow):
         thread = Thread(target=self._analyze_all)
         thread.start()
 
-    def _analyze_all(self) -> None:
+    def _analyze_all(self, batch_size=20) -> None:
         """
         Method to perform concurrent batch analysis of registered images
 
         :return: None
         """
+        start = time.time()
         with ProcessPoolExecutor(max_workers=None) as e:
             logstate = self.detector.logging
             self.detector.logging = False
@@ -812,16 +815,24 @@ class NucDetect(QMainWindow):
             paths = []
             for ind in range(self.img_list_model.rowCount()):
                 paths.append(self.img_list_model.item(ind).data()["path"])
-            res = e.map(self.detector.analyse_image, paths)
             ind = 1
-            maxi = len(self.reg_images)
-            for r in res:
-                self.prg_signal.emit(f"Analysed images: {ind}/{maxi}",
-                                     ind, maxi, "")
-                self.save_rois_to_database(r)
-                self.roi_cache = r["handler"]
-                self.create_result_table_from_list(r["handler"])
-                ind += 1
+            cur_batch = 1
+            curind = 0
+            for b in range(batch_size+1, len(paths), batch_size):
+                s2 = time.time()
+                tpaths = paths[curind:b if b < len(paths) else -1]
+                res = e.map(self.detector.analyse_image, tpaths)
+                maxi = len(self.reg_images)
+                for r in res:
+                    self.prg_signal.emit(f"Analysed images: {ind}/{maxi}",
+                                         ind, maxi, "")
+                    self.save_rois_to_database(r, all=True)
+                    self.roi_cache = r["handler"]
+                    self.create_result_table_from_list(r["handler"])
+                    ind += 1
+                print(f"Analysed batch {cur_batch} in {time.time() - s2} secs")
+                curind = b
+                cur_batch += 1
             self.roi_cache = list(res)[:-1]
             self.enable_buttons()
             self.ui.list_images.setEnabled(True)
@@ -830,6 +841,7 @@ class NucDetect(QMainWindow):
                                  100,
                                  100, "")
             self.selec_signal.emit(True)
+        print(f"Total analysis time: {time.time() - start} secs")
             
     def load_rois_from_database(self, md5: int) -> ROIHandler:
         """

@@ -140,40 +140,45 @@ class ROIHandler:
         """
         tempdat = {}
         header = ["Image", "Center[(y, x)]", "Area [px]", "Ellipticity[%]"]
-        header.extend(self.idents)
-        header.remove(self.main)
-        tempdat["header"] = header
-        tempdat["data"] = []
-        tempdat["footer"] = []
-        stats = [0] * len(self.idents)
-        for roi in self.rois:
-            stats[self.idents.index(roi.ident)] += 1
-            if roi.main:
-                tempstat = roi.calculate_dimensions()
-                tempell = roi.calculate_ellipse_parameters()
-                row = [
-                    self.ident,
-                    tempstat["center"],
-                    tempstat["area"],
-                    tempell["shape_match"]
-                ]
-                secstat = {}
-                for roi2 in self.rois:
-                    if roi2.associated is roi:
-                        if roi2.ident in secstat:
-                            secstat[roi2.ident] += 1
-                        else:
-                            secstat[roi2.ident] = 1
-                for chan in self.idents:
-                    if chan in secstat.keys():
-                        row.append(secstat[chan])
-                    elif chan != self.main:
-                        row.append(0)
-                tempdat["data"].append(row)
-        tempdat["footer"].append(("Detected Nuclei:",  stats[self.idents.index(self.main)]))
-        for chan in self.idents:
-            if chan != self.main:
-                tempdat["footer"].append((f"Detected {chan} foci:",  stats[self.idents.index(chan)]))
+        if self.idents:
+            header.extend(self.idents)
+            header.remove(self.main)
+            tempdat["header"] = header
+            tempdat["data"] = []
+            tempdat["footer"] = []
+            stats = [0] * len(self.idents)
+            for roi in self.rois:
+                stats[self.idents.index(roi.ident)] += 1
+                if roi.main:
+                    tempstat = roi.calculate_dimensions()
+                    tempell = roi.calculate_ellipse_parameters()
+                    row = [
+                        self.ident,
+                        tempstat["center"],
+                        tempstat["area"],
+                        tempell["shape_match"]
+                    ]
+                    secstat = {}
+                    for roi2 in self.rois:
+                        if roi2.associated is roi:
+                            if roi2.ident in secstat:
+                                secstat[roi2.ident] += 1
+                            else:
+                                secstat[roi2.ident] = 1
+                    for chan in self.idents:
+                        if chan in secstat.keys():
+                            row.append(secstat[chan])
+                        elif chan != self.main:
+                            row.append(0)
+                    tempdat["data"].append(row)
+            tempdat["footer"].append(("Detected Nuclei:",  stats[self.idents.index(self.main)]))
+            for chan in self.idents:
+                if chan != self.main:
+                    tempdat["footer"].append((f"Detected {chan} foci:",  stats[self.idents.index(chan)]))
+        else:
+            tempdat["header"] = header
+            tempdat["data"] = ()
+            tempdat["footer"] = ()
         return tempdat
 
     def export_data_as_csv(self, path: str, delimiter: str = ";",
