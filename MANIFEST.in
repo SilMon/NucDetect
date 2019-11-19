@@ -1,0 +1,15 @@
+# Include important files
+include /README.md
+include /license.txt
+include /requirements.txt
+
+# Include demo image
+include /demo.tif
+
+
+# Include UI files
+include gui/*.ui
+include gui/*.png
+include gui/settings/*.ui
+include gui/settings/settings.json
+include gui/settings/settings.ini
