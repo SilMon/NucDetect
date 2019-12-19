@@ -13,7 +13,7 @@ The current release is a very early alpha version. Please report report any dete
 Requirements
 ============
 
-NucDetect is compatible with Windows, Mac OS X and Linux operating systems. It is coded using Python 3.6. It requires 
+NucDetect is compatible with Windows, Mac OS X and Linux operating systems. It requires 
 the following packages:
 
 * scipy>=0.19.0

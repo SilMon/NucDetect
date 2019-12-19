@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import copy
 import datetime
 import json
@@ -68,6 +67,7 @@ class NucDetect(QMainWindow):
     """
     prg_signal = pyqtSignal(str, int, int, str)
     selec_signal = pyqtSignal(bool)
+    add_signal = pyqtSignal(str)
     aa_signal = pyqtSignal(int, int)
     executor = Thread()
 
@@ -294,6 +294,7 @@ class NucDetect(QMainWindow):
         # Create signal for thread-safe gui updates
         self.prg_signal.connect(self._set_progress)
         self.selec_signal.connect(self._select_next_image)
+        self.add_signal.connect(self.add_item_to_list)
         self.add_images_from_folder(images_path)
 
     def reload(self) -> None:
@@ -313,18 +314,13 @@ class NucDetect(QMainWindow):
         for index in self.ui.list_images.selectionModel().selectedIndexes():
             self.cur_img = self.img_list_model.item(index.row()).data()
         if self.cur_img:
-            hash_ = self.cur_img["key"]
             # TODO Settings mit einbeziehen
-            ana = self.cursor.execute(
-                "SELECT analysed FROM images WHERE md5 = ?",
-                (hash_, )
-            ).fetchall()[0][0]
+            ana = self.cur_img["analysed"]
             if ana:
-                self.roi_cache = self.load_rois_from_database(hash_)
-                self.create_result_table_from_list(self.roi_cache)
-                self.enable_buttons()
-                self.ui.btn_analyse.setEnabled(False)
-                self.ui.lbl_status.setText("Loaded analysis results from database")
+                self.prg_signal.emit(f"Loading data from database for {self.cur_img['file_name']}",
+                                     0, 100, "")
+                thread = Thread(target=self.load_saved_data)
+                thread.start()
             else:
                 self.ui.lbl_status.setText("Program ready")
                 self.res_table_model.setRowCount(0)
@@ -332,6 +328,20 @@ class NucDetect(QMainWindow):
                 self.ui.btn_analyse.setEnabled(True)
         else:
             self.ui.btn_analyse.setEnabled(False)
+
+    def load_saved_data(self) -> None:
+        """
+        Method to load saved data from the database
+
+        :return: None
+        """
+        self.roi_cache = self.load_rois_from_database(self.cur_img["key"])
+        self.create_result_table_from_list(self.roi_cache)
+        self.enable_buttons()
+        self.ui.btn_analyse.setEnabled(False)
+        self.ui.lbl_status.setText("Loaded analysis results from database")
+        self.prg_signal.emit(f"Data loaded from database {self.cur_img['file_name']}",
+                             0, 100, "")
 
     def show_experiment_dialog(self) -> None:
         """
@@ -412,6 +422,7 @@ class NucDetect(QMainWindow):
         def add() -> None:
             """
             Inner function to add a new experiment to the xp. list
+
             :return: None
             """
             name = exp_dialog.ui.le_name.text()
@@ -501,7 +512,52 @@ class NucDetect(QMainWindow):
         :param path: The path leading to the file
         :return: None
         """
-        # Fix loading of duplicate files
+        item = self.create_list_item(path)
+        self.add_item_to_list(item)
+        print(f"Loaded {path}")
+
+    def add_images_from_folder(self, url: str) -> None:
+        """
+        Method to load a whole folder of images
+
+        :param url: The path of the folder
+        :return: None
+        """
+        for t in os.walk(url):
+            for file in t[2]:
+                self.add_image_to_list(os.path.join(t[0], file))
+
+    def add_item_to_list(self, item: QStandardItem) -> None:
+        """
+        Utility method to add an item to the image list
+
+        :param item: The item to add
+        :return: None
+        """
+        if item is not None:
+            path = item.data()["path"]
+            key = item.data()["key"]
+            d = Detector.get_image_data(path)
+            self.img_list_model.appendRow(item)
+            self.reg_images.append(key)
+            if not self.cursor.execute(
+                    "SELECT * FROM images WHERE md5 = ?",
+                    (key,)
+            ).fetchall():
+                self.cursor.execute(
+                    "INSERT OR IGNORE INTO images VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (key, d["datetime"], d["channels"], d["width"], d["height"],
+                     str(d["x_res"]), str(d["y_res"]), d["unit"], 0, -1)
+                )
+            self.connection.commit()
+
+    def create_list_item(self, path: str) -> QStandardItem:
+        """
+        Method to create an image list item
+
+        :param path: The path of the image
+        :return: The created item
+        """
         temp = os.path.split(path)
         folder = temp[0].split(sep=os.sep)[-1]
         file = temp[1]
@@ -516,6 +572,14 @@ class NucDetect(QMainWindow):
                 t[0] = f"{temp[2]}.{temp[1]}.{temp[0]}"
             key = Detector.calculate_image_id(path)
             if key not in self.reg_images:
+                analysed = self.cursor.execute(
+                    "SELECT analysed from images WHERE md5 = ?",
+                    (key, )
+                ).fetchall()
+                if analysed:
+                    analysed = analysed[0][0]
+                else:
+                    analysed = 0
                 item = QStandardItem()
                 item_text = f"Name: {file}\nFolder: {folder}\nDate: {t[0]}\nTime: {t[1]}"
                 item.setText(item_text)
@@ -526,37 +590,14 @@ class NucDetect(QMainWindow):
                 item.setData({
                     "key": key,
                     "path": path,
+                    "analysed": analysed,
                     "file_name": file,
                     "folder": folder,
                     "date": t[0],
                     "time": t[1],
                     "icon": icon
                 })
-
-                self.img_list_model.appendRow(item)
-                self.reg_images.append(key)
-
-                if not self.cursor.execute(
-                    "SELECT * FROM images WHERE md5 = ?",
-                        (key, )
-                ).fetchall():
-                    self.cursor.execute(
-                        "INSERT INTO images VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (key, d["datetime"], d["channels"], d["width"], d["height"],
-                         str(d["x_res"]), str(d["y_res"]), d["unit"], 0, -1)
-                    )
-                self.connection.commit()
-
-    def add_images_from_folder(self, url: str) -> None:
-        """
-        Method to load a whole folder of images
-
-        :param url: The path of the folder
-        :return: None
-        """
-        for t in os.walk(url):
-            for file in t[2]:
-                self.add_image_to_list(os.path.join(t[0], file))
+                return item
 
     def remove_image_from_list(self) -> None:
         """
@@ -601,7 +642,8 @@ class NucDetect(QMainWindow):
                               100, 100,))
         thread.start()
 
-    def analyze_image(self, path: str, message: str, percent: Union[int, float], maxi: Union[int, float]) -> None:
+    def analyze_image(self, path: str, message: str,
+                      percent: Union[int, float], maxi: Union[int, float]) -> None:
         """
         Method to analyse the image given by path
 
@@ -609,7 +651,7 @@ class NucDetect(QMainWindow):
         :param message: The message to display above the progress bar
         :param percent: The value of the progress bar
         :param maxi: The maximum of the progress bar
-        :return:
+        :return: None
         """
         self.enable_buttons(False)
         self.ui.list_images.setEnabled(False)
@@ -639,7 +681,7 @@ class NucDetect(QMainWindow):
         self.ui.btn_analyse.setEnabled(False)
         self.ui.list_images.setEnabled(True)
 
-    def save_rois_to_database(self, data: Dict[str, Union[int, float, str]], all=False) -> None:
+    def save_rois_to_database(self, data: Dict[str, Union[int, float, str]], all: bool = False) -> None:
         """
         Method to save the data stored in the ROIHandler rois to the database
 
@@ -814,15 +856,18 @@ class NucDetect(QMainWindow):
             self.prg_signal.emit("Starting multi image analysis", 0, 100, "")
             paths = []
             for ind in range(self.img_list_model.rowCount()):
-                paths.append(self.img_list_model.item(ind).data()["path"])
+                data = self.img_list_model.item(ind).data()
+                if not bool(data["analysed"]):
+                    paths.append(data["path"])
             ind = 1
             cur_batch = 1
             curind = 0
-            for b in range(batch_size+1, len(paths), batch_size):
+            for b in range(batch_size+1 if batch_size < len(paths) else len(paths),
+                           len(paths) if len(paths) > batch_size else len(paths) + 1, batch_size):
                 s2 = time.time()
-                tpaths = paths[curind:b if b < len(paths) else -1]
+                tpaths = paths[curind:b if b < len(paths) else len(paths) - 1]
                 res = e.map(self.detector.analyse_image, tpaths)
-                maxi = len(self.reg_images)
+                maxi = len(paths)
                 for r in res:
                     self.prg_signal.emit(f"Analysed images: {ind}/{maxi}",
                                          ind, maxi, "")
@@ -830,7 +875,7 @@ class NucDetect(QMainWindow):
                     self.roi_cache = r["handler"]
                     self.create_result_table_from_list(r["handler"])
                     ind += 1
-                print(f"Analysed batch {cur_batch} in {time.time() - s2} secs")
+                print(f"Analysed batch {cur_batch} in {time.time() - s2} secs\tTotal: {time.time() - start} secs")
                 curind = b
                 cur_batch += 1
             self.roi_cache = list(res)[:-1]
@@ -850,13 +895,14 @@ class NucDetect(QMainWindow):
         :param md5: The md5 hash of the image
         :return: A ROIHandler containing all roi
         """
-        print("Loaded roi from database")
+        con = sqlite3.connect(database)
+        crs = con.cursor()
         rois = ROIHandler(ident=md5)
-        entries = self.cursor.execute(
+        entries = crs.execute(
             "SELECT * FROM roi WHERE image = ?",
             (md5, )
         ).fetchall()
-        names = self.cursor.execute(
+        names = crs.execute(
             "SELECT * FROM channels WHERE md5 = ?",
             (md5, )
         ).fetchall()
@@ -872,7 +918,7 @@ class NucDetect(QMainWindow):
         for entry in entries:
             temproi = ROI(channel=entry[3], main=entry[7] is None, associated=entry[7])
             temproi.id = entry[0]
-            stats = self.cursor.execute(
+            stats = crs.execute(
                 "SELECT * FROM statistics WHERE hash = ?",
                 (entry[0],)
             ).fetchall()[0]
@@ -881,7 +927,7 @@ class NucDetect(QMainWindow):
                 main_.append(temproi)
             else:
                 sec.append(temproi)
-            for p in self.cursor.execute(
+            for p in crs.execute(
                 "SELECT * FROM points WHERE hash = ?",
                     (entry[0], )
             ).fetchall():
@@ -904,6 +950,7 @@ class NucDetect(QMainWindow):
             for s in sec:
                 if s.associated == hash(m):
                     s.associated = m
+        print("Loaded roi from database")
         return rois
 
     def show_result_image(self) -> None:
@@ -2368,7 +2415,7 @@ def main() -> None:
     pixmap = QPixmap("banner_norm.png")
     splash = QSplashScreen(pixmap)
     splash.show()
-    splash.showMessage("Loading...")
+    splash.showMessage("Loading")
     main_win = NucDetect()
     splash.finish(main_win)
     main_win.show()

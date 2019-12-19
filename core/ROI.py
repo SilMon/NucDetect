@@ -3,7 +3,6 @@ Created on 09.04.2019
 @author: Romano Weiss
 """
 from __future__ import annotations
-
 import hashlib
 import json
 import math
@@ -262,7 +261,7 @@ class ROI:
                 self.dims["center"] = (round(np.average(xvals), 2), round(np.average(yvals), 2))
                 self.dims["area"] = len(self.points)
             else:
-                raise Exception("ROI does not contain any points!")
+                raise Exception(f"ROI {self.id} does not contain any points!")
         return self.dims
 
     def calculate_statistics(self) -> Dict[str, Union[int, float]]:

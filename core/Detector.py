@@ -3,11 +3,11 @@ Created 09.04.2019
 @author Romano Weiss
 """
 from __future__ import annotations
-
 import datetime
 import hashlib
 import os
 import time
+import warnings
 from typing import Union, Dict, List, Tuple, Any
 
 import numpy as np
