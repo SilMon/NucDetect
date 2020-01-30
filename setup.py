@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="UTF-8") as fh:
 
 setuptools.setup(
     name="NucDetect",
-    version="0.7.4.dev5",
+    version="0.9.4.dev5",
     description=("Module to identify intranuclear proteins on basis of "
                  "fluorescence images."),
     author="Romano Weiss",
@@ -13,7 +13,7 @@ setuptools.setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     classifiers=[
-        "Development Status :: 2 - Pre-Alpha",
+        "Development Status :: 3 - Alpha",
         "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
         "Intended Audience :: Developers",
         "Intended Audience :: Science/Research",
@@ -22,6 +22,7 @@ setuptools.setup(
     include_package_data=True,
     packages=setuptools.find_packages(),
     install_requires=[
+        "tensorflow>=2.0"
         "scipy>=0.11",
         "numpy>=1.13.3",
         "scikit-image>=0.15",

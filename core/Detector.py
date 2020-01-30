@@ -8,6 +8,7 @@ import hashlib
 import os
 import time
 import warnings
+import matplotlib.pyplot as plt
 from typing import Union, Dict, List, Tuple, Any
 
 import numpy as np
@@ -24,6 +25,7 @@ from skimage.morphology.binary import binary_opening
 from core.JittedFunctions import eu_dist, create_circular_mask, relabel_array, imprint_data_into_channel
 from core.ROI import ROI
 from core.ROIHandler import ROIHandler
+from fcn.FCN import FCN
 
 
 class Detector:
@@ -47,14 +49,17 @@ class Detector:
             "main_channel": 2,
             "min_foc_area": 9
         }
-        self.logging = logging
+        self.logging: bool = logging
+        self.analyser: FCN = FCN()
 
-    def analyse_image(self, path, logging=True) -> Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]:
+    def analyse_image(self, path: str, logging: bool = True,
+                      ml_analysis: bool = True) -> Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]:
         """
         Method to extract rois from the image given by path
 
         :param path: The URL of the image
         :param logging: Enables logging
+        :param ml_analysis: Enable image analysis via U-Net
         :return: The analysis results as dict
         """
         start = time.time()
@@ -71,10 +76,26 @@ class Detector:
                 names.extend(range(imgdat["channels"]))
         # Channel extraction
         channels = Detector.get_channels(image)
-        # Channel thresholding
-        thresh_chan = Detector.threshold_channels(channels, main_channel)
-        # ROI detection
-        rois = Detector.extract_rois(channels, thresh_chan, names, main_map=main_channel, logging=logging)
+        if not ml_analysis:
+            # Channel thresholding
+            thresh_chan = Detector.threshold_channels(channels, main_channel)
+            rois = Detector.classic_roi_extraction(channels, thresh_chan, names,
+                                                   main_map=main_channel, quality_check=not ml_analysis,
+                                                   logging=logging)
+        else:
+            nuclei = self.analyser.predict_image(path,
+                                                 self.analyser.NUCLEI,
+                                                 channels=(main_channel, ))[0]
+            foci = self.analyser.predict_image(path,
+                                               self.analyser.FOCI,
+                                               channels=[x for x in range(len(names)) if x is not main_channel])
+            if main_channel > len(foci):
+                foci.append(nuclei)
+            else:
+                foci.insert(main_channel, nuclei)
+            rois = Detector.ml_roi_extraction(channels, foci, names,
+                                              main_map=main_channel,
+                                              logging=logging)
         handler = ROIHandler(ident=imgdat["id"])
         for roi in rois:
             handler.add_roi(roi)
@@ -83,8 +104,42 @@ class Detector:
         return imgdat
 
     @staticmethod
-    def extract_rois(channels: List[np.ndarray], bin_maps: List[np.ndarray],
-                     names: List[str], main_map: int = 2, logging: bool = True) -> List[ROI]:
+    def ml_roi_extraction(channels: List[np.ndarray], bin_maps: List[np.ndarray],
+                          names: List[str], main_map: int = 2,
+                          logging: bool = True) -> List[ROI]:
+        s0 = time.time()
+        rois = []
+        markers, lab_nums = Detector.perform_labelling(bin_maps, main_map=main_map)
+        # Extract nuclei
+        main = Detector.extract_roi_from_main_map(
+            markers,
+            lab_nums,
+            channels,
+            main_map,
+            names
+        )
+        Detector.log(f"Finished main ROI extraction {time.time() - s0:.4f}", logging)
+        # First round of focus detection
+        s1 = time.time()
+        rois.extend(
+            Detector.extract_rois_from_map(
+                markers,
+                lab_nums,
+                channels,
+                main_map,
+                names,
+                main
+            )
+        )
+        Detector.log(f"Finished focus extraction {time.time() - s1:.4f}", logging)
+        rois.extend(main)
+        rois = [x for x in rois if x is not None and len(x) > 9]
+        return rois
+
+    @staticmethod
+    def classic_roi_extraction(channels: List[np.ndarray], bin_maps: List[np.ndarray],
+                               names: List[str], main_map: int = 2, quality_check: bool = True,
+                               logging: bool = True) -> List[ROI]:
         """
         Method to extract ROI objects from the given binary maps
 
@@ -92,14 +147,70 @@ class Detector:
         :param bin_maps: A list of binary maps of the channels
         :param names: The names associated with each channel
         :param main_map: Index of the map containing nuclei
+        :param quality_check: Enables a quality check after ROI extraction
         :param logging: Indicates if messages should be printed to console
         :return: A list of all detected roi
         """
-        # First round of ROI detection
         s0 = time.time()
         rois = []
+        # Label binary maps
         markers, lab_nums = Detector.perform_labelling(bin_maps, main_map=main_map)
-        main_markers = markers[main_map]
+        # Extract nuclei
+        main = Detector.extract_roi_from_main_map(
+            markers,
+            lab_nums,
+            channels,
+            main_map,
+            names
+        )
+        Detector.log(f"Finished main ROI extraction {time.time() - s0:.4f}", logging)
+        # First round of focus detection
+        s1 = time.time()
+        rois.extend(
+            Detector.extract_rois_from_map(
+                markers,
+                lab_nums,
+                channels,
+                main_map,
+                names,
+                main
+            )
+        )
+        Detector.log(f"Finished first focus extraction {time.time() - s1:.4f}", logging)
+        # Second round of focus detection
+        s2 = time.time()
+        markers, lab_nums = Detector.detect_blobs(channels, main_channel=main_map)
+        rois.extend(
+            Detector.extract_rois_from_map(
+                markers,
+                lab_nums,
+                channels,
+                main_map,
+                names,
+                main
+            )
+        )
+        main = [x for x in main if x is not None]
+        rois.extend(main)
+        Detector.log(f"Finished second focus extraction {time.time() - s2:.4f}", logging)
+        if quality_check:
+            Detector.perform_roi_quality_check(rois, logging=logging)
+        return rois
+
+    @staticmethod
+    def extract_roi_from_main_map(binary_maps: List[np.ndarray], lab_nums: List[int],
+                                  channels: List[np.ndarray], main_map: int, names: List[str]) -> List[ROI]:
+        """
+        Method to extract the main roi
+
+        :param binary_maps: The labelled binary ROI maps for all channels
+        :param lab_nums: The numbers of detected areas for each channel
+        :param channels: The channels
+        :param main_map: The index of the main map
+        :param names: The names of each channel
+        :return: A list of extracted ROI
+        """
+        main_markers = binary_maps[main_map]
         main = [None] * (lab_nums[main_map] + 1)
         # Extraction of main rois
         for y in range(len(main_markers)):
@@ -107,60 +218,49 @@ class Detector:
                 lab = main_markers[y][x]
                 if lab != 0:
                     if main[lab] is None:
-                        roi = ROI(channel=names[main_map])
+                        roi = ROI(channel=names[main_map], main=True)
                         roi.add_point((x, y), int(channels[main_map][y][x]))
                         main[lab] = roi
                     else:
                         main[lab].add_point((x, y), int(channels[main_map][y][x]))
-        Detector.log(f"Finished main ROI extraction {time.time()-s0:.4f}", logging)
-        s1 = time.time()
-        for ind in range(len(markers)):
+        return main
+
+    @staticmethod
+    def extract_rois_from_map(binary_maps: List[np.ndarray], lab_nums: List[int],
+                              channels: List[np.ndarray], main_map: int, names: List[str],
+                              main: List[ROI]) -> List[ROI]:
+        """
+        Method to extract ROIs from given binary maps
+
+        :param binary_maps: The labelled binary ROI maps for all channels
+        :param lab_nums: The numbers of detected areas for each channel
+        :param channels: The channels
+        :param main_map: The index of the main map
+        :param names: The names of each channel
+        :param main: The extracted main ROI
+        :return: A list of extracted ROI
+        """
+        rois: List[ROI] = []
+        for ind in range(len(binary_maps)):
             if ind != main_map:
                 temprois = [None] * (lab_nums[ind] + 1)
-                for y in range(len(markers[ind])):
-                    for x in range(len(markers[ind][0])):
-                        lab = markers[ind][y][x]
+                for y in range(len(binary_maps[ind])):
+                    for x in range(len(binary_maps[ind][0])):
+                        lab = binary_maps[ind][y][x]
                         if lab != 0:
                             if temprois[lab] is None:
                                 roi = ROI(channel=names[ind], main=False)
                                 roi.add_point((x, y), int(channels[ind][y][x]))
                                 temprois[lab] = roi
-                                if main_markers[y][x] > 0:
-                                    roi.associated = main[main_markers[y][x]]
+                                if binary_maps[main_map][y][x] > 0:
+                                    roi.associated = main[binary_maps[main_map][y][x]]
                             else:
                                 if temprois[lab].associated is None:
-                                    if main_markers[y][x] > 0:
-                                        roi.associated = main[main_markers[y][x]]
+                                    if binary_maps[main_map][y][x] > 0:
+                                        roi.associated = main[binary_maps[main_map][y][x]]
                                 temprois[lab].add_point((x, y), int(channels[ind][y][x]))
                 del temprois[0]
                 rois.extend(temprois)
-        Detector.log(f"Finished first focus extraction {time.time() - s1:.4f}", logging)
-        s2 = time.time()
-        # Second round of ROI detection
-        markers, lab_nums = Detector.detect_blobs(channels, main_channel=main_map)
-        for ind in range(len(markers)):
-            temprois = [None] * (lab_nums[ind] + 1)
-            for y in range(len(markers[ind])):
-                for x in range(len(markers[ind][0])):
-                    lab = markers[ind][y][x]
-                    if lab != 0:
-                        if temprois[lab] is None:
-                            roi = ROI(channel=names[ind], main=False)
-                            roi.add_point((x, y), int(channels[ind][y][x]))
-                            temprois[lab] = roi
-                            if main_markers[y][x] > 0:
-                                roi.associated = main[main_markers[y][x]]
-                        else:
-                            if temprois[lab].associated is None:
-                                if main_markers[y][x] > 0:
-                                    roi.associated = main[main_markers[y][x]]
-                            temprois[lab].add_point((x, y), int(channels[ind][y][x]))
-            del temprois[0]
-            rois.extend(temprois)
-        del main[0]
-        rois.extend(main)
-        Detector.log(f"Finished second focus extraction {time.time() - s2:.4f}", logging)
-        Detector.perform_roi_quality_check(rois, logging=logging)
         return rois
 
     @staticmethod
@@ -527,8 +627,8 @@ class Detector:
         else:
             # TODO Dialog for resolution, number of channels and unit
             image_data = {
-                "datetime": os.path.getctime(path),
-                "heigth": img.shape[0],
+                "datetime": datetime.datetime.fromtimestamp(os.path.getctime(path)),
+                "height": img.shape[0],
                 "width": img.shape[1],
                 "x_res": -1,
                 "y_res": -1,

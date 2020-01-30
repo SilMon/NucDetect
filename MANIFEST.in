@@ -13,3 +13,5 @@ include gui/*.png
 include gui/settings/*.ui
 include gui/settings/settings.json
 include gui/settings/settings.ini
+include fcn/model/focus_detector.h5
+include fcn/model/nucleus_detector.h5
