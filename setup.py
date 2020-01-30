@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="UTF-8") as fh:
 
 setuptools.setup(
     name="NucDetect",
-    version="0.9.4.dev5",
+    version="0.10.4.dev5",
     description=("Module to identify intranuclear proteins on basis of "
                  "fluorescence images."),
     author="Romano Weiss",
