@@ -53,7 +53,7 @@ class Detector:
         self.analyser: FCN = FCN()
 
     def analyse_image(self, path: str, logging: bool = True,
-                      ml_analysis: bool = True) -> Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]:
+                      ml_analysis: bool = False) -> Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]:
         """
         Method to extract rois from the image given by path
 
@@ -85,7 +85,7 @@ class Detector:
         else:
             nuclei = self.analyser.predict_image(path,
                                                  self.analyser.NUCLEI,
-                                                 channels=(main_channel, ))[0]
+                                                 channels=(main_channel, ), threshold=0.95)[0]
             foci = self.analyser.predict_image(path,
                                                self.analyser.FOCI,
                                                channels=[x for x in range(len(names)) if x is not main_channel])

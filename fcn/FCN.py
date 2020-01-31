@@ -5,6 +5,7 @@ from typing import List, Tuple, Union
 import numpy as np
 from pathlib import Path
 from skimage.segmentation import flood_fill
+import matplotlib.pyplot as plt
 
 
 class FCN:

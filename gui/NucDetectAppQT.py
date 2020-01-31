@@ -1010,7 +1010,6 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        # TODO Poisson überprüfen
         stat_dialog = QDialog()
         stat_dialog.ui = uic.loadUi(ui_stat_dial, stat_dialog)
         stat_dialog.setWindowTitle(f"Statistics for {self.cur_img['file_name']}")
@@ -1020,8 +1019,8 @@ class NucDetect(QMainWindow):
         assmap = self.detector.create_association_map(self.roi_cache)
         # Add labels to first tab
         stat_dialog.ui.dist_par.addWidget(QLabel(f"Detected nuclei: {len(assmap)}"))
-        empty = [x for x in assmap.values() if len(x) > 0]
-        stat_dialog.ui.dist_par.addWidget(QLabel(f"Thereof empty: {len(assmap) - len(empty)}"))
+        empty = [x for x in assmap.values() if len(x) == 0]
+        stat_dialog.ui.dist_par.addWidget(QLabel(f"Thereof empty: {len(empty)}"))
         colmarks = ["ro", "go", "co", "mo", "yo", "ko"]
         roinum = {}
         poiss_plots = []
@@ -1052,6 +1051,15 @@ class NucDetect(QMainWindow):
                                                         f" {stat['sec stats'][x]['intensity maximum']:.2f}"))
                 stat_dialog.ui.val_par.addWidget(QLabel(f"Min. intensity ({x}):"
                                                         f" {stat['sec stats'][x]['intensity minimum']:.2f}"))
+                stat_dialog.ui.dist_par.addItem(QtGui.QSpacerItem(20, 40,
+                                                                  QtGui.QSizePolicy.Minimum,
+                                                                  QtGui.QSizePolicy.Expanding))
+                stat_dialog.ui.int_par.addItem(QtGui.QSpacerItem(20, 40,
+                                                                 QtGui.QSizePolicy.Minimum,
+                                                                 QtGui.QSizePolicy.Expanding))
+                stat_dialog.ui.val_par.addItem(QtGui.QSpacerItem(20, 40,
+                                                                 QtGui.QSizePolicy.Minimum,
+                                                                 QtGui.QSizePolicy.Expanding))
                 vals = list(roinum[x].values())
                 poiss_plots.append(PoissonCanvas(np.var(vals),
                                                  len(vals),
@@ -1081,7 +1089,7 @@ class NucDetect(QMainWindow):
                                 "detected in the respective nucleus"))
                 int_plots.append(int)
                 val_plots[0].append((np.arange(len(roinum[x].values()))))
-                val_plots[1].append(roinum[x].values())
+                val_plots[1].append(list(roinum[x].values()))
                 valint_plots.append(stat["sec stats"][x]["intensity list"])
 
         chans = self.roi_cache.idents.copy()
@@ -2271,21 +2279,30 @@ class PoissonCanvas(MPLPlot):
         self.plot(_lambda, k, values)
 
     def plot(self, _lambda: Union[int, float], k: int, values: List[Union[int, float]]) -> None:
-        poisson = np.random.poisson(_lambda, k)
+        av = np.average(values)
+        unique, counts = np.unique(values, return_counts=True)
+        prob = [counts[x] / np.sum(counts) for x in range(len(counts))]
+        poisson = self.poisson(av, np.arange(0, max(unique)))
         ax = self.figure.add_subplot(111)
-        # Get unique items and counts
-        items, counts = np.unique(values, return_counts=True)
-        x_pos = np.arange(k)
-        conv_values = [y/k for y in counts]
         ax.set_title("Poisson Distribution - " + self.title)
-        ax.bar(x_pos, poisson, align="center", alpha=0.5, label="Poisson Distribution")
-        #ax.bar(x_pos, conv_values, align="center", alpha=0.5, label="Actual Distribution")
-        ax.set_xticks(x_pos)
-        ax.set_xticklabels(x_pos, rotation=45)
+        ax.bar(np.arange(0, max(unique)), poisson, align="center", alpha=0.5, label="Poisson Distribution")
+        ax.bar(unique, prob, align="center", alpha=0.5, label="Actual Distribution")
+        ax.set_xticks(np.arange(0, max(unique) + min(unique)))
+        ax.set_xticklabels(np.arange(0, max(unique) + min(unique)), rotation=45)
         ax.set_ylabel("Probability [%]")
         ax.set_xlabel("Foci number [N]")
         ax.legend()
         self.draw()
+
+    def poisson(self, lam, test):
+        if isinstance(test, list) or isinstance(test, np.ndarray):
+            res = []
+            for el in test:
+                res.append(self.poisson(lam, el))
+            return res
+        else:
+            p = ((lam ** test) / math.factorial(test)) * math.exp(-lam)
+            return p
 
 
 class XYChart(MPLPlot):
