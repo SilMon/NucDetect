@@ -141,8 +141,7 @@ class ROIHandler:
         tempdat = {}
         header = ["Image", "Center[(y, x)]", "Area [px]", "Ellipticity[%]"]
         if self.idents:
-            header.extend(self.idents)
-            header.remove(self.main)
+            header.extend([x for x in self.idents if x is not self.main])
             tempdat["header"] = header
             tempdat["data"] = []
             tempdat["footer"] = []
@@ -171,10 +170,11 @@ class ROIHandler:
                         elif chan != self.main:
                             row.append(0)
                     tempdat["data"].append(row)
-            tempdat["footer"].append(("Detected Nuclei:",  stats[self.idents.index(self.main)]))
-            for chan in self.idents:
-                if chan != self.main:
-                    tempdat["footer"].append((f"Detected {chan} foci:",  stats[self.idents.index(chan)]))
+            if self.main is not "":
+                tempdat["footer"].append(("Detected Nuclei:",  stats[self.idents.index(self.main)]))
+                for chan in self.idents:
+                    if chan != self.main:
+                        tempdat["footer"].append((f"Detected {chan} foci:",  stats[self.idents.index(chan)]))
         else:
             tempdat["header"] = header
             tempdat["data"] = ()

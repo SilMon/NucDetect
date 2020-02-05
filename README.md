@@ -1,6 +1,6 @@
 [![PyPI version](https://badge.fury.io/py/NucDetect.svg)](https://badge.fury.io/py/NucDetect)
 
-NucDetect - A python package for Detection and Quantification of DNA Doublestrand Breaks (v0.5)
+NucDetect - A python package for Detection and Quantification of DNA Doublestrand Breaks
 ============
 
 NucDetect is a Python package for the detection and quantification of γH2AX and 53BP1 foci inside nuclei. Its written in 
@@ -24,7 +24,7 @@ the following packages:
 * Pillow
 * qtawesome
 * piexif
-* tensorflow == 1.13.1
+* tensorflow >= 2.0
 * numba >= 0.45.1
 
 Run the following commands to clone and install from GitHub.

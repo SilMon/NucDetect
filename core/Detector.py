@@ -8,19 +8,22 @@ import hashlib
 import os
 import time
 import warnings
+from collections import Iterable
+
 import matplotlib.pyplot as plt
 from typing import Union, Dict, List, Tuple, Any
 
 import numpy as np
 import piexif
 from scipy import ndimage as ndi
+from scipy.ndimage import binary_fill_holes, label
 from skimage import io
 from skimage.draw import circle
 from skimage.feature import canny, blob_log
 from skimage.filters import threshold_local
 from skimage.filters.rank import maximum
-from skimage.morphology import watershed
-from skimage.morphology.binary import binary_opening
+from skimage.morphology import watershed, dilation
+from skimage.morphology.binary import binary_opening, binary_erosion, binary_dilation
 
 from core.JittedFunctions import eu_dist, create_circular_mask, relabel_array, imprint_data_into_channel
 from core.ROI import ROI
@@ -50,18 +53,23 @@ class Detector:
             "min_foc_area": 9
         }
         self.logging: bool = logging
-        self.analyser: FCN = FCN()
+        #self.analyser = FCN()
 
     def analyse_image(self, path: str, logging: bool = True,
-                      ml_analysis: bool = False) -> Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]:
+                      ml_analysis: bool = False, multi_analysis: bool = True) -> Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]:
         """
         Method to extract rois from the image given by path
 
         :param path: The URL of the image
         :param logging: Enables logging
         :param ml_analysis: Enable image analysis via U-Net
+        :param multi_analysis: Needed for multiprocess-analysis
         :return: The analysis results as dict
         """
+        # TODO Find solution for parallelized analysis
+        if multi_analysis:
+            #self.analyser = FCN()
+            pass
         start = time.time()
         logging = logging if self.logging is None else self.logging
         imgdat = Detector.get_image_data(path)
@@ -99,6 +107,7 @@ class Detector:
         handler = ROIHandler(ident=imgdat["id"])
         for roi in rois:
             handler.add_roi(roi)
+        handler.idents = names
         imgdat["handler"] = handler
         Detector.log(f"Total analysis time: {time.time()-start}", logging)
         return imgdat
@@ -110,10 +119,13 @@ class Detector:
         s0 = time.time()
         rois = []
         markers, lab_nums = Detector.perform_labelling(bin_maps, main_map=main_map)
+        main_markers, main_nums = Detector.mark_areas(markers[main_map])
+        markers[main_map] = main_markers
+        lab_nums[main_map] = main_nums
         # Extract nuclei
         main = Detector.extract_roi_from_main_map(
-            markers,
-            lab_nums,
+            main_markers,
+            main_nums,
             channels,
             main_map,
             names
@@ -131,6 +143,8 @@ class Detector:
                 main
             )
         )
+        # Remove unassociated foci
+        rois = [x for x in rois if x.associated is not None]
         Detector.log(f"Finished focus extraction {time.time() - s1:.4f}", logging)
         rois.extend(main)
         rois = [x for x in rois if x is not None and len(x) > 9]
@@ -210,8 +224,9 @@ class Detector:
         :param names: The names of each channel
         :return: A list of extracted ROI
         """
-        main_markers = binary_maps[main_map]
-        main = [None] * (lab_nums[main_map] + 1)
+        main_markers = binary_maps[main_map] if not isinstance(binary_maps, np.ndarray) else binary_maps
+        num = lab_nums[main_map] + 1 if not isinstance(binary_maps, np.ndarray) else lab_nums + 1
+        main = [None] * num
         # Extraction of main rois
         for y in range(len(main_markers)):
             for x in range(len(main_markers[0])):
@@ -252,7 +267,7 @@ class Detector:
                                 roi = ROI(channel=names[ind], main=False)
                                 roi.add_point((x, y), int(channels[ind][y][x]))
                                 temprois[lab] = roi
-                                if binary_maps[main_map][y][x] > 0:
+                                if binary_maps[main_map][y][x] > 0 and temprois[lab].associated is None:
                                     roi.associated = main[binary_maps[main_map][y][x]]
                             else:
                                 if temprois[lab].associated is None:
@@ -406,6 +421,27 @@ class Detector:
             rr, cc = circle(blob[0], blob[1], blob[2] * np.sqrt(2) - 0.5, shape=shape)
             map_[rr, cc] = ind + 1
         return map_
+
+    @staticmethod
+    def mark_areas(image: np.ndarray) -> Tuple[np.ndarray, int]:
+        """
+        Method to segment clustered areas
+
+        :param image: The image to segment
+        :return: The segmented area
+        """
+        # Define mask
+        mask = create_circular_mask(40, 40)
+        orig_labs, orig_nums = label(image)
+        # Fill image
+        fill = binary_fill_holes(image)
+        # Perform binary erosion on image
+        er = binary_erosion(fill, selem=mask)
+        # Label eroded map
+        lab, nums = label(er)
+        # Dilate eroded map
+        lab = dilation(lab, selem=mask)
+        return lab, nums
 
     @staticmethod
     def perform_labelling(local_maxima: List[np.ndarray],

@@ -158,7 +158,7 @@ class ROI:
             warnings.warn("Ellipse Parameter Calculation: ROI is not marked as main")
         # Check if the parameters are already calculated
         if not self.ell_params:
-            if self.main  and len(self) >= 2:
+            if self.main and len(self) >= 2:
                 # Calculate dimensions of ROI
                 dims = self.calculate_dimensions()
                 offset = dims["minY"], dims["minX"]

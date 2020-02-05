@@ -316,6 +316,7 @@ class NucDetect(QMainWindow):
         if self.cur_img:
             # TODO Settings mit einbeziehen
             ana = self.cur_img["analysed"]
+            # TODO
             if ana:
                 self.prg_signal.emit(f"Loading data from database for {self.cur_img['file_name']}",
                                      0, 100, "")
@@ -360,10 +361,77 @@ class NucDetect(QMainWindow):
         ic_col = QColor(47, 167, 212)
         ico = qta.icon("fa5.clipboard", color=ic_col)
         icon = self.icon
+        # Load existing experiments from database
+        exps = self.cursor.execute(
+            "SELECT * FROM experiments"
+        ).fetchall()
+        # Get the keys of all loaded images
+        keys = []
+        for ind in range(self.img_list_model.rowCount()):
+            keys.append(self.img_list_model.item(ind).data()["key"])
+
+        # Iterate over all experiments
+        for exp in exps:
+            imgs = [x[0] for x in self.cursor.execute("SELECT md5 FROM images WHERE experiment = ?",
+                                                      (exp[0],)).fetchall()]
+            # Check if all the necessary images are loaded
+            if all(elem in keys for elem in imgs):
+                name = exp[0]
+                details = exp[1]
+                notes = exp[2]
+                # TODO Add group loading routine
+                groups = ""
+                add_item = QStandardItem()
+                text = f"{name}\n{details[:47]}...\nGroups: {groups}"
+                add_item.setText(text)
+                add_item.setData(
+                    {
+                        "name": name,
+                        "details": details,
+                        "notes": notes,
+                        "groups": groups,
+                        "keys": imgs
+                    }
+                )
+                add_item.setIcon(ico)
+                exp_model.appendRow(add_item)
+
+        def on_img_selection_change(selected: QItemSelection, deselected: QItemSelection) -> None:
+            """
+            Method to react to the selection of images
+
+            :param selected: The selected items
+            :param deselected: The deselected items
+            :return:
+            """
+            selected = selected.indexes()
+            deselected = deselected.indexes()
+            # Get the selected experiment
+            exp = exp_model.itemFromIndex(exp_dialog.ui.lv_experiments.selectionModel().selectedIndexes()[0])
+            # If no experiment is selected, return
+            if not exp:
+                return
+            data = exp.data()
+            keys = data["keys"]
+            for ind in selected:
+                item = img_model.item(ind.row())
+                key = item.data()["key"]
+                if key not in keys:
+                    keys.append(key)
+            for ind in deselected:
+                item = img_model.item(ind.row())
+                key = item.data()["key"]
+                if key in keys:
+                    keys.remove(key)
+            data["keys"] = keys
+            exp.setData(data)
+
+        exp_dialog.ui.lv_images.selectionModel().selectionChanged.connect(on_img_selection_change)
 
         def on_exp_selection_change(selected: QItemSelection, deselected: QItemSelection) -> None:
             """
             Function to react to changed experiment selection
+
             :param selected: The selected item
             :param deselected: The deselected item
             :return: None
@@ -375,9 +443,6 @@ class NucDetect(QMainWindow):
             if deselected:
                 item = exp_model.item(deselected[0].row())
                 name = exp_dialog.ui.le_name.text()
-                if name != item.data()["name"]:
-                    # TODO react to identifier changes -> important for database
-                    pass
                 details = exp_dialog.ui.te_details.toPlainText()
                 notes = exp_dialog.ui.te_notes.toPlainText()
                 groups = exp_dialog.ui.le_groups.text()
@@ -439,13 +504,11 @@ class NucDetect(QMainWindow):
                 text = f"{name}\n{details[:47]}...\nGroups: {groups}"
                 add_item.setText(text)
                 add_item.setData(
-                    {
-                        "name": name,
-                        "details": details,
-                        "notes": notes,
-                        "groups": groups,
-                        "keys": keys
-                    }
+                    {"name": name,
+                     "details": details,
+                     "notes": notes,
+                     "groups": groups,
+                     "keys": keys}
                 )
                 add_item.setIcon(ico)
                 exp_model.appendRow(add_item)
@@ -481,11 +544,24 @@ class NucDetect(QMainWindow):
         exp_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
         code = exp_dialog.exec()
         if code == QDialog.Accepted:
-            # TODO Save changes to database
+            # Reset the information of all images
+            for key in keys:
+                self.cursor.execute("UPDATE images SET experiment = ? WHERE md5 = ?",
+                                    (None, key, ))
             for ind in range(exp_model.rowCount()):
                 item = exp_model.item(ind)
                 data = item.data()
-                print(data)
+                # Add experiment to database
+                self.cursor.execute(
+                    "REPLACE INTO experiments VALUES (?, ?, ?)",
+                    (data["name"], data["details"], data["notes"])
+                )
+                for key in data["keys"]:
+                    self.cursor.execute(
+                        "UPDATE images SET experiment=? WHERE md5=?",
+                        (data["name"], key)
+                    )
+            self.connection.commit()
             print("Exp Dial Accepted")
 
     def _show_loading_dialog(self) -> None:
@@ -545,9 +621,9 @@ class NucDetect(QMainWindow):
                     (key,)
             ).fetchall():
                 self.cursor.execute(
-                    "INSERT OR IGNORE INTO images VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO images VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (key, d["datetime"], d["channels"], d["width"], d["height"],
-                     str(d["x_res"]), str(d["y_res"]), d["unit"], 0, -1)
+                     str(d["x_res"]), str(d["y_res"]), d["unit"], 0, -1, None, None)
                 )
             self.connection.commit()
 
@@ -659,7 +735,7 @@ class NucDetect(QMainWindow):
         self.prg_signal.emit("Starting analysis", 0, maxi, "")
         self.unsaved_changes = True
         self.prg_signal.emit("Analysing image", maxi*0.05, maxi, "")
-        data = self.detector.analyse_image(path)
+        data = self.detector.analyse_image(path, multi_analysis=False)
         self.roi_cache = data["handler"]
         s0 = time.time()
         self.prg_signal.emit(f"Ellipse parameter calculation", maxi * 0.75, maxi, "")
@@ -885,6 +961,12 @@ class NucDetect(QMainWindow):
             self.prg_signal.emit("Analysis finished -- Program ready",
                                  100,
                                  100, "")
+            # Change the status of list items to reflect that they were analysed
+            for ind in range(self.img_list_model.rowCount()):
+                item = self.img_list_model.item(ind)
+                data = item.data()
+                data["analysed"] = True
+                item.setData(data)
             self.selec_signal.emit(True)
         print(f"Total analysis time: {time.time() - start} secs")
             
@@ -1019,7 +1101,7 @@ class NucDetect(QMainWindow):
         assmap = self.detector.create_association_map(self.roi_cache)
         # Add labels to first tab
         stat_dialog.ui.dist_par.addWidget(QLabel(f"Detected nuclei: {len(assmap)}"))
-        empty = [x for x in assmap.values() if len(x) == 0]
+        empty = [key for key, val in assmap.items() if len(val) == 0]
         stat_dialog.ui.dist_par.addWidget(QLabel(f"Thereof empty: {len(empty)}"))
         colmarks = ["ro", "go", "co", "mo", "yo", "ko"]
         roinum = {}
@@ -1037,6 +1119,8 @@ class NucDetect(QMainWindow):
                     roinum[roi.ident][roi.associated] += 1
                 else:
                     roinum[roi.ident][roi.associated] = 1
+        for key in roinum.keys():
+            roinum[key].update({x: 0 for x in empty})
         for x in self.roi_cache.idents:
             if x != self.roi_cache.main:
                 stat_dialog.ui.dist_par.addWidget(QLabel(f"Detected foci ({x}): {stat['sec stats'][x]['number']}"))
@@ -1061,9 +1145,7 @@ class NucDetect(QMainWindow):
                                                                  QtGui.QSizePolicy.Minimum,
                                                                  QtGui.QSizePolicy.Expanding))
                 vals = list(roinum[x].values())
-                poiss_plots.append(PoissonCanvas(np.var(vals),
-                                                 len(vals),
-                                                 list(vals),
+                poiss_plots.append(PoissonCanvas(vals,
                                                  name=f"{x} channel poisson - {self.cur_img}",
                                                  title=f"{x} Channel"))
                 vals = []
@@ -1076,7 +1158,7 @@ class NucDetect(QMainWindow):
                     if len(temp) != 0:
                         vals.append(sum(temp)/len(temp))
                     else:
-                        # TODO otherwise division by zero on second image
+                        # If no foci are associated, 0 is appended
                         vals.append(0)
                 int = BarChart(name=f"{x} channel int - {self.cur_img}",
                                title=f"{x} Channel - Average Focus Intensity",
@@ -2271,14 +2353,14 @@ class MPLPlot(FigureCanvas):
 
 class PoissonCanvas(MPLPlot):
 
-    def __init__(self, _lambda: Union[int, float], k: Union[int, float], values: List[Union[int, float]],
+    def __init__(self, values: List[Union[int, float]],
                  title: str = "", name: str = "", parent: QWidget = None, width: Union[int, float] = 4,
                  height: Union[int, float] = 4, dpi: Union[int, float] = 65):
         super(PoissonCanvas, self).__init__(name, width, height, dpi, parent)
         self.title = title
-        self.plot(_lambda, k, values)
+        self.plot(values)
 
-    def plot(self, _lambda: Union[int, float], k: int, values: List[Union[int, float]]) -> None:
+    def plot(self, values: List[Union[int, float]]) -> None:
         av = np.average(values)
         unique, counts = np.unique(values, return_counts=True)
         prob = [counts[x] / np.sum(counts) for x in range(len(counts))]

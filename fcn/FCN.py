@@ -5,7 +5,6 @@ from typing import List, Tuple, Union
 import numpy as np
 from pathlib import Path
 from skimage.segmentation import flood_fill
-import matplotlib.pyplot as plt
 
 
 class FCN:
@@ -33,7 +32,7 @@ class FCN:
     def predict_image(self, path: Union[str, np.ndarray],
                       model: int,
                       channels: List[int],
-                      threshold: float = 0.5) -> List[np.ndarray]:
+                      threshold: float = 0.35) -> List[np.ndarray]:
         """
         Method to create the prediction mask of an image, specified by path
 
