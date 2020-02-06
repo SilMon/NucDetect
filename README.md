@@ -27,10 +27,25 @@ the following packages:
 * tensorflow >= 2.0
 * numba >= 0.45.1
 
-Run the following commands to clone and install from GitHub.
+Installation
+============
+Run the following commands to clone and install from GitHub
 
 ```console
 $ git clone https://github.com/SilMon/NucDetect.git
+```
+
+or pypi
+```console
+python3 -m pip install NucDetect
+```
+
+Start
+============
+The program can be started by running the NucDetectAppQT.py:
+```console
+cd %UserProfile%/AppData/local/Programs/Python/python37/Lib/site-packages/gui
+python -m NucDetectAppQT
 ```
 
 ### Supported Image Formats
