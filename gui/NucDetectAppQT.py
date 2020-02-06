@@ -112,6 +112,67 @@ class NucDetect(QMainWindow):
         cursor.executescript(
             '''
             BEGIN TRANSACTION;
+            CREATE TABLE IF NOT EXISTS "groups" (
+                "image"	INTEGER,
+                "experiment"	INTEGER,
+                "name"	INTEGER,
+                PRIMARY KEY("image","experiment")
+            ) WITHOUT ROWID ;
+            CREATE TABLE IF NOT EXISTS "experiments" (
+                "name"	TEXT,
+                "details"	TEXT,
+                "notes"	TEXT,
+                PRIMARY KEY("name")
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS "images" (
+                "md5"	TEXT,
+                "datetime"	TEXT,
+                "channels"	INTEGER NOT NULL,
+                "width"	INTEGER NOT NULL,
+                "height"	INTEGER NOT NULL,
+                "x_res"	INTEGER,
+                "y_res"	INTEGER,
+                "unit"	INTEGER,
+                "analysed"	INTEGER NOT NULL,
+                "settings"	TEXT,
+                "experiment"	TEXT,
+                "group"	TEXT,
+                PRIMARY KEY("md5")
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS "points" (
+                "hash"	INTEGER,
+                "x"	INTEGER,
+                "y"	INTEGER,
+                "intensity"	INTEGER,
+                PRIMARY KEY("hash","x","y")
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS "settings" (
+                "key_"	TEXT,
+                "value"	TEXT,
+                PRIMARY KEY("key_")
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS "categories" (
+                "image"	INTEGER,
+                "category"	TEXT,
+                PRIMARY KEY("image","category")
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS "channels" (
+                "md5"	INTEGER,
+                "index"	INTEGER,
+                "name"	INTEGER,
+                PRIMARY KEY("md5","index")
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS "roi" (
+                "hash"	INTEGER,
+                "image"	INTEGER,
+                "auto"	INTEGER,
+                "channel"	TEXT,
+                "center"	TEXT,
+                "width"	INTEGER,
+                "height"	INTEGER,
+                "associated"	INTEGER,
+                PRIMARY KEY("hash","image")
+            ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS "statistics" (
                 "hash"	INTEGER,
                 "image"	INTEGER,
@@ -132,66 +193,6 @@ class NucDetect(QMainWindow):
                 "ellipse_minor_axis_length"	INTEGER,
                 "ellipticity"	INTEGER,
                 PRIMARY KEY("hash","image")
-            ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS "groups" (
-                "image"	INTEGER,
-                "experiment"	INTEGER,
-                "name"	INTEGER,
-                PRIMARY KEY("image","experiment")
-            );
-            CREATE TABLE IF NOT EXISTS "roi" (
-                "hash"	INTEGER,
-                "image"	INTEGER,
-                "auto"	INTEGER,
-                "channel"	TEXT,
-                "center"	TEXT,
-                "width"	INTEGER,
-                "height"	INTEGER,
-                "associated"	INTEGER,
-                PRIMARY KEY("hash","image")
-            ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS "images" (
-                "md5"	INTEGER,
-                "datetime"	TEXT,
-                "channels"	INTEGER NOT NULL,
-                "width"	INTEGER NOT NULL,
-                "height"	INTEGER NOT NULL,
-                "x_res"	INTEGER,
-                "y_res"	INTEGER,
-                "unit"	INTEGER,
-                "analysed"	INTEGER NOT NULL,
-                "settings"	TEXT,
-                PRIMARY KEY("md5")
-            ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS "channels" (
-                "md5"	INTEGER,
-                "index"	INTEGER,
-                "name"	INTEGER,
-                PRIMARY KEY("md5","index")
-            ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS "categories" (
-                "image"	INTEGER,
-                "category"	TEXT,
-                PRIMARY KEY("image","category")
-            ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS "experiments" (
-                "image"	INTEGER,
-                "name"	INTEGER,
-                "details"	INTEGER,
-                "notes"	INTEGER,
-                PRIMARY KEY("image","name")
-            ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS "settings" (
-                "key_"	TEXT,
-                "value"	TEXT,
-                PRIMARY KEY("key_")
-            ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS "points" (
-                "hash"	INTEGER,
-                "x"	INTEGER,
-                "y"	INTEGER,
-                "intensity"	INTEGER,
-                PRIMARY KEY("hash","x","y")
             ) WITHOUT ROWID;
             COMMIT;
             '''
@@ -336,13 +337,20 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
+        # Disable Buttons and list during loading
+        self.enable_buttons(state=False)
+        self.ui.list_images.setEnabled(False)
+        # Load saved data from databank
         self.roi_cache = self.load_rois_from_database(self.cur_img["key"])
+        # Create the result table from loaded data
         self.create_result_table_from_list(self.roi_cache)
+        # Re-enable buttons and list
+        self.ui.list_images.setEnabled(True)
         self.enable_buttons()
+        # Disable analysis button -> Useless if image was already analysed
         self.ui.btn_analyse.setEnabled(False)
-        self.ui.lbl_status.setText("Loaded analysis results from database")
-        self.prg_signal.emit(f"Data loaded from database {self.cur_img['file_name']}",
-                             0, 100, "")
+        self.prg_signal.emit(f"Data loaded from database for {self.cur_img['file_name']}",
+                             100, 100, "")
 
     def show_experiment_dialog(self) -> None:
         """
@@ -869,6 +877,9 @@ class NucDetect(QMainWindow):
             self.ui.btn_analyse_all.setEnabled(state)
             self.ui.btn_clear_list.setEnabled(state)
             self.ui.btn_delete_from_list.setEnabled(state)
+            self.ui.btn_reload.setEnabled(state)
+        self.ui.btn_load.setEnabled(state)
+        self.ui.btn_experiments.setEnabled(state)
         self.ui.btn_save.setEnabled(state)
         self.ui.btn_images.setEnabled(state)
         self.ui.btn_statistics.setEnabled(state)
@@ -977,6 +988,8 @@ class NucDetect(QMainWindow):
         :param md5: The md5 hash of the image
         :return: A ROIHandler containing all roi
         """
+        self.prg_signal.emit(f"Loading data",
+                             0, 100, "")
         con = sqlite3.connect(database)
         crs = con.cursor()
         rois = ROIHandler(ident=md5)
@@ -997,7 +1010,11 @@ class NucDetect(QMainWindow):
                     "intensity minimum", "intensity std")
         ellkeys = ("center", "major_axis", "major_slope", "major_length",
                    "major_angle", "minor_axis", "minor_length", "shape_match")
+        ind = 1
+        max = len(entries)
         for entry in entries:
+            self.prg_signal.emit(f"Loading ROI:  {ind}/{max}",
+                                 ind, max, "")
             temproi = ROI(channel=entry[3], main=entry[7] is None, associated=entry[7])
             temproi.id = entry[0]
             stats = crs.execute(
@@ -1028,6 +1045,7 @@ class NucDetect(QMainWindow):
             ellp = (center, major, stats[11], stats[12], stats[13], minor, stats[16], stats[17])
             temproi.ell_params = dict(zip(ellkeys, ellp))
             rois.add_roi(temproi)
+            ind += 1
         for m in main_:
             for s in sec:
                 if s.associated == hash(m):

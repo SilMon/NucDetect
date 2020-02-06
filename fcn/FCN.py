@@ -1,4 +1,5 @@
 import tensorflow as tf
+from tensorflow.python.keras import backend as K
 from skimage import io
 from tensorflow.keras import models
 from typing import List, Tuple, Union
@@ -201,7 +202,7 @@ class FCN:
         tiles = np.asarray(tiles).astype("float32")
         tiles /= 255
         tiles = tiles.reshape(-1, 256, 256, 1)
-        predictions = model.predict(tiles)
+        predictions = model.predict(tiles, use_multiprocessing=True)
         masks = []
         for prediction in predictions:
             mask = FCN.create_prediction_mask(prediction)

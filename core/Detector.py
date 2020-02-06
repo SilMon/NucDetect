@@ -53,10 +53,9 @@ class Detector:
             "min_foc_area": 9
         }
         self.logging: bool = logging
-        #self.analyser = FCN()
 
     def analyse_image(self, path: str, logging: bool = True,
-                      ml_analysis: bool = False, multi_analysis: bool = True) -> Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]:
+                      ml_analysis: bool = True, multi_analysis: bool = True) -> Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]:
         """
         Method to extract rois from the image given by path
 
@@ -66,10 +65,8 @@ class Detector:
         :param multi_analysis: Needed for multiprocess-analysis
         :return: The analysis results as dict
         """
-        # TODO Find solution for parallelized analysis
         if multi_analysis:
-            #self.analyser = FCN()
-            pass
+            self.analyser = FCN()
         start = time.time()
         logging = logging if self.logging is None else self.logging
         imgdat = Detector.get_image_data(path)

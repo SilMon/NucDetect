@@ -141,7 +141,7 @@ class ROIHandler:
         tempdat = {}
         header = ["Image", "Center[(y, x)]", "Area [px]", "Ellipticity[%]"]
         if self.idents:
-            header.extend([x for x in self.idents if x is not self.main])
+            header.extend([x for x in self.idents if x != self.main])
             tempdat["header"] = header
             tempdat["data"] = []
             tempdat["footer"] = []
