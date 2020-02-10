@@ -155,7 +155,7 @@ class ROI:
         """
         # Check if the current ROI is main, else warn
         if not self.main:
-            warnings.warn("Ellipse Parameter Calculation: ROI is not marked as main")
+            warnings.warn(f"Ellipse Parameter Calculation: ROI {hash(self)} is not marked as main")
         # Check if the parameters are already calculated
         if not self.ell_params:
             if self.main and len(self) >= 2:

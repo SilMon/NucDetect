@@ -65,7 +65,7 @@ class Detector:
         :param multi_analysis: Needed for multiprocess-analysis
         :return: The analysis results as dict
         """
-        if multi_analysis:
+        if ml_analysis:
             self.analyser = FCN()
         start = time.time()
         logging = logging if self.logging is None else self.logging

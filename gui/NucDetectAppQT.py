@@ -1320,7 +1320,7 @@ class NucDetect(QMainWindow):
         if code == QDialog.Accepted:
             self.create_result_table_from_list(self.roi_cache)
         elif code == QDialog.Rejected:
-            self.roi_cache = mod.handler
+            self.load_saved_data()
 
     def on_close(self) -> None:
         """
@@ -1744,6 +1744,7 @@ class ModificationDialog(QDialog):
 
     def accept(self) -> None:
         for comm in self.commands:
+            print(f"ACCEPT: {comm}")
             self.curs.execute(
                 comm[0],
                 comm[1]
@@ -1828,7 +1829,7 @@ class ModificationDialog(QDialog):
             if selection:
                 sel = [x.row() for x in selection]
                 code = QMessageBox.question(self, "Remove Nuclei...",
-                                            "Do you really want to remove following nuclei: {}".format(sel),
+                                            f"Do you really want to remove following nuclei: {sel}",
                                             QMessageBox.Yes | QMessageBox.No)
                 if code == QMessageBox.Yes:
                     offset = 0
@@ -1853,7 +1854,7 @@ class ModificationDialog(QDialog):
             selection = self.ui.lst_nuc.selectionModel().selectedIndexes()
             sel = [x.row() for x in selection]
             code = QMessageBox.question(self, "Merge Nuclei...",
-                                        "Do you really want to merge following nuclei: {}".format(sel),
+                                        f"Do you really want to merge following nuclei: {sel}",
                                         QMessageBox.Yes | QMessageBox.No)
             if code == QMessageBox.Yes:
                 seed = self.view.main[sel[0]]
@@ -1875,10 +1876,21 @@ class ModificationDialog(QDialog):
                 for nuc in ass_list:
                     for foc in self.view.assmap[nuc]:
                         foc.associated = seed
-                nuc_stat = seed.calculate_dimensions()
+                nuc_dims = seed.calculate_dimensions()
+                stats = seed.calculate_statistics()
+                ellp = seed.calculate_ellipse_parameters()
+                imghash = self.handler.ident
                 self.commands.append(
                      ("UPDATE roi SET hash = ?, auto = ?, center = ?, width = ?, height = ? WHERE hash = ?",
-                      (hash(seed), False, str(nuc_stat["center"]), nuc_stat["width"], nuc_stat["height"], mergehash[0]))
+                      (hash(seed), False, str(nuc_dims["center"]), nuc_dims["width"], nuc_dims["height"], mergehash[0]))
+                )
+                self.commands.append(
+                    ("INSERT OR IGNORE INTO statistics VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (hash(seed), imghash, stats["area"], stats["intensity average"], stats["intensity median"],
+                      stats["intensity maximum"], stats["intensity minimum"], stats["intensity std"],
+                      str(ellp["center"]), str(ellp["major_axis"][0]), str(ellp["major_axis"][1]),
+                      ellp["major_slope"], ellp["major_length"], ellp["major_angle"], str(ellp["minor_axis"][0]),
+                      str(ellp["minor_axis"][1]), ellp["minor_length"], ellp["shape_match"]))
                 )
                 for h in mergehash:
                     self.commands.extend(
@@ -1887,6 +1899,8 @@ class ModificationDialog(QDialog):
                          ("UPDATE points SET hash = ? WHERE hash = ?",
                          (hash(seed), h)),
                          ("DELETE FROM roi WHERE hash = ?",
+                         (h, )),
+                         ("DELETE FROM statistics WHERE hash = ?",
                          (h, )))
                     )
                 self.view.assmap = Detector.create_association_map(self.handler.rois)
@@ -2246,14 +2260,30 @@ class NucView(QGraphicsView):
             self.assmap = Detector.create_association_map(self.handler.rois)
             adat = aroi.calculate_dimensions()
             bdat = broi.calculate_dimensions()
+            astat = aroi.calculate_statistics()
+            bstat = broi.calculate_statistics()
+            aell = aroi.calculate_ellipse_parameters()
+            bell = broi.calculate_ellipse_parameters()
             imghash = self.handler.ident
             self.commands.extend((
                 ("INSERT INTO roi VALUES (?, ?, ?, ?, ? ,?, ?, ?)",
                  (hash(aroi), imghash, False, self.cur_nuc.ident, str(adat["center"]), adat["width"],
                   adat["height"], None)),
+                ("INSERT INTO statistics VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (hash(aroi), imghash, astat["area"], astat["intensity average"], astat["intensity median"],
+                  astat["intensity maximum"], astat["intensity minimum"], astat["intensity std"],
+                  str(aell["center"]), str(aell["major_axis"][0]), str(aell["major_axis"][1]), aell["major_slope"],
+                  aell["major_length"], aell["major_angle"], str(aell["minor_axis"][0]), str(aell["minor_axis"][1]),
+                  aell["minor_length"], aell["shape_match"])),
                 ("INSERT INTO roi VALUES (?, ?, ?, ?, ? ,?, ?, ?)",
                  (hash(broi), imghash, False, self.cur_nuc.ident, str(bdat["center"]), bdat["width"],
                   bdat["height"], None)),
+                ("INSERT INTO statistics VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (hash(broi), imghash, bstat["area"], bstat["intensity average"], bstat["intensity median"],
+                  bstat["intensity maximum"], bstat["intensity minimum"], bstat["intensity std"],
+                  str(bell["center"]), str(bell["major_axis"][0]), str(bell["major_axis"][1]), bell["major_slope"],
+                  bell["major_length"], bell["major_angle"], str(bell["minor_axis"][0]), str(bell["minor_axis"][1]),
+                  bell["minor_length"], bell["shape_match"])),
                 ("DELETE FROM roi WHERE hash=?",
                  (hash(self.cur_nuc),)),
                 ("DELETE FROM points WHERE hash=?",
