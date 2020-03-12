@@ -16,16 +16,15 @@ Requirements
 NucDetect is compatible with Windows, Mac OS X and Linux operating systems. It requires 
 the following packages:
 
-* scipy>=0.19.0
-* numpy>=1.13.3
-* scikit-image>=0.15
-* matplotlib >= 3.0.2
-* PyQT5 >= 5.11.3
-* Pillow
-* qtawesome
-* piexif
-* tensorflow >= 2.0
-* numba >= 0.45.1
+* tensorflow>=2.1.0
+* numpy>=1.18.1
+* scikit-image>=0.16.2
+* matplotlib>=3.1.3
+* pyqt5>=5.14.1
+* numba>=0.48.0
+* pillow>=7.0.0
+* qtawesome>=0.6.1
+* piexif>=1.1.3
 
 Installation
 ============

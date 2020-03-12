@@ -496,21 +496,13 @@ class Detector:
             maxi = maximum(maxi, selem=selem)
         thresh_ = threshold_local(maxi, block_size=size * 8 + 1)
         maxi = ndi.binary_fill_holes(maxi > thresh_)
-
-        # Calculate second threshold
-        mini = np.amin(orig) + 0.005 * np.amax(orig)
-        for y in range(len(orig)):
-            for x in range(len(orig[0])):
-                pix = orig[y][x]
-                if pix <= mini:
-                    maxi[y][x] = 0
+        # Perform logical AND to remove areas that were not detected in ch_main_bin
+        maxi = np.logical_and(maxi, ch_main_bin)
         # Open maxi to remove noise
         maxi = binary_opening(maxi, selem=create_circular_mask(size * 2, size * 2))
-
         # Extract nuclei from map
         area, labels = ndi.label(maxi)
         nucs = [None] * (labels + 1)
-
         for y in range(len(area)):
             for x in range(len(area[0])):
                 pix = area[y][x]
@@ -565,26 +557,19 @@ class Detector:
         :param channel: The corresponding channel
         :return: The foci map for the nucleus
         """
-        impr_time = 0
-        nfpl_time = 0
-        start = time.time()
         chan = np.zeros(shape=channel.shape)
         for nuc in nuclei:
             thresh = []
             for p in nuc:
                 thresh.append((p, channel[p[0]][p[1]]))
             if thresh:
-                t1 = time.time()
                 thresh_np, offset = Detector.create_numpy_from_point_list(thresh)
-                nfpl_time += time.time() - t1
                 edges = Detector.detect_edges(thresh_np)
                 if np.max(edges) > 0:
                     chan_fill = ndi.binary_fill_holes(edges)
                     chan_open = ndi.binary_opening(chan_fill)
                     if np.max(chan_open) > 0:
-                        t = time.time()
                         imprint_data_into_channel(chan, chan_open, offset)
-                        impr_time += time.time() - t
         return chan
 
     @staticmethod

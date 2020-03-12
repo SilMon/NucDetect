@@ -129,6 +129,9 @@ QDialog{
           </item>
           <item>
            <widget class="QPushButton" name="btn_experiments">
+            <property name="enabled">
+             <bool>true</bool>
+            </property>
             <property name="text">
              <string>Experiments</string>
             </property>
