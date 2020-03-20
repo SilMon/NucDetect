@@ -59,7 +59,7 @@ QPushButton:disabled{
 	background-color:  rgba(40, 60, 100 , 255);
 }
 
-QLabel{
+QLabel, QCheckBox{
 	font-size: 12px;
 	color: White;
 	min-height: 30px;
@@ -152,6 +152,23 @@ QTabBar::tab:hover{
        </item>
        <item>
         <widget class="QComboBox" name="cbx_channels"/>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="cbx_nuclei">
+         <property name="text">
+          <string>Always draw nuclei</string>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="Line" name="line_2">
+         <property name="orientation">
+          <enum>Qt::Horizontal</enum>
+         </property>
+        </widget>
        </item>
       </layout>
      </item>

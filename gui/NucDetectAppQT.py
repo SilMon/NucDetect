@@ -1,15 +1,16 @@
 from __future__ import annotations
-import copy
+
 import datetime
 import json
 import math
 import os
+import re
 import shutil
 import sqlite3
 import sys
 import time
 import traceback
-import re
+import pyqtgraph as pg
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from threading import Thread
 from typing import Union, Dict, List, Tuple, Any
@@ -22,18 +23,18 @@ import qtawesome as qta
 from PIL import Image
 from PIL.ImageQt import ImageQt
 from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtGui
 from PyQt5 import uic
 from PyQt5.QtCore import QSize, Qt, pyqtSignal, QRectF, QItemSelectionModel, QSortFilterProxyModel, QItemSelection
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon, QPixmap, QColor, QBrush, QPen, QResizeEvent, \
-    QKeyEvent, QMouseEvent, QPainter
+    QKeyEvent, QMouseEvent, QPainter, QTransform
 from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, QSizePolicy, QWidget, \
     QVBoxLayout, QScrollArea, QMessageBox, QGraphicsScene, QGraphicsEllipseItem, QGraphicsView, QGraphicsItem, \
-    QGraphicsPixmapItem, QLabel, QGraphicsLineItem, QStyleOptionGraphicsItem, QInputDialog
+    QGraphicsPixmapItem, QLabel, QGraphicsLineItem, QStyleOptionGraphicsItem, QInputDialog, QGraphicsRectItem
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 from matplotlib.patches import Ellipse
-from PyQt5 import QtGui
 from skimage.draw import ellipse
 
 from core.Detector import Detector
@@ -59,6 +60,7 @@ ui_modification_dial = os.path.join(script_dir, "modification_dialog.ui")
 database = os.path.join(nuc_detect_dir, "nucdetect.db")
 result_path = os.path.join(nuc_detect_dir, "results")
 images_path = os.path.join(nuc_detect_dir, "images")
+pg.setConfigOptions(imageAxisOrder='row-major')
 
 
 class NucDetect(QMainWindow):
@@ -1565,63 +1567,17 @@ class TableFilterModel(QSortFilterProxyModel):
         return ldat < rdat
 
 
-class ResultFigure(FigureCanvas):
-
-    def __init__(self, name: str, width: Union[int, float] = 4,
-                 height: Union[int, float] = 4, dpi: Union[int, float] = 65, parent: QWidget = None):
-        self.fig = Figure(figsize=(width, height), dpi=dpi)
-        self.name = name
-        self.setParent(parent)
-        self.axes = self.fig.add_subplot(111)
-        FigureCanvas.__init__(self, self.fig)
-        FigureCanvas.setSizePolicy(self,
-                                   QSizePolicy.Expanding,
-                                   QSizePolicy.Expanding)
-
-    def show_image(self, image: np.ndarray, image_title: str = "", show_axis: str = "On") -> None:
-        """
-        Method to show an image in the ResultFigure
-
-        :param image: The image to show as numpy array
-        :param image_title: The title to display for the image
-        :param show_axis: Indicates if the axis should be shown
-        :return: None
-        """
-        ax = self.figure.add_subplot(111)
-        ax.imshow(image)
-        ax.axis(show_axis)
-        ax.set_title(image_title)
-        ax.set_ylabel("Height")
-        ax.set_xlabel("Width")
-        self.draw()
-
-    def save(self) -> None:
-        """
-        Method to save the figure to file
-
-        :return: None
-        """
-        pardir = os.getcwd()
-        pathpardir = os.path.join(os.path.dirname(pardir),
-                                  r"results/images/statistics")
-        os.makedirs(pathpardir, exist_ok=True)
-        pathresult = os.path.join(pathpardir,
-                                  "result - {}.png".format(self.name))
-        self.fig.set_size_inches(30, 15)
-        self.fig.set_dpi(450)
-        self.fig.savefig(pathresult)
-
-
 class ImgDialog(QDialog):
     MARKERS = [
-        "r",  # Red
-        "g",  # Green
-        "b",  # Blue
-        "c",  # Cyan
-        "m",  # Magenta
-        "y",  # Yellow
-        "k",  # Black
-        "w"   # White
+        pg.mkPen(color="r", width=3),  # Red
+        pg.mkPen(color="g", width=3),  # Green
+        pg.mkPen(color="b", width=3),  # Blue
+        pg.mkPen(color="c", width=3),  # Cyan
+        pg.mkPen(color="m", width=3),  # Magenta
+        pg.mkPen(color="y", width=3),  # Yellow
+        pg.mkPen(color="k", width=3),  # Black
+        pg.mkPen(color="w", width=3),  # White
+        pg.mkPen(color=(0, 0, 0, 0))   # Invisible
     ]
 
     def __init__(self, image: np.ndarray, handler: ROIHandler, parent: QWidget = None):
@@ -1630,25 +1586,99 @@ class ImgDialog(QDialog):
         self.image = image
         self.handler = handler
         self.ui = uic.loadUi(ui_result_image_dialog, self)
-        self.figure = Figure()
-        self.figure.patch.set_alpha(0.1)
-        self.canvas = FigureCanvas(self.figure)
-        self.nav = NavigationToolbar(self.canvas, self)
+        self.graph_widget = pg.GraphicsView()
+        self.plot_item = pg.PlotItem()
+        self.view = self.plot_item.getViewBox()
+        self.view.setAspectLocked(True)
+        self.view.invertY(True)
+        self.graph_widget.setCentralWidget(self.plot_item)
+        self.img_item = pg.ImageItem()
+        self.plot_item.addItem(self.img_item)
+        self.nuc_pen = pg.mkPen(color="FFD700", width=3, style=QtCore.Qt.DashLine)
+        self.maj_ind = None
+        self.items = []
         self.initialize_ui()
         self.setAttribute(QtCore.Qt.WA_DeleteOnClose)
+        self.set_current_image()
 
     def initialize_ui(self) -> None:
-        self.canvas.setSizePolicy(
-            QSizePolicy.Expanding,
-            QSizePolicy.Expanding
-        )
         for ident in self.handler.idents:
+            # Add an selection item to combobox
             self.ui.cbx_channels.addItem(ident)
+            # Add list to items to store QGraphicItems
+            self.items.append([])
+        # Create QGraphicsItems for display
+        for roi in self.handler.rois:
+            ind = self.handler.idents.index(roi.ident)
+            dims = roi.calculate_dimensions()
+            if roi.main:
+                params = roi.calculate_ellipse_parameters()
+                c = params["center"][1], params["center"][0]
+                d1 = params["minor_length"]
+                d2 = params["major_length"]
+                slope = params["major_slope"]
+                item = QGraphicsEllipseItem(-d1/2, -d2/2, d1, d2)
+                # Get the angle of the major axis
+                angle = params["major_angle"]
+                item.setData(0, self.nuc_pen)
+                item.setData(1, roi.main)
+                # Rotate the ellipse according to the angle
+                item.setTransformOriginPoint(item.sceneBoundingRect().center())
+                item.setRotation(-90 + angle if slope > 0 else 90 - angle)
+                item.setPos(c[0], c[1])
+                major = params["major_axis"]
+                maj = QGraphicsLineItem(major[0][1], major[0][0], major[1][1], major[1][0])
+                maj.setData(0, self.nuc_pen)
+                minor = params["minor_axis"]
+                min_ = QGraphicsLineItem(minor[0][1], minor[0][0], minor[1][1], minor[1][0])
+                min_.setData(0, self.nuc_pen)
+                self.items[ind].append(maj)
+                self.items[ind].append(min_)
+                self.plot_item.addItem(maj)
+                self.plot_item.addItem(min_)
+            else:
+                c = dims["minX"], dims["minY"]
+                d2 = dims["height"]
+                d1 = dims["width"]
+                item = QGraphicsEllipseItem(c[0], c[1], d1, d2)
+                item.setData(0, self.MARKERS[ind])
+                item.setData(1, roi.main)
+            self.items[ind].append(item)
+            self.plot_item.addItem(item)
+        # Add information
+        stats = self.handler.calculate_statistics()
+        assmap = Detector.create_association_map(self.handler)
+        self.ui.channel_selector.addWidget(QLabel(f"Nuclei: {len(assmap)}"))
+        empty = [key for key, val in assmap.items() if len(val) == 0]
+        self.ui.channel_selector.addWidget(QLabel(f"Thereof empty: {len(empty)}"))
+        roinum = {}
+        # Add foci related labels
+        for roi in self.handler:
+            if not roi.main:
+                if roi.ident not in roinum:
+                    roinum[roi.ident] = {roi.associated: 1}
+                elif roi.associated in roinum[roi.ident]:
+                    roinum[roi.ident][roi.associated] += 1
+                else:
+                    roinum[roi.ident][roi.associated] = 1
+        for key in roinum.keys():
+            roinum[key].update({x: 0 for x in empty})
+        for ident in self.handler.idents:
+            if ident != self.handler.main:
+                number = [x for _, x in roinum[ident].items()]
+                std = np.std(number)
+                number = np.average(number)
+                self.ui.channel_selector.addWidget(QLabel(f"Foci/Nucleus ({ident}): {number:.2f} ± {std:.2f}"))
+        self.ui.channel_selector.addItem(QtGui.QSpacerItem(20, 40,
+                                                           QtGui.QSizePolicy.Minimum,
+                                                           QtGui.QSizePolicy.Expanding))
         self.ui.cbx_channels.addItem("Composite")
         self.ui.cbx_channels.setCurrentText("Composite")
         self.ui.cbx_channels.currentIndexChanged.connect(self.on_channel_selection_change)
-        self.ui.navbar.insertWidget(0, self.nav, 3)
-        self.layout().addWidget(self.canvas)
+        self.ui.cbx_nuclei.stateChanged.connect(
+            lambda: self.set_current_image()
+        )
+        self.ui.navbar.addWidget(self.graph_widget)
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super(ImgDialog, self).resizeEvent(event)
@@ -1658,82 +1688,28 @@ class ImgDialog(QDialog):
         if self.ui.cbx_channels.currentIndex() < len(self.handler.idents):
             self.image = self.orig[..., self.ui.cbx_channels.currentIndex()]
         else:
-            self.image = self.orig.copy()
+            self.image = self.orig
         self.set_current_image()
 
     def on_button_click(self) -> None:
         self.save_image()
 
     def set_current_image(self) -> None:
+        draw_nuclei = self.ui.cbx_nuclei.isChecked()
         cur_ind = self.ui.cbx_channels.currentIndex()
-        # create an axis
-        ax = self.figure.add_subplot(111)
-        # Discard old graph
-        ax.clear()
-        ax.imshow(self.image, cmap="gray" if cur_ind < len(self.handler.idents) else matplotlib.rcParams["image.cmap"])
-        dots = [[], [], [], []]
-        for roi in self.handler.rois:
-            center = roi.calculate_dimensions()["center"]
-            ind = self.handler.idents.index(roi.ident)
-            mark = self.MARKERS[ind]
-            if cur_ind == len(self.handler.idents):
-                if roi.main:
-                    params = roi.calculate_ellipse_parameters()
-                    c = params["center"]
-                    cadj = c[1], c[0]
-                    d1 = params["major_length"]
-                    d2 = params["minor_length"]
-                    p0, p1 = params["major_axis"]
-                    p00, p10 = params["minor_axis"]
-                    slope = params["major_slope"]
-                    angle = params["major_angle"]
-                    ell = Ellipse(cadj, d1, d2, angle=angle if slope > 0 else 360 - angle,
-                                  color="gold", fill=None, linewidth=2, linestyle="--")
-                    ax.add_patch(ell)
-                    # Draw major axis
-                    x = (p0[1], p1[1])
-                    y = (p0[0], p1[0])
-                    ax.plot(x, y, "gold")
-                    # Draw minor axis
-                    x = (p00[1], p10[1])
-                    y = (p00[0], p10[0])
-                    ax.plot(x, y, "goldenrod")
+        # Iterate over all stored items
+        for i in range(len(self.items)):
+            # Get the item
+            items = self.items[i]
+            for item in items:
+                # Select pen for the item
+                if i == cur_ind or cur_ind == len(self.handler.idents) or item.data(1) and draw_nuclei:
+                    pen = item.data(0)
                 else:
-                    dots[0].append(center[0])
-                    dots[1].append(center[1])
-                    dots[2].append(mark)
-            elif cur_ind == self.handler.idents.index(self.handler.main):
-                if roi.main:
-                    params = roi.calculate_ellipse_parameters()
-                    c = params["center"]
-                    cadj = c[1], c[0]
-                    p0, p1 = params["major_axis"]
-                    p00, p10 = params["minor_axis"]
-                    d1 = params["major_length"]
-                    d2 = params["minor_length"]
-                    slope = params["major_slope"]
-                    angle = params["major_angle"]
-                    # Draw calculated ellipse
-                    ell = Ellipse(cadj, d1, d2, angle=angle if slope > 0 else 360 - angle,
-                                  color="gold", fill=None, linewidth=2, linestyle="--")
-                    ax.add_patch(ell)
-                    # Draw major axis
-                    x = (p0[1], p1[1])
-                    y = (p0[0], p1[0])
-                    ax.plot(x, y, "gold")
-                    # Draw minor axis
-                    x = (p00[1], p10[1])
-                    y = (p00[0], p10[0])
-                    ax.plot(x, y, "goldenrod")
-            elif cur_ind == ind:
-                dots[0].append(center[0])
-                dots[1].append(center[1])
-                dots[2].append(mark)
-        ax.scatter(dots[0], dots[1], marker="o", c=dots[2], s=16)
-        ax.set_ylim(len(self.image), 0)
-        ax.set_xlim(0, len(self.image[0]))
-        self.figure.tight_layout()
-        self.canvas.draw()
+                    pen = self.MARKERS[-1]
+                item.setPen(pen)
+        # Draw the background channel image
+        self.img_item.setImage(self.image)
 
 
 class SettingsDialog(QDialog):
@@ -1960,7 +1936,6 @@ class ModificationDialog(QDialog):
 
     def accept(self) -> None:
         for comm in self.commands:
-            print(f"ACCEPT: {comm}")
             self.curs.execute(
                 comm[0],
                 comm[1]
