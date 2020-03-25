@@ -22,7 +22,7 @@ setuptools.setup(
     include_package_data=True,
     packages=setuptools.find_packages(),
     install_requires=[
-        "tensorflow==2.0.0",
+        "tensorflow==2.0.1",
         "numpy>=1.18.1",
         "scikit-image>=0.16.2",
         "matplotlib>=3.1.3",
