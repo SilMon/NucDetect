@@ -7,11 +7,8 @@ import datetime
 import hashlib
 import os
 import time
-import warnings
-from collections import Iterable
-
-import matplotlib.pyplot as plt
 from typing import Union, Dict, List, Tuple, Any
+import matplotlib.pyplot as plt
 
 import numpy as np
 import piexif
@@ -55,14 +52,13 @@ class Detector:
         self.logging: bool = logging
 
     def analyse_image(self, path: str, logging: bool = True,
-                      ml_analysis: bool = True, multi_analysis: bool = True) -> Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]:
+                      ml_analysis: bool = False) -> Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]:
         """
         Method to extract rois from the image given by path
 
         :param path: The URL of the image
         :param logging: Enables logging
         :param ml_analysis: Enable image analysis via U-Net
-        :param multi_analysis: Needed for multiprocess-analysis
         :return: The analysis results as dict
         """
         if ml_analysis:
@@ -90,10 +86,11 @@ class Detector:
         else:
             nuclei = self.analyser.predict_image(path,
                                                  self.analyser.NUCLEI,
-                                                 channels=(main_channel, ), threshold=0.95)[0]
+                                                 channels=(main_channel, ), threshold=0.95, logging=logging)[0]
             foci = self.analyser.predict_image(path,
                                                self.analyser.FOCI,
-                                               channels=[x for x in range(len(names)) if x is not main_channel])
+                                               channels=[x for x in range(len(names)) if x is not main_channel],
+                                               logging=logging, thresholding=False)
             if main_channel > len(foci):
                 foci.append(nuclei)
             else:
@@ -308,7 +305,8 @@ class Detector:
                 foci.append(roi)
         Detector.log(f"Detected nuclei:{len(main)}\nDetected foci: {len(foci)}", logging)
         Detector.log("Checking for very small nuclei", logging)
-        # Remove very small nuclei
+        # Remove very small or extremly large main ROI
+        #main = [x for x in main if 1000 < len(x) < 15000]
         Detector.log(f"Time: {time.time() - s7:4f}\nRemove not associated foci", logging)
         s8 = time.time()
         # Remove foci that are either unassociated or whose nucleus was deleted
@@ -331,8 +329,12 @@ class Detector:
         s4 = time.time()
         for ind in range(len(foci)):
             focus = foci[ind]
+            focint = focus.calculate_statistics()["intensity average"]
+            if focint < 20:
+                focus.marked = True
             focdim = focus.calculate_dimensions()
             maxdist = max(focdim["height"], focdim["width"])
+
             c = focdim["center"]
             if focus not in rem_list:
                 for ind2 in range(ind + 1, len(foci)):
@@ -429,7 +431,6 @@ class Detector:
         """
         # Define mask
         mask = create_circular_mask(40, 40)
-        orig_labs, orig_nums = label(image)
         # Fill image
         fill = binary_fill_holes(image)
         # Perform binary erosion on image

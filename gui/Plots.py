@@ -1,11 +1,13 @@
-from typing import List, Dict
+from typing import List, Dict, Union
 
 from PyQt5 import QtGui
 from PyQt5.QtCore import QRectF, QLine, QPointF
 from PyQt5.QtGui import QPainter, QColor
 
 import numpy as np
+import math
 import pyqtgraph as pg
+from pyqtgraph import InfiniteLine
 
 
 class BoxPlotWidget(pg.PlotWidget):
@@ -168,3 +170,68 @@ class BoxPlotItem(pg.GraphicsObject):
         :return: The bounding rect
         """
         return QRectF(self.picture.boundingRect())
+
+
+class PoissonPlotWidget(pg.PlotWidget):
+    """
+    Class to compare the given data distribution to a poisson plot
+    """
+
+    def __init__(self, **kargs):
+        super().__init__(**kargs)
+        self.setBackground("w")
+        self.plotItem.setLabel("left", "Probability [%]")
+        self.data = kargs.get("data", [])
+        self.data_name = kargs.get("label", "Channel")
+        self.data_graph = None
+        self.poisson_graph = None
+        self.prepare_plot()
+
+    def prepare_plot(self) -> None:
+        """
+        Method to prepare the plot
+
+        :return: None
+        """
+        # If the data array is empty, return
+        if not self.data:
+            return
+        # Calculate the average
+        av = np.average(self.data)
+        # Get the unique elements of data and their counts
+        unique, counts = np.unique(self.data, return_counts=True)
+        # Calculate the occurence probability of all unique elements
+        prob = [counts[x] / np.sum(counts) for x in range(len(counts))]
+        # Calculate the probability of elements to occur according to the poisson distrubution
+        poisson = self.poisson(av, np.arange(0, max(unique)))
+        # Prepare bar graphs
+        self.data_graph = pg.BarGraphItem(x=unique, height=prob, width=0.8, brush=pg.mkBrush(color=(150, 150, 30, 85)))
+        self.poisson_graph = pg.BarGraphItem(x=np.arange(0, max(unique)), height=poisson, width=0.8,
+                                             brush=pg.mkBrush(color=(150, 30, 85, 85)))
+        # Add indicator for data average
+        self.addItem(InfiniteLine(av, angle=90))
+        # Add Legend
+        # TODO
+        """
+        legend = pg.LegendItem((80, 60), offset=(70, 20))
+        legend.setParentItem(self.getPlotItem())
+        legend.addItem(self.data_graph, f"<font size='4' color=#96961e>▮</font>{self.data_name:>10}")
+        legend.addItem(self.poisson_graph, f"<font size='4' color=#96961e>▮</font>{'Poisson':>10}")
+        """
+
+    def poisson(self, lam: float, test: Union[list, np.ndarray, ]):
+        """
+        Recursive method to calculate the probability of elements to occur according to the poisson distrubution
+
+        :param lam: The average of the distribution
+        :param test: Either array of elements to test or one element to test
+        :return: List of probabilities or the probability for the given element
+        """
+        if isinstance(test, list) or isinstance(test, np.ndarray):
+            res = []
+            for el in test:
+                res.append(self.poisson(lam, el))
+            return res
+        else:
+            p = ((lam ** test) / math.factorial(test)) * math.exp(-lam)
+            return p

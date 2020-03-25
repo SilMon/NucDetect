@@ -1,5 +1,7 @@
+import time
+
 import tensorflow as tf
-from tensorflow.python.keras import backend as K
+from numba import jit
 from skimage import io
 from tensorflow.keras import models
 from typing import List, Tuple, Union
@@ -13,7 +15,22 @@ class FCN:
     NUCLEI = 2
     script_dir = Path().resolve().parent / "fcn" / "model"
 
-    def __init__(self):
+    def __init__(self, limit_gpu_growth=True):
+        """
+        Constructor
+
+        :param limit_gpu_growth: Should the use of GPU-RAM be limited?
+        """
+        gpus = tf.config.experimental.list_physical_devices('GPU')
+        if gpus and limit_gpu_growth:
+            try:
+                # Currently, memory growth needs to be the same across GPUs
+                for gpu in gpus:
+                    tf.config.experimental.set_memory_growth(gpu, True)
+                logical_gpus = tf.config.experimental.list_logical_devices('GPU')
+            except RuntimeError as e:
+                # Memory growth must be set before GPUs have been initialized
+                print(e)
         m = self.load_model()
         self.nuc_model: models.Model = m[0]
         self.foc_model: models.Model = m[1]
@@ -33,7 +50,9 @@ class FCN:
     def predict_image(self, path: Union[str, np.ndarray],
                       model: int,
                       channels: List[int],
-                      threshold: float = 0.35) -> List[np.ndarray]:
+                      threshold: float = 0.35,
+                      logging=True,
+                      thresholding=False) -> List[np.ndarray]:
         """
         Method to create the prediction mask of an image, specified by path
 
@@ -41,6 +60,7 @@ class FCN:
         :param model: The model to use for the prediction
         :param channels: A list containing the indices of channels to analyse
         :param threshold: The minimal certainty of the prediction
+        :param logging: Enables logging
         :return: The prediction mask
         """
         # Load the image
@@ -48,6 +68,7 @@ class FCN:
             img = path
         else:
             img = io.imread(path)
+        start = time.time()
         # Split the image into tiles
         tiles = self.split_image(img, channels)
         # Create predictions for all tiles
@@ -56,13 +77,16 @@ class FCN:
         model = self.nuc_model if model == self.NUCLEI else self.foc_model
         for i in range(len(channels)):
             pred_tiles.append(FCN.predict_tiles(tiles[i], model))
+        FCN.log(f"Prediction finished: {time.time() - start} secs", logging)
         maps = []
         # Merge predictions for the tiles to create the prediction map
         for p in pred_tiles:
             maps.append(FCN.merge_prediction_masks(p, img.shape))
+        FCN.log(f"Merging finished: {time.time() - start} secs", logging)
         # Threshold maps
         for m in maps:
             threshs.append(FCN.threshold_prediction_mask(m, threshold=threshold))
+        FCN.log(f"Thresholding finished: {time.time() - start} secs", logging)
         return threshs
 
     @staticmethod
@@ -175,6 +199,7 @@ class FCN:
 
         :param prediction_mask: The mask to threshold
         :param threshold: The threshold to apply in percent
+        :param logging: Enables logging
         """
         height = prediction_mask.shape[0]
         width = prediction_mask.shape[1]
@@ -185,9 +210,36 @@ class FCN:
         for y in range(height):
             for x in range(width):
                 if mask[y][x] == 1:
-                    mask = flood_fill(mask, (y, x), label)
+                    FCN.flood_fill(mask, (y, x), label)
                     label += 1
         return mask
+
+    @staticmethod
+    @jit(nopython=True)
+    def flood_fill(mask: np.ndarray, p: Tuple[int, int], label: int):
+        """
+        Implementation of iterative flood fill, 8-connected
+
+        :param mask: The mask to fill
+        :param p: The starting point
+        :param label: The label to use
+        :return: The filled mask
+        """
+        # Create the stack
+        stack = [p]
+        # Repeat action until stack is empty
+        while stack:
+            y, x = stack.pop()
+            if mask[y][x] == 1:
+                mask[y][x] = label
+                stack.append((y, x + 1))
+                stack.append((y, x - 1))
+                stack.append((y + 1, x))
+                stack.append((y - 1, x))
+                stack.append((y + 1, x + 1))
+                stack.append((y - 1, x - 1))
+                stack.append((y + 1, x - 1))
+                stack.append((y - 1, x + 1))
 
     @staticmethod
     def predict_tiles(tiles: List[np.ndarray],
@@ -205,7 +257,17 @@ class FCN:
         predictions = model.predict(tiles, use_multiprocessing=True)
         masks = []
         for prediction in predictions:
-            mask = FCN.create_prediction_mask(prediction)
-            masks.append(mask)
+            masks.append(FCN.create_prediction_mask(prediction))
         return masks
 
+    @staticmethod
+    def log(message: str, state: bool = True):
+        """
+        Method to log messages to the console
+
+        :param message: The message to log
+        :param state: Enables logging
+        :return: None
+        """
+        if state:
+            print(message)

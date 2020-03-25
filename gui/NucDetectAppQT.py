@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import datetime
 import json
 import math
@@ -393,14 +394,14 @@ class NucDetect(QMainWindow):
                 group_str = ""
                 for key in imgs:
                     group = self.cursor.execute(
-                                "SELECT group_ FROM images WHERE md5=?",
+                                "SELECT name FROM groups WHERE image=?",
                                 (key, )
-                            ).fetchall()[0][0]
-                    if group is not None:
-                        if group in groups:
-                            groups[group].append(key)
+                            ).fetchall()
+                    if group:
+                        if group[0][0] in groups:
+                            groups[group[0][0]].append(key)
                         else:
-                            groups[group] = [key]
+                            groups[group[0][0]] = [key]
                 for group in groups.keys():
                     group_str += f"{group}({len(groups[group])}) "
                 add_item = QStandardItem()
@@ -417,9 +418,6 @@ class NucDetect(QMainWindow):
                 )
                 add_item.setIcon(ico)
                 exp_model.appendRow(add_item)
-
-        # Create container for image keys of current experiment
-        current_experiment = []
 
         def open_group_dialog() -> None:
             """
@@ -438,9 +436,11 @@ class NucDetect(QMainWindow):
             gdial.ui.lv_groups.setModel(group_model)
             gdial.ui.lv_images.setIconSize(QSize(75, 75))
             gdial.ui.lv_groups.setIconSize(QSize(75, 75))
+            # Get the currently selected experiment
+            sel = exp_dialog.ui.lv_images.selectionModel().selectedIndexes()
 
             # Show warning if no experiment was selected
-            if not current_experiment:
+            if not sel:
                 msg = QMessageBox()
                 msg.setIcon(QMessageBox.Warning)
                 msg.setText("WARNING")
@@ -449,21 +449,32 @@ class NucDetect(QMainWindow):
                 msg.exec()
                 return
             else:
+                exp = exp_model.item(exp_dialog.ui.lv_images.selectionModel().selectedIndexes()[0].row())
+                exp_data = exp.data()
+                # Create copy of original data for possible reset
+                exp_data_orig = copy.deepcopy(exp_data)
+                exp_name = exp_data["name"]
+                exp_groups = exp_data["groups"]
+                exp_keys = exp_data["keys"]
+                exp_details = exp_data["details"]
+
                 for ind in range(img_model.rowCount()):
                     item = img_model.item(ind)
                     text = item.text()
                     data = item.data()
                     key = data["key"]
-                    if key in current_experiment:
+                    if key in exp_keys:
                         add_item = QStandardItem()
                         add_item.setIcon(data["icon"])
                         add_item.setData(data)
                         add_item.setText(text)
                         group_img_model.appendRow(add_item)
+
                 for group, keys in groups.items():
                     group_item = QStandardItem()
                     data = {
                         "name": group,
+                        "exp": exp_name,
                         "keys": keys
                     }
                     group_item.setText(f"{group}: {len(keys)}")
@@ -524,7 +535,7 @@ class NucDetect(QMainWindow):
                         keys.append(group_img_model.item(ind.row()).data()["key"])
                     data["keys"] = keys
                     groups[data["name"]] = keys
-                    text = f"{data['name']}\nImages: {len(data['keys'])}"
+                    text = f"{data['name']}: {len(data['keys'])}"
                     item.setText(text)
 
                 gdial.ui.lv_images.selectionModel().clear()
@@ -555,19 +566,31 @@ class NucDetect(QMainWindow):
                 dial = QInputDialog()
                 name, ok = QInputDialog.getText(dial, "Group Dialog", "Enter the new group: ")
                 if ok:
-                    if name not in groups:
-                        groups[name] = []
+                    if name not in exp_groups:
+                        exp_groups[name] = []
                     # Check if images are already selected
                     for ind in gdial.ui.lv_images.selectionModel().selectedIndexes():
-                        groups[name].append(group_img_model.item(ind.row()).data()["key"])
+                        img_key = group_img_model.item(ind.row()).data()["key"]
+                        if img_key not in exp_groups[name]:
+                            exp_groups[name].append(img_key)
+                    # Create item to add to group list
                     item = QStandardItem()
                     item_data = {
                         "name": name,
-                        "keys": groups[name]
+                        "keys": exp_groups[name],
+                        "exp": exp_name
                     }
                     item.setData(item_data)
-                    item.setText(f"{name}:\nImages: {len(groups[name])}")
+                    item.setText(f"{name}:\nImages: {len(exp_groups[name])}")
                     group_model.appendRow(item)
+                    # Update data and text of exp item
+                    group_str = ""
+                    for group in exp_groups.keys():
+                        group_str += f"{group}({len(exp_groups[group])}) "
+                    exp_text = f"{exp_name}\n{exp_details[:47]}...\nGroups: {group_str}"
+                    exp_data["groups"] = exp_groups
+                    exp.setText(exp_text)
+                    exp.setData(exp_data)
 
             def remove_group() -> None:
                 """
@@ -579,23 +602,22 @@ class NucDetect(QMainWindow):
                 index = gdial.ui.lv_images.selectionModel().selectedIndexes()[0].row()
                 item = group_model.item(index)
                 data = item.data()
-                clk = QMessageBox.question(self, "Erase group", f"Do you really want to delete the group {data['name']}?"
-                                                                        " This action cannot be reversed!",
-                                                   QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-                                                   QMessageBox.Cancel)
+                clk = QMessageBox.question(self, "Erase group",
+                                           f"Do you really want to delete the group {data['name']}?"
+                                           " This action cannot be reversed!",
+                                           QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
                 if clk == QMessageBox.Yes:
                     # Delete group from groups dict
-                    del groups[data["name"]]
+                    del exp_groups[data["name"]]
                     # Remove list item
                     group_model.removeRow(index)
                     # Update images in database
                     for key in data["keys"]:
                         self.cursor.execute(
-                            "UPDATE images SET group_=? WHERE md5=?",
-                            (None, key)
+                            "DELETE FROM groups WHERE image=?",
+                            (key, )
                         )
                     self.connection.commit()
-
 
             # Connect UI to functionality
             gdial.ui.btn_add.clicked.connect(add_group)
@@ -605,9 +627,18 @@ class NucDetect(QMainWindow):
             code = gdial.exec()
             if code == QDialog.Accepted:
                 text = ""
-                for name, data in groups.items():
+                for name, data in exp_groups.items():
                     text += f"{name}: {len(data)};"
                 exp_dialog.ui.le_groups.setText(text)
+            else:
+                # Restore original data
+                group_str = ""
+                for group in exp_data_orig["groups"].keys():
+                    group_str += f"{group}({len(exp_data_orig['groups'][group])}) "
+                exp_text = f"{exp_data_orig['name']}\n{exp_data_orig['details'][:47]}...\nGroups: {group_str}"
+                exp.setText(exp_text)
+                exp.setData(exp_data_orig)
+
 
         # Connect add btn to dialog
         exp_dialog.ui.btn_add_group.clicked.connect(open_group_dialog)
@@ -622,11 +653,12 @@ class NucDetect(QMainWindow):
             """
             selected = selected.indexes()
             deselected = deselected.indexes()
-            # Get the selected experiment
-            exp = exp_model.itemFromIndex(exp_dialog.ui.lv_experiments.selectionModel().selectedIndexes()[0])
+            indices = exp_dialog.ui.lv_experiments.selectionModel().selectedIndexes()
             # If no experiment is selected, return
-            if not exp:
+            if not indices:
                 return
+            # Get the selected experiment
+            exp = exp_model.itemFromIndex(indices[0])
             data = exp.data()
             keys = data["keys"]
             for ind in selected:
@@ -688,8 +720,6 @@ class NucDetect(QMainWindow):
                     groups_str += f"{name} ({len(keys)})"
                 exp_dialog.ui.le_groups.setText(groups_str)
                 keys = data["keys"]
-                current_experiment.clear()
-                current_experiment.extend(keys)
                 # Check the stored keys and select images accordingly
                 for ind in range(img_model.rowCount()):
                     item = img_model.item(ind)
@@ -768,13 +798,8 @@ class NucDetect(QMainWindow):
             for key in keys:
                 self.cursor.execute(
                     "UPDATE images SET experiment=? WHERE md5=?",
-                    (None, key, ))
-            for group, keys in groups.items():
-                for key in keys:
-                    self.cursor.execute(
-                        "UPDATE images SET group_=? WHERE md5=?",
-                        (group, key)
-                    )
+                    (None, key, )
+                )
             for ind in range(exp_model.rowCount()):
                 item = exp_model.item(ind)
                 data = item.data()
@@ -783,6 +808,14 @@ class NucDetect(QMainWindow):
                     "REPLACE INTO experiments VALUES (?, ?, ?)",
                     (data["name"], data["details"], data["notes"])
                 )
+                # Update group data
+                for group, values in data["groups"].items():
+                    for img in values:
+                        self.cursor.execute(
+                            "REPLACE INTO groups VALUES (?, ?, ?)",
+                            (img, data["name"], group)
+                        )
+                # Update data for images
                 for key in data["keys"]:
                     self.cursor.execute(
                         "UPDATE images SET experiment=? WHERE md5=?",
@@ -961,7 +994,7 @@ class NucDetect(QMainWindow):
         self.prg_signal.emit("Starting analysis", 0, maxi, "")
         self.unsaved_changes = True
         self.prg_signal.emit("Analysing image", maxi*0.05, maxi, "")
-        data = self.detector.analyse_image(path, multi_analysis=False)
+        data = self.detector.analyse_image(path)
         self.roi_cache = data["handler"]
         s0 = time.time()
         self.prg_signal.emit(f"Ellipse parameter calculation", maxi * 0.75, maxi, "")
@@ -1327,10 +1360,39 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
+        # Create dialog window
         stat_dialog = QDialog()
         stat_dialog.ui = uic.loadUi(ui_stat_dial, stat_dialog)
+        # Load available experiments
+        exps = self.cursor.execute(
+            "SELECT * FROM experiments"
+        ).fetchall()
+        # Open dialog to select an experiment
+        exp = QInputDialog.getItem(self,
+                                   "Select an experiment to analyse",
+                                   "Experiment: ",
+                                   [x[0] for x in exps])
+        # If no experiment was selected, return
+        if not exp:
+            return
         stat_dialog.setWindowTitle(f"Statistics for {self.cur_img['file_name']}")
         stat_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
+        # Get the groups associated with the experiment
+        groups_raw = self.cursor.execute(
+            "SELECT * FROM groups WHERE experiment=?",
+            (exp,)
+        )
+        # Get the individual groups and corresponding images
+        groups = {}
+        for raw in groups_raw:
+            img = raw[0]
+            name = raw[2]
+            if name in groups:
+                groups[name].append(img)
+            else:
+                groups[name] = [img]
+        # TODO
+        """
         # Add statistics to list
         stat = self.roi_cache.calculate_statistics()
         assmap = self.detector.create_association_map(self.roi_cache)
@@ -1443,6 +1505,7 @@ class NucDetect(QMainWindow):
         for plot in int_plots:
             stat_dialog.ui.vl_int.addWidget(NavigationToolbar(plot, stat_dialog))
             stat_dialog.ui.vl_int.addWidget(plot)
+        """
         stat_dialog.setWindowFlags(stat_dialog.windowFlags() |
                                    QtCore.Qt.WindowSystemMenuHint |
                                    QtCore.Qt.WindowMinMaxButtonsHint)
@@ -2385,7 +2448,6 @@ class NucView(QGraphicsView):
                         self.commands.append(("INSERT INTO points VALUES(?, ?, ?, ?)",
                                               (-1, x + x_offset, y + y_offset, np.int(inten))))
             self.handler.rois.append(cur_roi)
-            # TODO
             roidat = cur_roi.calculate_dimensions()
             stats = cur_roi.calculate_statistics()
             ellp = cur_roi.calculate_ellipse_parameters()
@@ -2558,166 +2620,6 @@ class QGraphicsFocusItem(QGraphicsEllipseItem):
             painter.setPen(QPen(self.cur_col, 3))
         painter.drawEllipse(self.rect())
         self.scene().update()
-
-
-class MPLPlot(FigureCanvas):
-
-    def __init__(self, name: str, width: Union[int, float] = 4, height: Union[int, float] = 4,
-                 dpi: Union[int, float] = 65, parent: QWidget=None):
-        self.fig = Figure(figsize=(width, height), dpi=dpi)
-        self.name = name
-        self.axes = self.fig.add_subplot(111)
-        FigureCanvas.__init__(self, self.fig)
-        self.setParent(parent)
-        FigureCanvas.setSizePolicy(self,
-                                   QSizePolicy.Expanding,
-                                   QSizePolicy.Expanding)
-
-    def save(self) -> None:
-        """
-        Method to save the plot as image
-
-        :return: None
-        """
-        pardir = os.getcwd()
-        pathpardir = os.path.join(os.path.dirname(pardir),
-                                  r"results/images/statistics")
-        os.makedirs(pathpardir, exist_ok=True)
-        pathresult = os.path.join(pathpardir,
-                                  "result - {}.png".format(self.name))
-        self.fig.set_size_inches(30, 15)
-        self.fig.set_dpi(450)
-        self.fig.savefig(pathresult)
-
-
-class PoissonCanvas(MPLPlot):
-
-    def __init__(self, values: List[Union[int, float]],
-                 title: str = "", name: str = "", parent: QWidget = None, width: Union[int, float] = 4,
-                 height: Union[int, float] = 4, dpi: Union[int, float] = 65):
-        super(PoissonCanvas, self).__init__(name, width, height, dpi, parent)
-        self.title = title
-        self.plot(values)
-
-    def plot(self, values: List[Union[int, float]]) -> None:
-        av = np.average(values)
-        unique, counts = np.unique(values, return_counts=True)
-        prob = [counts[x] / np.sum(counts) for x in range(len(counts))]
-        poisson = self.poisson(av, np.arange(0, max(unique)))
-        ax = self.figure.add_subplot(111)
-        ax.set_title("Poisson Distribution - " + self.title)
-        ax.bar(np.arange(0, max(unique)), poisson, align="center", alpha=0.5, label="Poisson Distribution")
-        ax.bar(unique, prob, align="center", alpha=0.5, label="Actual Distribution")
-        ax.set_xticks(np.arange(0, max(unique) + min(unique)))
-        ax.set_xticklabels(np.arange(0, max(unique) + min(unique)), rotation=45)
-        ax.set_ylabel("Probability [%]")
-        ax.set_xlabel("Foci number [N]")
-        ax.legend()
-        self.draw()
-
-    def poisson(self, lam, test):
-        if isinstance(test, list) or isinstance(test, np.ndarray):
-            res = []
-            for el in test:
-                res.append(self.poisson(lam, el))
-            return res
-        else:
-            p = ((lam ** test) / math.factorial(test)) * math.exp(-lam)
-            return p
-
-
-class XYChart(MPLPlot):
-
-    def __init__(self, x_values: List[Union[int, float]], y_values: List[Union[int, float]], dat_labels: List[str],
-                 col_marks: List[str] = ("ro",), parent: QWidget = None, name: str = "", title: str = "",
-                 x_title: str = "", y_title: str = "", width: Union[int, float] = 4, height: Union[int, float] = 4,
-                 dpi: Union[int, float] = 65, x_label_max_num: int = 20, y_label_max_num: int = 20,
-                 x_label_rotation: Union[int, float] = 0, y_label_rotation: Union[int, float] = 0):
-        super(XYChart, self).__init__(name, width, height, dpi, parent)
-        self.name = name
-        self.title = title
-        self.x_label_max_num = x_label_max_num
-        self.y_label_max_num = y_label_max_num
-        self.x_title = x_title
-        self.y_title = y_title
-        self.x_label_rotation = x_label_rotation
-        self.y_label_rotation = y_label_rotation
-        self.x_values = x_values
-        self.y_values = y_values
-        self.dat_label = dat_labels
-        self.colmarks = col_marks
-        self.lines = []
-        self.plot()
-
-    def plot(self) -> None:
-        ax = self.figure.add_subplot(111)
-        ax.set_title(self.title)
-        ax.set_ylabel(self.y_title)
-        ax.set_xlabel(self.x_title)
-        x_ticks = 0
-        y_ticks = 0
-        for x_val in self.x_values:
-            for x in x_val:
-                if x > x_ticks:
-                    x_ticks = x
-        for y_val in self.y_values:
-            for y in y_val:
-                if y > y_ticks:
-                    y_ticks = y
-        ax.xaxis.set_major_locator(plt.MaxNLocator(self.x_label_max_num))
-        ax.yaxis.set_major_locator(plt.MaxNLocator(self.y_label_max_num))
-        for ind in range(len(self.x_values)):
-            if len(self.colmarks) is len(self.x_values):
-                ax.plot(self.x_values[ind], self.y_values[ind], self.colmarks[ind])
-            else:
-                ax.plot(self.x_values[ind], self.y_values[ind])
-        if self.dat_label:
-            ax.legend(self.dat_label)
-        self.draw()
-
-
-class BarChart(MPLPlot):
-
-    def __init__(self, values: List[int], labels: List[str], colors: List[str] = (), parent: QWidget = None,
-                 overlay: bool = True, name: str = "", title: str = "", x_title: str = "", y_title: str = "",
-                 width: Union[int, float] = 4, height: Union[int, float] = 4, dpi: Union[int, float] = 65,
-                 x_label_rotation: Union[int, float] = 0, y_label_rotation: Union[int, float] = 0):
-        super(BarChart, self).__init__(name, width, height, dpi, parent)
-        self.title = title
-        self.x_title = x_title
-        self.y_title = y_title
-        self.y_label_rotation = y_label_rotation
-        self.x_label_rotation = x_label_rotation
-        self.labels = labels
-        self.values = values
-        self.colors = colors
-        self.overlay = overlay
-        self.plot()
-
-    def plot(self) -> None:
-        ax = self.figure.add_subplot(111)
-        ax.set_title(self.title)
-        ax.set_ylabel(self.y_title)
-        ax.set_xlabel(self.x_title)
-        bar_width = max(0.8/len(self.values), 0.25)
-        if not self.overlay:
-            x_pos = np.arange(len(self.values))
-            for lst in self.values:
-                ax.bar(x_pos, lst, width=bar_width, align="center", alpha=1)
-                x_pos = np.arange(x + bar_width for x in x_pos)
-        else:
-            alph = max(1/len(self.values), 0.2)
-            x_pos = np.arange(len(self.values[0]))
-            for lst in self.values:
-                ax.bar(x_pos, lst, width=bar_width, align="center", alpha=alph, color=self.colors)
-        if len(self.values) > 1:
-            x_ticks_lst = [r + bar_width for r in range(len(self.values[0]))]
-        else:
-            x_ticks_lst = np.arange(len(self.values[0]))
-        ax.set_xticks(x_ticks_lst)
-        ax.set_xticklabels(x_ticks_lst, rotation=self.x_label_rotation)
-        self.draw()
-
 
 def exception_hook(exc_type, exc_value, traceback_obj) -> None:
     """
