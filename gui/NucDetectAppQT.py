@@ -41,6 +41,7 @@ from skimage.draw import ellipse
 from core.Detector import Detector
 from core.ROI import ROI
 from core.ROIHandler import ROIHandler
+from gui.Plots import BoxPlotWidget, PoissonPlotWidget
 from gui.settings.Settings import SettingsShowWidget, SettingsSlider, SettingsText, SettingsComboBox, \
     SettingsCheckBox, SettingsDial, SettingsSpinner, SettingsDecimalSpinner
 
@@ -1371,7 +1372,7 @@ class NucDetect(QMainWindow):
         exp = QInputDialog.getItem(self,
                                    "Select an experiment to analyse",
                                    "Experiment: ",
-                                   [x[0] for x in exps])
+                                   [x[0] for x in exps])[0]
         # If no experiment was selected, return
         if not exp:
             return
@@ -1391,121 +1392,61 @@ class NucDetect(QMainWindow):
                 groups[name].append(img)
             else:
                 groups[name] = [img]
-        # TODO
-        """
-        # Add statistics to list
-        stat = self.roi_cache.calculate_statistics()
-        assmap = self.detector.create_association_map(self.roi_cache)
-        # Add labels to first tab
-        stat_dialog.ui.dist_par.addWidget(QLabel(f"Detected nuclei: {len(assmap)}"))
-        empty = [key for key, val in assmap.items() if len(val) == 0]
-        stat_dialog.ui.dist_par.addWidget(QLabel(f"Thereof empty: {len(empty)}"))
-        colmarks = ["ro", "go", "co", "mo", "yo", "ko"]
-        roinum = {}
-        poiss_plots = []
-        int_plots = []
-        val_plots = [[], []]
-        valint_plots = []
-        colors = ["red", "green", "blue", "cyan", "magenta", "yellow", "black", "white"]
-        # Add foci related labels
-        for roi in self.roi_cache:
-            if not roi.main:
-                if roi.ident not in roinum:
-                    roinum[roi.ident] = {roi.associated: 1}
-                elif roi.associated in roinum[roi.ident]:
-                    roinum[roi.ident][roi.associated] += 1
-                else:
-                    roinum[roi.ident][roi.associated] = 1
-        for key in roinum.keys():
-            roinum[key].update({x: 0 for x in empty})
-        for x in self.roi_cache.idents:
-            if x != self.roi_cache.main:
-                stat_dialog.ui.dist_par.addWidget(QLabel(f"Detected foci ({x}): {stat['sec stats'][x]['number']}"))
-                stat_dialog.ui.dist_par.addWidget(QLabel(f"Std. Dev. ({x}): {np.std(list(roinum[x].values())):.2f}"))
-                stat_dialog.ui.int_par.addWidget(QLabel(f"Average Intensity ({x}):"
-                                                        f" {stat['sec stats'][x]['intensity average']:.2f}"))
-                stat_dialog.ui.int_par.addWidget(QLabel(f"Std. Intensity ({x}): "
-                                                        f"{stat['sec stats'][x]['intensity std']:.2f}"))
-                stat_dialog.ui.val_par.addWidget(QLabel(f"Max. number ({x}): {max(roinum[x].values())}"))
-                stat_dialog.ui.val_par.addWidget(QLabel(f"Min. number ({x}): {min(roinum[x].values())}"))
-                stat_dialog.ui.val_par.addWidget(QLabel(f"Max. intensity ({x}):"
-                                                        f" {stat['sec stats'][x]['intensity maximum']:.2f}"))
-                stat_dialog.ui.val_par.addWidget(QLabel(f"Min. intensity ({x}):"
-                                                        f" {stat['sec stats'][x]['intensity minimum']:.2f}"))
-                stat_dialog.ui.dist_par.addItem(QtGui.QSpacerItem(20, 40,
-                                                                  QtGui.QSizePolicy.Minimum,
-                                                                  QtGui.QSizePolicy.Expanding))
-                stat_dialog.ui.int_par.addItem(QtGui.QSpacerItem(20, 40,
-                                                                 QtGui.QSizePolicy.Minimum,
-                                                                 QtGui.QSizePolicy.Expanding))
-                stat_dialog.ui.val_par.addItem(QtGui.QSpacerItem(20, 40,
-                                                                 QtGui.QSizePolicy.Minimum,
-                                                                 QtGui.QSizePolicy.Expanding))
-                vals = list(roinum[x].values())
-                poiss_plots.append(PoissonCanvas(vals,
-                                                 name=f"{x} channel poisson - {self.cur_img}",
-                                                 title=f"{x} Channel"))
-                vals = []
-                for key, value in assmap.items():
-                    temp = []
-                    for val in value:
-                        if val.ident == x:
-                            tempstats = val.calculate_statistics()
-                            temp.append(tempstats["intensity average"])
-                    if len(temp) != 0:
-                        vals.append(sum(temp)/len(temp))
-                    else:
-                        # If no foci are associated, 0 is appended
-                        vals.append(0)
-                int = BarChart(name=f"{x} channel int - {self.cur_img}",
-                               title=f"{x} Channel - Average Focus Intensity",
-                               y_title="Average Intensity", x_title="Nucleus Index", x_label_rotation=45,
-                               values=[vals],
-                               colors=[colors[self.roi_cache.idents.index(x)]]*len(vals),
-                               labels=[np.arange(len(vals))])
-                int.setToolTip((f"Shows the average {x} foci intensity for the nucleus with the given index.\n"
-                                f"255 is the maximal possible value. If no intensity is shown, no {x} foci were\n"
-                                "detected in the respective nucleus"))
-                int_plots.append(int)
-                val_plots[0].append((np.arange(len(roinum[x].values()))))
-                val_plots[1].append(list(roinum[x].values()))
-                valint_plots.append(stat["sec stats"][x]["intensity list"])
-
-        chans = self.roi_cache.idents.copy()
-        chans.remove(self.roi_cache.main)
-        cnvs_num = XYChart(x_values=val_plots[0], y_values=val_plots[1], col_marks=colmarks[:len(chans)],
-                           dat_labels=chans, name=f"numbers - {self.cur_img}",
-                           title="Foci Number", x_title="Nucleus Index", y_title="Foci")
-        ind = 0
-        x_values = []
-        y_values = []
-        for key, value in assmap.items():
-            for focus in value:
-                chan_ind = self.roi_cache.idents.index(focus.ident)
-                if len(x_values)-1 < chan_ind:
-                    x_values.append([ind])
-                    y_values.append([focus.calculate_statistics()["intensity average"]])
-                else:
-                    x_values[chan_ind].append(ind)
-                    y_values[chan_ind].append(focus.calculate_statistics()["intensity average"])
-            ind += 1
-        colm = colmarks[:len(self.roi_cache.idents)-1]
-        labels = self.roi_cache.idents[:len(self.roi_cache.idents)-1]
-        cnvs_int = XYChart(x_values=x_values, y_values=y_values, col_marks=colm,
-                           dat_labels=labels,
-                           name=f"intensities - {key}", title="Intensity", x_title="Nucleus Index",
-                           y_title="Average Intensity")
-        stat_dialog.ui.vl_vals.addWidget(NavigationToolbar(cnvs_num, stat_dialog))
-        stat_dialog.ui.vl_vals.addWidget(cnvs_num)
-        stat_dialog.ui.vl_vals.addWidget(NavigationToolbar(cnvs_int, stat_dialog))
-        stat_dialog.ui.vl_vals.addWidget(cnvs_int)
-        for plot in poiss_plots:
-            stat_dialog.ui.vl_poisson.addWidget(NavigationToolbar(plot, stat_dialog))
-            stat_dialog.ui.vl_poisson.addWidget(plot)
-        for plot in int_plots:
-            stat_dialog.ui.vl_int.addWidget(NavigationToolbar(plot, stat_dialog))
-            stat_dialog.ui.vl_int.addWidget(plot)
-        """
+        # Get number of Nuclei per group
+        group_data = {}
+        # Get the channels of the image
+        channels = self.cursor.execute(
+            "SELECT DISTINCT name, index_ FROM channels WHERE md5 IN (SELECT image FROM groups WHERE experiment=?)",
+            (exp,)
+        ).fetchall()
+        # Get main channel
+        main = self.cursor.execute(
+            "SELECT DISTINCT channel FROM roi WHERE associated IS NULL AND image"
+            " IN (SELECT image FROM groups WHERE experiment=?)",
+            (exp,)
+        ).fetchall()
+        # Check if accross the images multiple main channels are given
+        if len(main) > 1:
+            return
+        main = main[0][0]
+        # Clean up channels
+        channels = [x[0][0] for x in channels if x[1] is not main]
+        # Get channel indices
+        for group, imgs in groups.items():
+            foci_per_nucleus = [[] for _ in range(len(channels))]
+            # Iterate over the images of the group
+            for key in imgs:
+                # Get all nuclei for this image
+                nuclei = self.cursor.execute(
+                         "SELECT hash FROM roi WHERE image=? AND associated IS NULL",
+                        (key,)
+                        ).fetchall()
+                # Get the foci per individual nucleus
+                for nuc in nuclei:
+                    for channel in channels:
+                        # Get channel of respective of the
+                        foci_per_nucleus[channels.index(channel)].append(
+                            self.cursor.execute(
+                                "SELECT COUNT(*) FROM roi WHERE associated=?",
+                                (nuc[0],)
+                            ).fetchall()[0][0]
+                        )
+            group_data[group] = foci_per_nucleus
+        # Create plots
+        for i in range(len(channels)):
+            # Get the data for this channel
+            print(group_data)
+            data = {key: value[i] for key, value in group_data}
+            # Create PlotWidget for channel
+            pw = BoxPlotWidget(data=data, groups=data.keys())
+            pw.setTitle(f"{channels[i]} Analysis")
+            pw.laxis.setLabel("Foci/Nucleus")
+            self.ui.vl_vals.addWidget(pw)
+            # Create Poisson Plot for channel
+            for group, values in data:
+                poiss = PoissonPlotWidget(data=values, label=group)
+                poiss.setTitle(f"{group} - Comparison to Poisson Distribution")
+                self.ui.vl_poisson.addWidget(poiss)
         stat_dialog.setWindowFlags(stat_dialog.windowFlags() |
                                    QtCore.Qt.WindowSystemMenuHint |
                                    QtCore.Qt.WindowMinMaxButtonsHint)
