@@ -1376,7 +1376,7 @@ class NucDetect(QMainWindow):
         # If no experiment was selected, return
         if not exp:
             return
-        stat_dialog.setWindowTitle(f"Statistics for {self.cur_img['file_name']}")
+        stat_dialog.setWindowTitle(f"Statistics for {exp}")
         stat_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
         # Get the groups associated with the experiment
         groups_raw = self.cursor.execute(
@@ -1410,7 +1410,7 @@ class NucDetect(QMainWindow):
             return
         main = main[0][0]
         # Clean up channels
-        channels = [x[0][0] for x in channels if x[1] is not main]
+        channels = [x[0] for x in channels if x[0] != main]
         # Get channel indices
         for group, imgs in groups.items():
             foci_per_nucleus = [[] for _ in range(len(channels))]
@@ -1427,26 +1427,27 @@ class NucDetect(QMainWindow):
                         # Get channel of respective of the
                         foci_per_nucleus[channels.index(channel)].append(
                             self.cursor.execute(
-                                "SELECT COUNT(*) FROM roi WHERE associated=?",
-                                (nuc[0],)
+                                "SELECT COUNT(*) FROM roi WHERE associated=? AND channel=?",
+                                (nuc[0], channel)
                             ).fetchall()[0][0]
                         )
             group_data[group] = foci_per_nucleus
         # Create plots
         for i in range(len(channels)):
             # Get the data for this channel
-            print(group_data)
-            data = {key: value[i] for key, value in group_data}
+            data = {key: value[i] for key, value in group_data.items()}
             # Create PlotWidget for channel
-            pw = BoxPlotWidget(data=data, groups=data.keys())
+            pw = BoxPlotWidget(data=list(data.values()), groups=list(data.keys()))
             pw.setTitle(f"{channels[i]} Analysis")
             pw.laxis.setLabel("Foci/Nucleus")
-            self.ui.vl_vals.addWidget(pw)
+            stat_dialog.ui.vl_vals.addWidget(pw)
             # Create Poisson Plot for channel
-            for group, values in data:
+            for group, values in data.items():
                 poiss = PoissonPlotWidget(data=values, label=group)
                 poiss.setTitle(f"{group} - Comparison to Poisson Distribution")
-                self.ui.vl_poisson.addWidget(poiss)
+                stat_dialog.ui.vl_vals.addWidget(poiss)
+                stat_dialog.ui.dist_par.addWidget(QLabel(f"TEST"))
+        stat_dialog.ui.dist_par.addSpacing(1)
         stat_dialog.setWindowFlags(stat_dialog.windowFlags() |
                                    QtCore.Qt.WindowSystemMenuHint |
                                    QtCore.Qt.WindowMinMaxButtonsHint)

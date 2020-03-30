@@ -20,10 +20,18 @@ class BoxPlotWidget(pg.PlotWidget):
         self.boxPlotItem = BoxPlotItem(**kargs)
         self.laxis = self.plotItem.getAxis("left")
         self.baxis = self.plotItem.getAxis("bottom")
-        self.setBackground("b")
+        self.setBackground("w")
+        self.showGrid(x=True, y=True)
         self.addItem(self.boxPlotItem)
         self._initialize_axis(**kargs)
         self.setToolTip("Median: Red Horizontal Line\nAverage: Yellow Horizontal Line")
+        # Get max value of all data
+        max = -1
+        for dat in kargs["data"]:
+            for dat2 in dat:
+                if dat2 > max:
+                    max = dat2
+        self.boxPlotItem.getViewBox().setAspectLocked(True, max * 0.75)
 
     def _initialize_axis(self, **kargs) -> None:
         """
@@ -36,14 +44,14 @@ class BoxPlotWidget(pg.PlotWidget):
         self.baxis.setScale(0.1)
         dummy_groups = ["A", "B", "C", "D", "E", "F"]
         axis_labels = []
-        if "groups" not in kargs.keys():
+        if "groups" not in kargs:
             kargs["groups"] = []
             for i in range(len(kargs["data"])):
-                kargs["groups"].append(dummy_groups[i%len(dummy_groups)])
+                kargs["groups"].append(dummy_groups[i % len(dummy_groups)])
         if len(kargs["groups"]) < len(kargs["data"]):
             # Fill groups if not all data arrays were assigned a group
             for i in range(len(kargs["data"]) - len(kargs["groups"])):
-                kargs["groups"].append(dummy_groups[i%len(dummy_groups)])
+                kargs["groups"].append(dummy_groups[i % len(dummy_groups)])
         for i in range(len(kargs["groups"])):
             axis_labels.append(((i + 1) * 10, kargs["groups"][i]))
         self.baxis.setTicks([axis_labels])
@@ -89,9 +97,20 @@ class BoxPlotItem(pg.GraphicsObject):
         p = QtGui.QPainter(self.picture)
         # TODO test
         #p.scale(10, 10)
+        max = -1
+        # Get max y value
+        if num_data == 1:
+            for val in raw_data:
+                if val > max:
+                    max = val
+        else:
+            for data in raw_data:
+                for val in data:
+                    if val > max:
+                        max = val
         for i in range(num_data):
-            fill.setColor(self.FILL_COLORS[i%3])
-            outlines.setColor(self.FILL_COLORS[i%3].lighter())
+            fill.setColor(self.FILL_COLORS[i % 3])
+            outlines.setColor(self.FILL_COLORS[i % 3].lighter())
             num = i * 10
             data = self._calculate_plotting_data(raw_data[i] if num_data > 1 else raw_data)
             # Set up the painter
@@ -130,8 +149,8 @@ class BoxPlotItem(pg.GraphicsObject):
                 QLine(num + 9, data["min"] * 10, num + 11, data["min"] * 10)
             )
             # Draw outliers
-            for outlier in outliers:
-                p.drawEllipse(QPointF(num + 10, outlier * 10), 0.25, 15)
+            for outlier in sorted(outliers):
+                p.drawEllipse(QPointF(num + 10, outlier * 10), 0.15, 0.225 * max/num_data)
         p.end()
 
     @staticmethod
@@ -180,6 +199,7 @@ class PoissonPlotWidget(pg.PlotWidget):
     def __init__(self, **kargs):
         super().__init__(**kargs)
         self.setBackground("w")
+        self.showGrid(x=True, y=True)
         self.plotItem.setLabel("left", "Probability [%]")
         self.data = kargs.get("data", [])
         self.data_name = kargs.get("label", "Channel")
@@ -205,11 +225,14 @@ class PoissonPlotWidget(pg.PlotWidget):
         # Calculate the probability of elements to occur according to the poisson distrubution
         poisson = self.poisson(av, np.arange(0, max(unique)))
         # Prepare bar graphs
-        self.data_graph = pg.BarGraphItem(x=unique, height=prob, width=0.8, brush=pg.mkBrush(color=(150, 150, 30, 85)))
+        self.data_graph = pg.BarGraphItem(x=unique, height=prob, width=0.8, brush=pg.mkBrush(color=(150, 50, 30, 125)))
         self.poisson_graph = pg.BarGraphItem(x=np.arange(0, max(unique)), height=poisson, width=0.8,
-                                             brush=pg.mkBrush(color=(150, 30, 85, 85)))
+                                             brush=pg.mkBrush(color=(85, 30, 150, 125)))
         # Add indicator for data average
-        self.addItem(InfiniteLine(av, angle=90))
+        self.addItem(InfiniteLine(av, angle=90, pen=pg.mkPen(color=(0, 255, 0, 255))))
+        self.addItem(self.poisson_graph)
+        self.addItem(self.data_graph)
+        self.setToolTip("Red: Data Distribution\nBlue: Poisson Distribution\nGreen: Average")
         # Add Legend
         # TODO
         """

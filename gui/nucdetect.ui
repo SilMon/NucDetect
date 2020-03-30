@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1036</width>
+    <width>1038</width>
     <height>800</height>
    </rect>
   </property>
@@ -138,6 +138,25 @@ QDialog{
            </widget>
           </item>
           <item>
+           <widget class="QPushButton" name="btn_statistics">
+            <property name="enabled">
+             <bool>true</bool>
+            </property>
+            <property name="maximumSize">
+             <size>
+              <width>16777215</width>
+              <height>16777215</height>
+             </size>
+            </property>
+            <property name="toolTip">
+             <string>Open the statistics window</string>
+            </property>
+            <property name="text">
+             <string>Statistics</string>
+            </property>
+           </widget>
+          </item>
+          <item>
            <widget class="QPushButton" name="btn_save">
             <property name="enabled">
              <bool>false</bool>
@@ -166,25 +185,6 @@ QDialog{
             </property>
             <property name="text">
              <string>Images</string>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QPushButton" name="btn_statistics">
-            <property name="enabled">
-             <bool>false</bool>
-            </property>
-            <property name="maximumSize">
-             <size>
-              <width>16777215</width>
-              <height>16777215</height>
-             </size>
-            </property>
-            <property name="toolTip">
-             <string>Open the statistics window</string>
-            </property>
-            <property name="text">
-             <string>Statistics</string>
             </property>
            </widget>
           </item>
