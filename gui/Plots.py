@@ -18,6 +18,7 @@ class BoxPlotWidget(pg.PlotWidget):
     def __init__(self, **kargs):
         super().__init__(**kargs)
         self.boxPlotItem = BoxPlotItem(**kargs)
+        self.p_data = self.boxPlotItem.p_data
         self.laxis = self.plotItem.getAxis("left")
         self.baxis = self.plotItem.getAxis("bottom")
         self.setBackground("w")
@@ -70,7 +71,9 @@ class BoxPlotItem(pg.GraphicsObject):
     def __init__(self, **kwargs) -> None:
         pg.GraphicsObject.__init__(self)
         self.kwargs = kwargs
+        self.p_data = []
         self.generate_picture(self.kwargs)
+
 
     def generate_picture(self, kwargs) -> None:
         """
@@ -113,6 +116,7 @@ class BoxPlotItem(pg.GraphicsObject):
             outlines.setColor(self.FILL_COLORS[i % 3].lighter())
             num = i * 10
             data = self._calculate_plotting_data(raw_data[i] if num_data > 1 else raw_data)
+            self.p_data.append(data)
             # Set up the painter
             p.setPen(outlines)
             p.setBrush(fill)
@@ -170,7 +174,8 @@ class BoxPlotItem(pg.GraphicsObject):
         pdata["iqr"] = pdata["q75"] - pdata["q25"]
         pdata["min"] = pdata["q25"] - 1.5 * pdata["iqr"]
         pdata["max"] = pdata["q75"] + 1.5 * pdata["iqr"]
-        pdata["outliers"] = [x for x in data if x < pdata["min"] or x > pdata["max"]]
+        pdata["outliers"] = set([x for x in data if x < pdata["min"] or x > pdata["max"]])
+        pdata["number"] = len(data) - len(pdata["outliers"])
         return pdata
 
     def paint(self, p: QPainter, *args) -> None:

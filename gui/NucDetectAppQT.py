@@ -28,10 +28,10 @@ from PyQt5 import QtGui
 from PyQt5 import uic
 from PyQt5.QtCore import QSize, Qt, pyqtSignal, QRectF, QItemSelectionModel, QSortFilterProxyModel, QItemSelection
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon, QPixmap, QColor, QBrush, QPen, QResizeEvent, \
-    QKeyEvent, QMouseEvent, QPainter, QTransform
+    QKeyEvent, QMouseEvent, QPainter, QTransform, QFont
 from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, QSizePolicy, QWidget, \
     QVBoxLayout, QScrollArea, QMessageBox, QGraphicsScene, QGraphicsEllipseItem, QGraphicsView, QGraphicsItem, \
-    QGraphicsPixmapItem, QLabel, QGraphicsLineItem, QStyleOptionGraphicsItem, QInputDialog, QGraphicsRectItem
+    QGraphicsPixmapItem, QLabel, QGraphicsLineItem, QStyleOptionGraphicsItem, QInputDialog, QGraphicsRectItem, QFrame
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
@@ -395,9 +395,9 @@ class NucDetect(QMainWindow):
                 group_str = ""
                 for key in imgs:
                     group = self.cursor.execute(
-                                "SELECT name FROM groups WHERE image=?",
-                                (key, )
-                            ).fetchall()
+                        "SELECT name FROM groups WHERE image=?",
+                        (key,)
+                    ).fetchall()
                     if group:
                         if group[0][0] in groups:
                             groups[group[0][0]].append(key)
@@ -616,7 +616,7 @@ class NucDetect(QMainWindow):
                     for key in data["keys"]:
                         self.cursor.execute(
                             "DELETE FROM groups WHERE image=?",
-                            (key, )
+                            (key,)
                         )
                     self.connection.commit()
 
@@ -639,7 +639,6 @@ class NucDetect(QMainWindow):
                 exp_text = f"{exp_data_orig['name']}\n{exp_data_orig['details'][:47]}...\nGroups: {group_str}"
                 exp.setText(exp_text)
                 exp.setData(exp_data_orig)
-
 
         # Connect add btn to dialog
         exp_dialog.ui.btn_add_group.clicked.connect(open_group_dialog)
@@ -799,7 +798,7 @@ class NucDetect(QMainWindow):
             for key in keys:
                 self.cursor.execute(
                     "UPDATE images SET experiment=? WHERE md5=?",
-                    (None, key, )
+                    (None, key,)
                 )
             for ind in range(exp_model.rowCount()):
                 item = exp_model.item(ind)
@@ -910,7 +909,7 @@ class NucDetect(QMainWindow):
             if key not in self.reg_images:
                 analysed = self.cursor.execute(
                     "SELECT analysed from images WHERE md5 = ?",
-                    (key, )
+                    (key,)
                 ).fetchall()
                 if analysed:
                     analysed = analysed[0][0]
@@ -994,7 +993,7 @@ class NucDetect(QMainWindow):
         start = time.time()
         self.prg_signal.emit("Starting analysis", 0, maxi, "")
         self.unsaved_changes = True
-        self.prg_signal.emit("Analysing image", maxi*0.05, maxi, "")
+        self.prg_signal.emit("Analysing image", maxi * 0.05, maxi, "")
         data = self.detector.analyse_image(path)
         self.roi_cache = data["handler"]
         s0 = time.time()
@@ -1006,12 +1005,12 @@ class NucDetect(QMainWindow):
         self.prg_signal.emit("Creating result table", maxi * 0.65, maxi, "")
         print(f"Calculation of ellipse parameters: {time.time() - s0:.4f}")
         self.create_result_table_from_list(data["handler"])
-        print(f"Creation result table: {time.time()-s0:.4f} secs")
+        print(f"Creation result table: {time.time() - s0:.4f} secs")
         self.prg_signal.emit("Checking database", maxi * 0.9, maxi, "")
         s1 = time.time()
         self.save_rois_to_database(data)
         print(f"Writing to database: {time.time() - s1:.4f} secs")
-        self.prg_signal.emit(message.format(f"{time.time()-start:.2f} secs"),
+        self.prg_signal.emit(message.format(f"{time.time() - start:.2f} secs"),
                              percent, maxi, "")
         self.enable_buttons()
         self.ui.btn_analyse.setEnabled(False)
@@ -1165,7 +1164,7 @@ class NucDetect(QMainWindow):
         :param symbol: The symbol printed after the displayed values
         :return: None
         """
-        self.ui.lbl_status.setText(f"{text} -- {(progress/maxi)*100:.2f}% {symbol}")
+        self.ui.lbl_status.setText(f"{text} -- {(progress / maxi) * 100:.2f}% {symbol}")
         self.ui.prg_bar.setMaximum(maxi)
         self.ui.prg_bar.setValue(progress)
 
@@ -1200,7 +1199,7 @@ class NucDetect(QMainWindow):
             ind = 1
             cur_batch = 1
             curind = 0
-            for b in range(batch_size+1 if batch_size < len(paths) else len(paths),
+            for b in range(batch_size + 1 if batch_size < len(paths) else len(paths),
                            len(paths) if len(paths) > batch_size else len(paths) + 1, batch_size):
                 s2 = time.time()
                 tpaths = paths[curind:b if b < len(paths) else len(paths) - 1]
@@ -1231,7 +1230,7 @@ class NucDetect(QMainWindow):
                 item.setData(data)
             self.selec_signal.emit(True)
         print(f"Total analysis time: {time.time() - start} secs")
-            
+
     def load_rois_from_database(self, md5: int) -> ROIHandler:
         """
         Method to load all rois associated with this image
@@ -1246,11 +1245,11 @@ class NucDetect(QMainWindow):
         rois = ROIHandler(ident=md5)
         entries = crs.execute(
             "SELECT * FROM roi WHERE image = ?",
-            (md5, )
+            (md5,)
         ).fetchall()
         names = crs.execute(
             "SELECT * FROM channels WHERE md5 = ?",
-            (md5, )
+            (md5,)
         ).fetchall()
         for name in names:
             rois.idents.insert(name[1], name[2])
@@ -1278,8 +1277,8 @@ class NucDetect(QMainWindow):
             else:
                 sec.append(temproi)
             for p in crs.execute(
-                "SELECT * FROM points WHERE hash = ?",
-                    (entry[0], )
+                    "SELECT * FROM points WHERE hash = ?",
+                    (entry[0],)
             ).fetchall():
                 temproi.add_point((p[1], p[2]), p[3])
             if temproi.main:
@@ -1315,7 +1314,7 @@ class NucDetect(QMainWindow):
         image_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
         image_dialog.setWindowFlags(image_dialog.windowFlags() |
                                     QtCore.Qt.WindowSystemMenuHint |
-                                    QtCore.Qt.WindowMinMaxButtonsHint|
+                                    QtCore.Qt.WindowMinMaxButtonsHint |
                                     QtCore.Qt.Window)
         image_dialog.exec_()
 
@@ -1418,9 +1417,9 @@ class NucDetect(QMainWindow):
             for key in imgs:
                 # Get all nuclei for this image
                 nuclei = self.cursor.execute(
-                         "SELECT hash FROM roi WHERE image=? AND associated IS NULL",
-                        (key,)
-                        ).fetchall()
+                    "SELECT hash FROM roi WHERE image=? AND associated IS NULL",
+                    (key,)
+                ).fetchall()
                 # Get the foci per individual nucleus
                 for nuc in nuclei:
                     for channel in channels:
@@ -1437,17 +1436,76 @@ class NucDetect(QMainWindow):
             # Get the data for this channel
             data = {key: value[i] for key, value in group_data.items()}
             # Create PlotWidget for channel
-            pw = BoxPlotWidget(data=list(data.values()), groups=list(data.keys()))
+            d = list(data.values())
+            g = list(data.keys())
+            pw = BoxPlotWidget(data=d, groups=g)
             pw.setTitle(f"{channels[i]} Analysis")
             pw.laxis.setLabel("Foci/Nucleus")
             stat_dialog.ui.vl_vals.addWidget(pw)
+            # Create the line to add
+            line = QFrame()
+            line.setFrameShape(QFrame.HLine)
+            line.setFrameShadow(QFrame.Sunken)
+            # Get plotting data of BoxPlot
+            p_data = pw.p_data
+            # Create Scroll Area
+            sa = QScrollArea()
+            sa.setWidgetResizable(True)
+            central_widget = QWidget()
+            layout = QVBoxLayout()
+            central_widget.setLayout(layout)
+            sa.setWidget(central_widget)
+            # Iterate over groups
+            for j in range(len(g)):
+                layout.addWidget(QLabel(
+                    f"<strong>Group: {g[j]}</strong>"
+                ))
+                layout.addWidget(QLabel(
+                    f"Values (w/o Outliers): {p_data[j]['number']}"
+                ))
+                layout.addWidget(QLabel(
+                    f"Average: {p_data[j]['average']:.2f}"
+                ))
+                layout.addWidget(QLabel(
+                    f"Median: {p_data[j]['median']}"
+                ))
+                layout.addWidget(QLabel(
+                    f"IQR: {p_data[j]['iqr']}"
+                ))
+                layout.addWidget(QLabel(
+                    f"Outliers: {len(p_data[j]['outliers'])}"
+                ))
+                layout.addSpacing(10)
+            stat_dialog.ui.val_par.addWidget(sa)
+            if i < len(channels) - 1:
+                stat_dialog.ui.val_par.addWidget(line)
+
+            # Add bool to check if a line was already created
+            check = False
             # Create Poisson Plot for channel
             for group, values in data.items():
                 poiss = PoissonPlotWidget(data=values, label=group)
                 poiss.setTitle(f"{group} - Comparison to Poisson Distribution")
-                stat_dialog.ui.vl_vals.addWidget(poiss)
-                stat_dialog.ui.dist_par.addWidget(QLabel(f"TEST"))
-        stat_dialog.ui.dist_par.addSpacing(1)
+                # Create the line to add
+                line = QFrame()
+                line.setFrameShape(QFrame.HLine)
+                line.setFrameShadow(QFrame.Sunken)
+                # Add poisson plot
+                stat_dialog.ui.vl_poisson.addWidget(poiss)
+                # Add additional information
+                stat_dialog.ui.dist_par.addWidget(QLabel(f"Values: {len(values)}"))
+                stat_dialog.ui.dist_par.addWidget(QLabel(f"Average: {np.average(values):.2f}"))
+                stat_dialog.ui.dist_par.addWidget(QLabel(f"Min.: {np.amin(values)}"))
+                stat_dialog.ui.dist_par.addWidget(QLabel(f"Max.: {np.amax(values)}"))
+                # Add line and stretch
+                stat_dialog.ui.dist_par.addStretch(1)
+                if i == len(channels) - 1:
+                    if not check:
+                        stat_dialog.ui.dist_par.addWidget(line)
+                        check = True
+                else:
+                    stat_dialog.ui.dist_par.addWidget(line)
+                stat_dialog.ui.dist_par.addStretch(1)
         stat_dialog.setWindowFlags(stat_dialog.windowFlags() |
                                    QtCore.Qt.WindowSystemMenuHint |
                                    QtCore.Qt.WindowMinMaxButtonsHint)
@@ -1582,7 +1640,7 @@ class ImgDialog(QDialog):
         pg.mkPen(color="y", width=3),  # Yellow
         pg.mkPen(color="k", width=3),  # Black
         pg.mkPen(color="w", width=3),  # White
-        pg.mkPen(color=(0, 0, 0, 0))   # Invisible
+        pg.mkPen(color=(0, 0, 0, 0))  # Invisible
     ]
 
     def __init__(self, image: np.ndarray, handler: ROIHandler, parent: QWidget = None):
@@ -1622,7 +1680,7 @@ class ImgDialog(QDialog):
                 d1 = params["minor_length"]
                 d2 = params["major_length"]
                 slope = params["major_slope"]
-                item = QGraphicsEllipseItem(-d1/2, -d2/2, d1, d2)
+                item = QGraphicsEllipseItem(-d1 / 2, -d2 / 2, d1, d2)
                 # Get the angle of the major axis
                 angle = params["major_angle"]
                 item.setData(0, self.nuc_pen)
@@ -2038,9 +2096,9 @@ class ModificationDialog(QDialog):
                         offset -= 1
                         self.commands.extend(
                             (("DELETE FROM roi WHERE hash = ? OR associated = ?",
-                             (hash(nuc), hash(nuc))),
+                              (hash(nuc), hash(nuc))),
                              ("DELETE FROM points WHERE hash = ?",
-                             (hash(nuc),)))
+                              (hash(nuc),)))
                         )
                     self.view.cur_ind = 0
                     self.ui.lst_nuc.selectionModel().select(self.lst_nuc_model.createIndex(0, 0),
@@ -2077,8 +2135,8 @@ class ModificationDialog(QDialog):
                 ellp = seed.calculate_ellipse_parameters()
                 imghash = self.handler.ident
                 self.commands.append(
-                     ("UPDATE roi SET hash = ?, auto = ?, center = ?, width = ?, height = ? WHERE hash = ?",
-                      (hash(seed), False, str(nuc_dims["center"]), nuc_dims["width"], nuc_dims["height"], mergehash[0]))
+                    ("UPDATE roi SET hash = ?, auto = ?, center = ?, width = ?, height = ? WHERE hash = ?",
+                     (hash(seed), False, str(nuc_dims["center"]), nuc_dims["width"], nuc_dims["height"], mergehash[0]))
                 )
                 self.commands.append(
                     ("INSERT OR IGNORE INTO statistics VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -2091,13 +2149,13 @@ class ModificationDialog(QDialog):
                 for h in mergehash:
                     self.commands.extend(
                         (("UPDATE roi SET associated = ? WHERE associated = ?",
-                         (hash(seed), h)),
+                          (hash(seed), h)),
                          ("UPDATE points SET hash = ? WHERE hash = ?",
-                         (hash(seed), h)),
+                          (hash(seed), h)),
                          ("DELETE FROM roi WHERE hash = ?",
-                         (h, )),
+                          (h,)),
                          ("DELETE FROM statistics WHERE hash = ?",
-                         (h, )))
+                          (h,)))
                     )
                 self.view.assmap = Detector.create_association_map(self.handler.rois)
                 for rem in rem_list:
@@ -2297,9 +2355,9 @@ class NucView(QGraphicsView):
                 if item.isSelected():
                     self.handler.remove_roi(self.map[item])
                     self.commands.extend((("DELETE FROM roi WHERE hash=?",
-                                         (hash(self.map[item]),)),
-                                         ("DELETE FROM points WHERE hash=?",
-                                          (hash(self.map[item]),))))
+                                           (hash(self.map[item]),)),
+                                          ("DELETE FROM points WHERE hash=?",
+                                           (hash(self.map[item]),))))
                     self.assmap[self.map[item].associated].remove(self.map[item])
                     del self.map[item]
                     rem.append(item)
@@ -2368,8 +2426,8 @@ class NucView(QGraphicsView):
             offset_factor = self.sc_bckg.boundingRect().height() / len(cur_nump)
             hard_offset = self.sc_bckg.pos()
             bbox = self.temp_foc.boundingRect()
-            tx = bbox.x() + 1/2 * bbox.width()
-            ty = bbox.y() + 1/2 * bbox.height()
+            tx = bbox.x() + 1 / 2 * bbox.width()
+            ty = bbox.y() + 1 / 2 * bbox.height()
             x_center = (tx - hard_offset.x()) / offset_factor
             y_center = (ty - hard_offset.y()) / offset_factor
             height = bbox.height() / offset_factor / 2
@@ -2396,16 +2454,16 @@ class NucView(QGraphicsView):
             imghash = self.handler.ident
             self.commands.extend(
                 (("INSERT INTO roi VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-                 (hash(cur_roi), imghash, False, cur_roi.ident, str(roidat["center"]), roidat["width"],
-                  roidat["height"], hash(self.cur_nuc))),
+                  (hash(cur_roi), imghash, False, cur_roi.ident, str(roidat["center"]), roidat["width"],
+                   roidat["height"], hash(self.cur_nuc))),
                  ("UPDATE points SET hash=? WHERE hash=-1",
-                 (hash(cur_roi),)),
+                  (hash(cur_roi),)),
                  ("INSERT OR IGNORE INTO statistics VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                 (hash(cur_roi), imghash, stats["area"], stats["intensity average"], stats["intensity median"],
-                  stats["intensity maximum"], stats["intensity minimum"], stats["intensity std"],
-                  str(ellp["center"]), str(ellp["major_axis"][0]), str(ellp["major_axis"][1]),
-                  ellp["major_slope"], ellp["major_length"], ellp["major_angle"], str(ellp["minor_axis"][0]),
-                  str(ellp["minor_axis"][1]), ellp["minor_length"], ellp["shape_match"])))
+                  (hash(cur_roi), imghash, stats["area"], stats["intensity average"], stats["intensity median"],
+                   stats["intensity maximum"], stats["intensity minimum"], stats["intensity std"],
+                   str(ellp["center"]), str(ellp["major_axis"][0]), str(ellp["major_axis"][1]),
+                   ellp["major_slope"], ellp["major_length"], ellp["major_angle"], str(ellp["minor_axis"][0]),
+                   str(ellp["minor_axis"][1]), ellp["minor_length"], ellp["shape_match"])))
             )
             self.foc_group.append(self.temp_foc)
             self.map[self.temp_foc] = cur_roi
@@ -2442,8 +2500,8 @@ class NucView(QGraphicsView):
             c = (aroi.calculate_dimensions()["center"], broi.calculate_dimensions()["center"])
             for foc in self.assmap[self.cur_nuc]:
                 fc = foc.calculate_dimensions()["center"]
-                d1 = math.sqrt((c[0][0] - fc[0])**2 + (c[0][1] - fc[1])**2)
-                d2 = math.sqrt((c[1][0] - fc[0])**2 + (c[1][1] - fc[1])**2)
+                d1 = math.sqrt((c[0][0] - fc[0]) ** 2 + (c[0][1] - fc[1]) ** 2)
+                d2 = math.sqrt((c[1][0] - fc[0]) ** 2 + (c[1][1] - fc[1]) ** 2)
                 if d1 < d2:
                     foc.associated = aroi
                 else:
@@ -2487,22 +2545,22 @@ class NucView(QGraphicsView):
             for p, inten in aroi.inten.items():
                 self.commands.append(
                     ("INSERT INTO points VALUES (?, ?, ?, ?)",
-                    (hash(aroi), p[0], p[1], inten))
+                     (hash(aroi), p[0], p[1], inten))
                 )
             for p, inten in broi.inten.items():
                 self.commands.append(
                     ("INSERT INTO points VALUES (?, ?, ?, ?)",
-                    (hash(broi), p[0], p[1], inten))
+                     (hash(broi), p[0], p[1], inten))
                 )
             for foc in self.assmap[aroi]:
                 self.commands.append(
                     ("UPDATE roi SET associated=? WHERE hash=?",
-                    (hash(aroi), hash(foc)))
+                     (hash(aroi), hash(foc)))
                 )
             for foc in self.assmap[broi]:
                 self.commands.append(
                     ("UPDATE roi SET associated=? WHERE hash=?",
-                    (hash(broi), hash(foc)))
+                     (hash(broi), hash(foc)))
                 )
             self.main.remove(self.cur_nuc)
             self.main.extend((aroi, broi))
@@ -2562,6 +2620,7 @@ class QGraphicsFocusItem(QGraphicsEllipseItem):
             painter.setPen(QPen(self.cur_col, 3))
         painter.drawEllipse(self.rect())
         self.scene().update()
+
 
 def exception_hook(exc_type, exc_value, traceback_obj) -> None:
     """
