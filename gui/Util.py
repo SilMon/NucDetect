@@ -1,0 +1,140 @@
+import datetime
+import os
+import sqlite3
+from os.path import isfile
+from typing import List, Tuple
+
+from PyQt5 import QtCore
+from PyQt5.QtGui import QStandardItem, QIcon
+from skimage import io
+from skimage.transform import resize
+from concurrent.futures import ProcessPoolExecutor
+
+from core.Detector import Detector
+from gui import Paths
+
+IMAGE_FORMATS = [
+        ".tif",
+        ".tiff",
+        ".png",
+        ".jpg",
+        ".bmp"
+]
+
+
+def create_image_item_list_from(paths: List[str],
+                                indicate_progress: bool = False,
+                                sort_items: bool = True) -> List[QStandardItem]:
+    """
+    Function to create a list of QStandardItems from image paths. Useful for display in ListViews
+
+    :param paths: A list containing image paths
+    :param indicate_progress: If true, loading progress will be printed to the console
+    :param sort_items: If true, items will be sorted by
+    :return: A list of the created items
+    """
+    items = []
+    if indicate_progress:
+        print(f"{len(paths)} to load")
+        ind = 1
+    if sort_items:
+        paths = sorted(paths, key=os.path.basename)
+    for path in paths:
+        items.append(create_list_item(path))
+        if indicate_progress:
+            print(f"{ind}/{len(paths)} loaded")
+            ind += 1
+    return items
+
+
+def create_list_item(path: str) -> QStandardItem:
+    """
+    Method to create an image list item
+
+    :param path: The path of the image
+    :return: The created item
+    """
+    temp = os.path.split(path)
+    folder = temp[0].split(sep=os.sep)[-1]
+    file = temp[1]
+    if os.path.splitext(file)[1] in IMAGE_FORMATS:
+        d = Detector.get_image_data(path)
+        date = d["datetime"]
+        if isinstance(date, datetime.datetime):
+            t = (date.strftime("%d.%m.%Y"), date.strftime("%H:%M:%S"))
+        else:
+            t = date.decode("ascii").split(" ")
+            temp = t[0].split(":")
+            t[0] = f"{temp[2]}.{temp[1]}.{temp[0]}"
+        key = Detector.calculate_image_id(path)
+        item = QStandardItem()
+        item_text = f"Name: {file}\nFolder: {folder}\nDate: {t[0]}\nTime: {t[1]}"
+        item.setText(item_text)
+        item.setTextAlignment(QtCore.Qt.AlignLeft)
+        icon = QIcon()
+        icon.addFile(
+            create_thumbnail(path)
+        )
+        item.setIcon(icon)
+        item.setData({
+            "key": key,
+            "path": path,
+            "analysed": check_if_image_was_analysed(key),
+            "file_name": file,
+            "folder": folder,
+            "date": t[0],
+            "time": t[1],
+            "icon": icon
+        })
+        return item
+
+
+def create_thumbnail(image_path: str, size: Tuple = (75, 75)) -> str:
+    """
+    Function to create a thumbnail from an image
+
+    :param image_path: The path leading to the image
+    :param size: The size of the thumbnail
+    :return: The path leading to the thumbnail
+    """
+    # Calculate the hash of the image
+    ident = Detector.calculate_image_id(image_path)
+    # Create path to thumbnail
+    thumb_path = os.path.join(Paths.thumb_path, f"{ident}.jpg")
+    # Check if the thumbnail already exists
+    if isfile(thumb_path):
+        return thumb_path
+    # Load image as numpy array
+    img = io.imread(image_path)
+    # Get ratio between height and width
+    ratio = img.shape[0] / img.shape[1]
+    if ratio >= 1:
+        new_shape = size[0], int(size[1] / ratio)
+    else:
+        new_shape = int(size[0] * ratio), size[1]
+    # Scale image
+    img = resize(img, new_shape)
+    # Save the image
+    io.imsave(thumb_path, img)
+    return thumb_path
+
+
+def check_if_image_was_analysed(md5: str) -> bool:
+    """
+    Function to check if an image was already analysed
+
+    :param md5: The md5 hash of the image
+    :return: Boolean to indicate if the image was analysed
+    """
+    connection = sqlite3.connect(Paths.database)
+    cursor = connection.cursor()
+    analysed = cursor.execute(
+        "SELECT analysed FROM images WHERE md5=?",
+        (md5, )
+    ).fetchall()
+    if analysed:
+        return analysed[0][0]
+    else:
+        return False
+
+

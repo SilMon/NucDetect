@@ -61,6 +61,7 @@ class Detector:
         :param ml_analysis: Enable image analysis via U-Net
         :return: The analysis results as dict
         """
+        # TODO not PEP8 compliant
         if ml_analysis:
             self.analyser = FCN()
         start = time.time()

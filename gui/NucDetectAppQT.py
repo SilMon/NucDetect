@@ -16,9 +16,10 @@ from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from threading import Thread
 from typing import Union, Dict, List, Tuple, Any
 
+from gui import Paths, Util
+from gui.Definitions import Icon
+
 import PyQt5
-import matplotlib
-import matplotlib.pyplot as plt
 import numpy as np
 import qtawesome as qta
 from PIL import Image
@@ -31,11 +32,8 @@ from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon, QPixmap, QColo
     QKeyEvent, QMouseEvent, QPainter, QTransform, QFont
 from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, QSizePolicy, QWidget, \
     QVBoxLayout, QScrollArea, QMessageBox, QGraphicsScene, QGraphicsEllipseItem, QGraphicsView, QGraphicsItem, \
-    QGraphicsPixmapItem, QLabel, QGraphicsLineItem, QStyleOptionGraphicsItem, QInputDialog, QGraphicsRectItem, QFrame
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
-from matplotlib.figure import Figure
-from matplotlib.patches import Ellipse
+    QGraphicsPixmapItem, QLabel, QGraphicsLineItem, QStyleOptionGraphicsItem, QInputDialog, QFrame
+from gui.Dialogs import ExperimentDialog
 from skimage.draw import ellipse
 
 from core.Detector import Detector
@@ -47,21 +45,6 @@ from gui.settings.Settings import SettingsShowWidget, SettingsSlider, SettingsTe
 
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, False)
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, False)
-
-# Define folders that contain database, results and the scripts
-nuc_detect_dir = os.path.join(os.path.expanduser("~"), "NucDetect")
-script_dir = sys.path[0]
-ui_main = os.path.join(script_dir, "nucdetect.ui")
-ui_result_image_dialog = os.path.join(script_dir, "result_image_dialog.ui")
-ui_class_dial = os.path.join(script_dir, "classification_dialog.ui")
-ui_exp_dial = os.path.join(script_dir, "experiment_dialog.ui")
-ui_exp_dial_group_dial = os.path.join(script_dir, "group_dialog.ui")
-ui_stat_dial = os.path.join(script_dir, "statistics_dialog.ui")
-ui_settings_dial = os.path.join(script_dir, "settings_dialog.ui")
-ui_modification_dial = os.path.join(script_dir, "modification_dialog.ui")
-database = os.path.join(nuc_detect_dir, "nucdetect.db")
-result_path = os.path.join(nuc_detect_dir, "results")
-images_path = os.path.join(nuc_detect_dir, "images")
 pg.setConfigOptions(imageAxisOrder='row-major')
 
 
@@ -84,7 +67,7 @@ class NucDetect(QMainWindow):
         # Create working directories
         self.create_required_dirs()
         # Connect to database
-        self.connection = sqlite3.connect(database)
+        self.connection = sqlite3.connect(Paths.database)
         self.cursor = self.connection.cursor()
         # Create tables if they do not exists
         self.create_tables(self.cursor)
@@ -100,7 +83,7 @@ class NucDetect(QMainWindow):
         self.unsaved_changes = False
         # Setup UI
         self._setup_ui()
-        self.icon = QtGui.QIcon('logo.png')
+        self.icon = Icon.get_icon("LOGO")
         self.setWindowTitle("NucDetect")
         self.setWindowIcon(self.icon)
         self.showMaximized()
@@ -221,13 +204,15 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        if not os.path.isdir(nuc_detect_dir):
-            os.mkdir(nuc_detect_dir)
-        if not os.path.isdir(result_path):
-            os.mkdir(result_path)
-        if not os.path.isdir(images_path):
-            os.mkdir(images_path)
-            shutil.copy2(os.path.join(os.pardir, "demo.tif"), os.path.join(images_path, "demo.tif"))
+        if not os.path.isdir(Paths.thumb_path):
+            os.mkdir(Paths.thumb_path)
+        if not os.path.isdir(Paths.nuc_detect_dir):
+            os.mkdir(Paths.nuc_detect_dir)
+        if not os.path.isdir(Paths.result_path):
+            os.mkdir(Paths.result_path)
+        if not os.path.isdir(Paths.images_path):
+            os.mkdir(Paths.images_path)
+            shutil.copy2(os.path.join(os.pardir, "demo.tif"), os.path.join(Paths.images_path, "demo.tif"))
 
     def load_settings(self) -> Dict:
         """
@@ -253,7 +238,7 @@ class NucDetect(QMainWindow):
         Method to initialize the UI of the main window
         :return: None
         """
-        self.ui = uic.loadUi(ui_main, self)
+        self.ui = uic.loadUi(Paths.ui_main, self)
         # Initialization of the image list
         self.img_list_model = QStandardItemModel(self.ui.list_images)
         self.ui.list_images.setModel(self.img_list_model)
@@ -283,25 +268,24 @@ class NucDetect(QMainWindow):
         self.ui.btn_clear_list.clicked.connect(self.clear_image_list)
         self.ui.btn_reload.clicked.connect(self.reload)
         # Add button icons
-        btn_col = QColor(47, 167, 212)
-        self.ui.btn_load.setIcon(qta.icon("fa5.folder-open", color=btn_col))
-        self.ui.btn_experiments.setIcon(qta.icon("fa5s.flask", color=btn_col))
-        self.ui.btn_save.setIcon(qta.icon("fa5.save", color=btn_col))
-        self.ui.btn_images.setIcon(qta.icon("fa5s.microscope", color=btn_col))
-        self.ui.btn_statistics.setIcon(qta.icon("fa5.chart-bar", color=btn_col))
-        self.ui.btn_categories.setIcon(qta.icon("fa5s.list-ul", color=btn_col))
-        self.ui.btn_settings.setIcon(qta.icon("fa.cogs", color=btn_col))
-        self.ui.btn_modify.setIcon(qta.icon("fa5s.tools", color=btn_col))
-        self.ui.btn_analyse.setIcon(qta.icon("fa5s.hat-wizard", color=btn_col))
-        self.ui.btn_analyse_all.setIcon(qta.icon("fa5s.hat-wizard", color="red"))
-        self.ui.btn_delete_from_list.setIcon(qta.icon("fa5s.times", color=btn_col))
-        self.ui.btn_clear_list.setIcon(qta.icon("fa5s.trash-alt", color=btn_col))
-        self.ui.btn_reload.setIcon(qta.icon("fa5s.sync", color=btn_col))
+        self.ui.btn_load.setIcon(Icon.get_icon("FOLDER_OPEN"))
+        self.ui.btn_experiments.setIcon(Icon.get_icon("FLASK"))
+        self.ui.btn_save.setIcon(Icon.get_icon("SAVE"))
+        self.ui.btn_images.setIcon(Icon.get_icon("MICROSCOPE"))
+        self.ui.btn_statistics.setIcon(Icon.get_icon("CHART_BAR"))
+        self.ui.btn_categories.setIcon(Icon.get_icon("LIST_UL"))
+        self.ui.btn_settings.setIcon(Icon.get_icon("COGS"))
+        self.ui.btn_modify.setIcon(Icon.get_icon("TOOLS"))
+        self.ui.btn_analyse.setIcon(Icon.get_icon("HAT_WIZARD_BLUE"))
+        self.ui.btn_analyse_all.setIcon(Icon.get_icon("HAT_WIZARD_RED"))
+        self.ui.btn_delete_from_list.setIcon(Icon.get_icon("TIMES"))
+        self.ui.btn_clear_list.setIcon(Icon.get_icon("TRASH_ALT"))
+        self.ui.btn_reload.setIcon(Icon.get_icon("SYNC"))
         # Create signal for thread-safe gui updates
         self.prg_signal.connect(self._set_progress)
         self.selec_signal.connect(self._select_next_image)
         self.add_signal.connect(self.add_item_to_list)
-        self.add_images_from_folder(images_path)
+        self.add_images_from_folder(Paths.images_path)
 
     def reload(self) -> None:
         """
@@ -309,7 +293,7 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        self.add_images_from_folder(images_path)
+        self.add_images_from_folder(Paths.images_path)
 
     def on_image_selection_change(self) -> None:
         """
@@ -362,466 +346,13 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        exp_dialog = QDialog()
-        exp_dialog.ui = uic.loadUi(ui_exp_dial, exp_dialog)
-        img_model = QStandardItemModel(exp_dialog.ui.lv_images)
-        exp_model = QStandardItemModel(exp_dialog.ui.lv_experiments)
-        exp_dialog.ui.lv_images.setModel(img_model)
-        exp_dialog.ui.lv_experiments.setModel(exp_model)
-        exp_dialog.ui.lv_images.setIconSize(QSize(75, 75))
-        exp_dialog.ui.lv_experiments.setIconSize(QSize(75, 75))
-        ic_col = QColor(47, 167, 212)
-        ico = qta.icon("fa5.clipboard", color=ic_col)
-        icon = self.icon
-        # Load existing experiments from database
-        exps = self.cursor.execute(
-            "SELECT * FROM experiments"
-        ).fetchall()
-        # Get the keys of all loaded images
-        keys = []
-        for ind in range(self.img_list_model.rowCount()):
-            keys.append(self.img_list_model.item(ind).data()["key"])
-
-        # Iterate over all experiments
-        for exp in exps:
-            imgs = [x[0] for x in self.cursor.execute("SELECT md5 FROM images WHERE experiment = ?",
-                                                      (exp[0],)).fetchall()]
-            # Check if all the necessary images are loaded
-            if all(elem in keys for elem in imgs):
-                name = exp[0]
-                details = exp[1]
-                notes = exp[2]
-                groups = {}
-                group_str = ""
-                for key in imgs:
-                    group = self.cursor.execute(
-                        "SELECT name FROM groups WHERE image=?",
-                        (key,)
-                    ).fetchall()
-                    if group:
-                        if group[0][0] in groups:
-                            groups[group[0][0]].append(key)
-                        else:
-                            groups[group[0][0]] = [key]
-                for group in groups.keys():
-                    group_str += f"{group}({len(groups[group])}) "
-                add_item = QStandardItem()
-                text = f"{name}\n{details[:47]}...\nGroups: {group_str}"
-                add_item.setText(text)
-                add_item.setData(
-                    {
-                        "name": name,
-                        "details": details,
-                        "notes": notes,
-                        "groups": groups,
-                        "keys": imgs
-                    }
-                )
-                add_item.setIcon(ico)
-                exp_model.appendRow(add_item)
-
-        def open_group_dialog() -> None:
-            """
-            Method to open the group modification dialog
-
-            :return: None
-            """
-            # Define dialog
-            gdial = QDialog()
-            gdial.setWindowTitle("Group Dialog")
-            gdial.setWindowIcon(QtGui.QIcon('logo.png'))
-            gdial.ui = uic.loadUi(ui_exp_dial_group_dial, gdial)
-            group_img_model = QStandardItemModel(gdial.ui.lv_images)
-            group_model = QStandardItemModel(gdial.ui.lv_groups)
-            gdial.ui.lv_images.setModel(group_img_model)
-            gdial.ui.lv_groups.setModel(group_model)
-            gdial.ui.lv_images.setIconSize(QSize(75, 75))
-            gdial.ui.lv_groups.setIconSize(QSize(75, 75))
-            # Get the currently selected experiment
-            sel = exp_dialog.ui.lv_images.selectionModel().selectedIndexes()
-
-            # Show warning if no experiment was selected
-            if not sel:
-                msg = QMessageBox()
-                msg.setIcon(QMessageBox.Warning)
-                msg.setText("WARNING")
-                msg.setInformativeText("No experiment was selected or selected experiment has no assigned images!")
-                msg.setWindowTitle("Warning")
-                msg.exec()
-                return
-            else:
-                exp = exp_model.item(exp_dialog.ui.lv_images.selectionModel().selectedIndexes()[0].row())
-                exp_data = exp.data()
-                # Create copy of original data for possible reset
-                exp_data_orig = copy.deepcopy(exp_data)
-                exp_name = exp_data["name"]
-                exp_groups = exp_data["groups"]
-                exp_keys = exp_data["keys"]
-                exp_details = exp_data["details"]
-
-                for ind in range(img_model.rowCount()):
-                    item = img_model.item(ind)
-                    text = item.text()
-                    data = item.data()
-                    key = data["key"]
-                    if key in exp_keys:
-                        add_item = QStandardItem()
-                        add_item.setIcon(data["icon"])
-                        add_item.setData(data)
-                        add_item.setText(text)
-                        group_img_model.appendRow(add_item)
-
-                for group, keys in groups.items():
-                    group_item = QStandardItem()
-                    data = {
-                        "name": group,
-                        "exp": exp_name,
-                        "keys": keys
-                    }
-                    group_item.setText(f"{group}: {len(keys)}")
-                    group_item.setData(data)
-                    group_model.appendRow(group_item)
-
-            def on_img_selection_change(selected: QItemSelection, deselected: QItemSelection) -> None:
-                """
-                Method to react to the selection of images
-
-                :param selected: The selected items
-                :param deselected: The deselected items
-                :return: None
-                """
-                selected = selected.indexes()
-                deselected = deselected.indexes()
-                if selected:
-                    # Get the selected group
-                    sel = gdial.ui.lv_groups.selectionModel().selectedIndexes()
-                    # If no group is selected, return
-                    if not sel:
-                        gdial.ui.btn_add.setEnabled(True)
-                    else:
-                        group = group_model.itemFromIndex(sel[0])
-                        data = group.data()
-                        keys = data["keys"]
-                        for ind in selected:
-                            item = img_model.item(ind.row())
-                            key = item.data()["key"]
-                            if key not in keys:
-                                keys.append(key)
-                        for ind in deselected:
-                            item = img_model.item(ind.row())
-                            key = item.data()["key"]
-                            if key in keys:
-                                keys.remove(key)
-                        data["keys"] = keys
-                        groups[data["name"]] = keys
-
-            def on_group_selection_change(selected: QItemSelection, deselected: QItemSelection) -> None:
-                """
-                Function to react to changed experiment selection
-
-                :param selected: The selected item
-                :param deselected: The deselected item
-                :return: None
-                """
-                gdial.ui.lv_images.setEnabled(False)
-                # Get selected experiment
-                selected = selected.indexes()
-                deselected = deselected.indexes()
-                # Store the current data to the deselected item
-                if deselected:
-                    item = group_model.item(deselected[0].row())
-                    data = item.data()
-                    keys = []
-                    for ind in gdial.ui.lv_images.selectionModel().selectedIndexes():
-                        keys.append(group_img_model.item(ind.row()).data()["key"])
-                    data["keys"] = keys
-                    groups[data["name"]] = keys
-                    text = f"{data['name']}: {len(data['keys'])}"
-                    item.setText(text)
-
-                gdial.ui.lv_images.selectionModel().clear()
-                # If a new item was selected
-                if selected:
-                    item = group_model.item(selected[0].row())
-                    data = item.data()
-                    keys = data["keys"]
-                    # Check the stored keys and select images accordingly
-                    for ind in range(group_img_model.rowCount()):
-                        item = group_img_model.item(ind)
-                        key = item.data()["key"]
-                        if key in keys:
-                            index = group_img_model.createIndex(ind, 0)
-                            gdial.ui.lv_images.selectionModel().select(index, QItemSelectionModel.Select)
-                    gdial.ui.btn_remove.setEnabled(True)
-                else:
-                    gdial.ui.btn_remove.setEnabled(False)
-                    gdial.ui.btn_add.setEnabled(True)
-                gdial.ui.lv_images.setEnabled(True)
-
-            def add_group() -> None:
-                """
-                Method to add a new group to the experiment
-
-                :return: None
-                """
-                dial = QInputDialog()
-                name, ok = QInputDialog.getText(dial, "Group Dialog", "Enter the new group: ")
-                if ok:
-                    if name not in exp_groups:
-                        exp_groups[name] = []
-                    # Check if images are already selected
-                    for ind in gdial.ui.lv_images.selectionModel().selectedIndexes():
-                        img_key = group_img_model.item(ind.row()).data()["key"]
-                        if img_key not in exp_groups[name]:
-                            exp_groups[name].append(img_key)
-                    # Create item to add to group list
-                    item = QStandardItem()
-                    item_data = {
-                        "name": name,
-                        "keys": exp_groups[name],
-                        "exp": exp_name
-                    }
-                    item.setData(item_data)
-                    item.setText(f"{name}:\nImages: {len(exp_groups[name])}")
-                    group_model.appendRow(item)
-                    # Update data and text of exp item
-                    group_str = ""
-                    for group in exp_groups.keys():
-                        group_str += f"{group}({len(exp_groups[group])}) "
-                    exp_text = f"{exp_name}\n{exp_details[:47]}...\nGroups: {group_str}"
-                    exp_data["groups"] = exp_groups
-                    exp.setText(exp_text)
-                    exp.setData(exp_data)
-
-            def remove_group() -> None:
-                """
-                Function to remove a group
-
-                :return: None
-                """
-                # Get selected group
-                index = gdial.ui.lv_images.selectionModel().selectedIndexes()[0].row()
-                item = group_model.item(index)
-                data = item.data()
-                clk = QMessageBox.question(self, "Erase group",
-                                           f"Do you really want to delete the group {data['name']}?"
-                                           " This action cannot be reversed!",
-                                           QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
-                if clk == QMessageBox.Yes:
-                    # Delete group from groups dict
-                    del exp_groups[data["name"]]
-                    # Remove list item
-                    group_model.removeRow(index)
-                    # Update images in database
-                    for key in data["keys"]:
-                        self.cursor.execute(
-                            "DELETE FROM groups WHERE image=?",
-                            (key,)
-                        )
-                    self.connection.commit()
-
-            # Connect UI to functionality
-            gdial.ui.btn_add.clicked.connect(add_group)
-            gdial.ui.btn_remove.clicked.connect(remove_group)
-            gdial.ui.lv_images.selectionModel().selectionChanged.connect(on_img_selection_change)
-            gdial.ui.lv_groups.selectionModel().selectionChanged.connect(on_group_selection_change)
-            code = gdial.exec()
-            if code == QDialog.Accepted:
-                text = ""
-                for name, data in exp_groups.items():
-                    text += f"{name}: {len(data)};"
-                exp_dialog.ui.le_groups.setText(text)
-            else:
-                # Restore original data
-                group_str = ""
-                for group in exp_data_orig["groups"].keys():
-                    group_str += f"{group}({len(exp_data_orig['groups'][group])}) "
-                exp_text = f"{exp_data_orig['name']}\n{exp_data_orig['details'][:47]}...\nGroups: {group_str}"
-                exp.setText(exp_text)
-                exp.setData(exp_data_orig)
-
-        # Connect add btn to dialog
-        exp_dialog.ui.btn_add_group.clicked.connect(open_group_dialog)
-
-        def on_img_selection_change(selected: QItemSelection, deselected: QItemSelection) -> None:
-            """
-            Method to react to the selection of images
-
-            :param selected: The selected items
-            :param deselected: The deselected items
-            :return:
-            """
-            selected = selected.indexes()
-            deselected = deselected.indexes()
-            indices = exp_dialog.ui.lv_experiments.selectionModel().selectedIndexes()
-            # If no experiment is selected, return
-            if not indices:
-                return
-            # Get the selected experiment
-            exp = exp_model.itemFromIndex(indices[0])
-            data = exp.data()
-            keys = data["keys"]
-            for ind in selected:
-                item = img_model.item(ind.row())
-                key = item.data()["key"]
-                if key not in keys:
-                    keys.append(key)
-            for ind in deselected:
-                item = img_model.item(ind.row())
-                key = item.data()["key"]
-                if key in keys:
-                    keys.remove(key)
-            data["keys"] = keys
-            exp.setData(data)
-
-        exp_dialog.ui.lv_images.selectionModel().selectionChanged.connect(on_img_selection_change)
-
-        def on_exp_selection_change(selected: QItemSelection, deselected: QItemSelection) -> None:
-            """
-            Function to react to changed experiment selection
-
-            :param selected: The selected item
-            :param deselected: The deselected item
-            :return: None
-            """
-            # Get selected experiment
-            selected = selected.indexes()
-            deselected = deselected.indexes()
-            # Store the current data to the deselected item
-            if deselected:
-                item = exp_model.item(deselected[0].row())
-                name = exp_dialog.ui.le_name.text()
-                details = exp_dialog.ui.te_details.toPlainText()
-                notes = exp_dialog.ui.te_notes.toPlainText()
-                keys = []
-                for ind in exp_dialog.ui.lv_images.selectionModel().selectedIndexes():
-                    keys.append(img_model.item(ind.row()).data()["key"])
-                item.setData(
-                    {
-                        "name": name,
-                        "details": details,
-                        "notes": notes,
-                        "groups": groups,
-                        "keys": keys
-                    }
-                )
-                text = f"{name}\n{details[:47]}...\nGroups: {groups}"
-                item.setText(text)
-
-            exp_dialog.ui.lv_images.selectionModel().clear()
-            if selected:
-                data = exp_model.item(selected[0].row()).data()
-                # Insert data into textfields
-                exp_dialog.ui.le_name.setText(data["name"])
-                exp_dialog.ui.te_details.setPlainText(data["details"])
-                exp_dialog.ui.te_notes.setPlainText(data["notes"])
-                groups_str = ""
-                for name, keys in data["groups"].items():
-                    groups_str += f"{name} ({len(keys)})"
-                exp_dialog.ui.le_groups.setText(groups_str)
-                keys = data["keys"]
-                # Check the stored keys and select images accordingly
-                for ind in range(img_model.rowCount()):
-                    item = img_model.item(ind)
-                    key = item.data()["key"]
-                    if key in keys:
-                        index = img_model.createIndex(ind, 0)
-                        exp_dialog.ui.lv_images.selectionModel().select(index, QItemSelectionModel.Select)
-            else:
-                # Clear everything if selection was cleared
-                exp_dialog.ui.le_name.clear()
-                exp_dialog.ui.te_details.clear()
-                exp_dialog.ui.te_notes.clear()
-                exp_dialog.ui.le_groups.clear()
-
-        def add() -> None:
-            """
-            Inner function to add a new experiment to the xp. list
-
-            :return: None
-            """
-            name = exp_dialog.ui.le_name.text()
-            selected = exp_dialog.ui.lv_images.selectionModel().selectedIndexes()
-            if name and selected:
-                details = exp_dialog.ui.te_details.toPlainText()
-                notes = exp_dialog.ui.te_notes.toPlainText()
-                groups = "No groups"
-                keys = []
-                for ind in selected:
-                    keys.append(img_model.item(ind.row()).data()["key"])
-                exp_dialog.ui.lv_images.selectionModel().clear()
-                add_item = QStandardItem()
-                text = f"{name}\n{details[:47]}...\nGroups: {groups}"
-                add_item.setText(text)
-                add_item.setData(
-                    {"name": name,
-                     "details": details,
-                     "notes": notes,
-                     "groups": {},
-                     "keys": keys}
-                )
-                add_item.setIcon(ico)
-                exp_model.appendRow(add_item)
-                exp_dialog.ui.le_name.clear()
-                exp_dialog.ui.te_details.clear()
-                exp_dialog.ui.te_notes.clear()
-                exp_dialog.ui.le_groups.clear()
-            else:
-                msg = QMessageBox()
-                msg.setWindowIcon(icon)
-                msg.setIcon(QMessageBox.Critical)
-                if not name:
-                    msg.setText("All experiments need an identifier!")
-                else:
-                    msg.setText("Images have to be assigned to the experiment!")
-                msg.setWindowTitle("Warning")
-                msg.exec_()
-
-        exp_dialog.ui.btn_add.clicked.connect(add)
-        exp_dialog.ui.lv_experiments.selectionModel().selectionChanged.connect(on_exp_selection_change)
-        for index in range(self.img_list_model.rowCount()):
-            item = self.img_list_model.item(index)
-            data = item.data()
-            item = QStandardItem()
-            item_text = f"Name: {data['file_name']}\nFolder: {data['folder']}\n" \
-                        f"Date: {data['date']}\nTime: {data['time']}"
-            item.setText(item_text)
-            item.setTextAlignment(QtCore.Qt.AlignLeft)
-            item.setIcon(data["icon"])
-            item.setData(data)
-            img_model.appendRow(item)
-        exp_dialog.setWindowTitle("Experiment Dialog")
-        exp_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
+        exp_dialog = ExperimentDialog(data={
+            "keys": [x[0] for x in self.reg_images],
+            "paths": [x[1] for x in self.reg_images]
+        })
         code = exp_dialog.exec()
         if code == QDialog.Accepted:
-            # Reset the information of all images
-            for key in keys:
-                self.cursor.execute(
-                    "UPDATE images SET experiment=? WHERE md5=?",
-                    (None, key,)
-                )
-            for ind in range(exp_model.rowCount()):
-                item = exp_model.item(ind)
-                data = item.data()
-                # Add experiment to database
-                self.cursor.execute(
-                    "REPLACE INTO experiments VALUES (?, ?, ?)",
-                    (data["name"], data["details"], data["notes"])
-                )
-                # Update group data
-                for group, values in data["groups"].items():
-                    for img in values:
-                        self.cursor.execute(
-                            "REPLACE INTO groups VALUES (?, ?, ?)",
-                            (img, data["name"], group)
-                        )
-                # Update data for images
-                for key in data["keys"]:
-                    self.cursor.execute(
-                        "UPDATE images SET experiment=? WHERE md5=?",
-                        (data["name"], key)
-                    )
-            self.connection.commit()
+            exp_dialog.accepted()
 
     def _show_loading_dialog(self) -> None:
         """
@@ -840,17 +371,6 @@ class NucDetect(QMainWindow):
         if file_name:
             self.add_image_to_list(file_name.replace("/", os.sep))
 
-    def add_image_to_list(self, path: str) -> None:
-        """
-        Method to add an image to the list of loaded files. The image will be processed, added and loaded.
-
-        :param path: The path leading to the file
-        :return: None
-        """
-        item = self.create_list_item(path)
-        self.add_item_to_list(item)
-        print(f"Loaded {path}")
-
     def add_images_from_folder(self, url: str) -> None:
         """
         Method to load a whole folder of images
@@ -858,9 +378,13 @@ class NucDetect(QMainWindow):
         :param url: The path of the folder
         :return: None
         """
+        paths = []
         for t in os.walk(url):
             for file in t[2]:
-                self.add_image_to_list(os.path.join(t[0], file))
+                paths.append(os.path.join(t[0], file))
+        items = Util.create_image_item_list_from(paths, indicate_progress=True)
+        for item in items:
+            self.add_item_to_list(item)
 
     def add_item_to_list(self, item: QStandardItem) -> None:
         """
@@ -874,65 +398,17 @@ class NucDetect(QMainWindow):
             key = item.data()["key"]
             d = Detector.get_image_data(path)
             self.img_list_model.appendRow(item)
-            self.reg_images.append(key)
+            self.reg_images.append((key, path))
             if not self.cursor.execute(
                     "SELECT * FROM images WHERE md5 = ?",
                     (key,)
             ).fetchall():
                 self.cursor.execute(
-                    "INSERT OR IGNORE INTO images VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO images VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (key, d["datetime"], d["channels"], d["width"], d["height"],
-                     str(d["x_res"]), str(d["y_res"]), d["unit"], 0, -1, None, None)
+                     str(d["x_res"]), str(d["y_res"]), d["unit"], 0, -1, None)
                 )
             self.connection.commit()
-
-    def create_list_item(self, path: str) -> QStandardItem:
-        """
-        Method to create an image list item
-
-        :param path: The path of the image
-        :return: The created item
-        """
-        temp = os.path.split(path)
-        folder = temp[0].split(sep=os.sep)[-1]
-        file = temp[1]
-        if os.path.splitext(file)[1] in Detector.FORMATS:
-            d = Detector.get_image_data(path)
-            date = d["datetime"]
-            if isinstance(date, datetime.datetime):
-                t = (date.strftime("%d.%m.%Y"), date.strftime("%H:%M:%S"))
-            else:
-                t = date.decode("ascii").split(" ")
-                temp = t[0].split(":")
-                t[0] = f"{temp[2]}.{temp[1]}.{temp[0]}"
-            key = Detector.calculate_image_id(path)
-            if key not in self.reg_images:
-                analysed = self.cursor.execute(
-                    "SELECT analysed from images WHERE md5 = ?",
-                    (key,)
-                ).fetchall()
-                if analysed:
-                    analysed = analysed[0][0]
-                else:
-                    analysed = 0
-                item = QStandardItem()
-                item_text = f"Name: {file}\nFolder: {folder}\nDate: {t[0]}\nTime: {t[1]}"
-                item.setText(item_text)
-                item.setTextAlignment(QtCore.Qt.AlignLeft)
-                icon = QIcon()
-                icon.addFile(path)
-                item.setIcon(icon)
-                item.setData({
-                    "key": key,
-                    "path": path,
-                    "analysed": analysed,
-                    "file_name": file,
-                    "folder": folder,
-                    "date": t[0],
-                    "time": t[1],
-                    "icon": icon
-                })
-                return item
 
     def remove_image_from_list(self) -> None:
         """
@@ -941,6 +417,7 @@ class NucDetect(QMainWindow):
         :return: None
         """
         cur_ind = self.ui.list_images.currentIndex()
+        # TODO Update because of change in reg_images
         del self.reg_images[self.img_list_model.item(cur_ind.row()).tdata["key"]]
         self.img_list_model.removeRow(cur_ind.row())
         if cur_ind.row() < self.img_list_model.rowCount():
@@ -1024,7 +501,7 @@ class NucDetect(QMainWindow):
         :param all: Deactivates printing to console
         :return: None
         """
-        con = sqlite3.connect(database)
+        con = sqlite3.connect(Paths.database)
         curs = con.cursor()
         key = data["id"]
         # Delete existing analysis data if image was already analysed
@@ -1199,6 +676,7 @@ class NucDetect(QMainWindow):
             ind = 1
             cur_batch = 1
             curind = 0
+            # Iterate over all images in batches
             for b in range(batch_size + 1 if batch_size < len(paths) else len(paths),
                            len(paths) if len(paths) > batch_size else len(paths) + 1, batch_size):
                 s2 = time.time()
@@ -1240,7 +718,7 @@ class NucDetect(QMainWindow):
         """
         self.prg_signal.emit(f"Loading data",
                              0, 100, "")
-        con = sqlite3.connect(database)
+        con = sqlite3.connect(Paths.database)
         crs = con.cursor()
         rois = ROIHandler(ident=md5)
         entries = crs.execute(
@@ -1334,7 +812,7 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        self.roi_cache.export_data_as_csv(path=result_path, ident=self.cur_img["file_name"])
+        self.roi_cache.export_data_as_csv(path=Paths.result_path, ident=self.cur_img["file_name"])
         self.prg_signal.emit("Saving Results", 50, 100, "")
         self.prg_signal.emit("Results saved -- Program ready", 100, 100, "")
         self.unsaved_changes = False
@@ -1362,7 +840,7 @@ class NucDetect(QMainWindow):
         """
         # Create dialog window
         stat_dialog = QDialog()
-        stat_dialog.ui = uic.loadUi(ui_stat_dial, stat_dialog)
+        stat_dialog.ui = uic.loadUi(Paths.ui_stat_dial, stat_dialog)
         # Load available experiments
         exps = self.cursor.execute(
             "SELECT * FROM experiments"
@@ -1518,7 +996,7 @@ class NucDetect(QMainWindow):
         :return: None
         """
         cl_dialog = QDialog()
-        cl_dialog.ui = uic.loadUi(ui_class_dial, cl_dialog)
+        cl_dialog.ui = uic.loadUi(Paths.ui_class_dial, cl_dialog)
         cl_dialog.setWindowTitle(f"Classification of {self.cur_img['file_name']}")
         cl_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
         hash_ = self.cur_img["key"]
@@ -1648,7 +1126,7 @@ class ImgDialog(QDialog):
         self.orig = image.copy()
         self.image = image
         self.handler = handler
-        self.ui = uic.loadUi(ui_result_image_dialog, self)
+        self.ui = uic.loadUi(Paths.ui_result_image_dialog, self)
         self.graph_widget = pg.GraphicsView()
         self.plot_item = pg.PlotItem()
         self.view = self.plot_item.getViewBox()
@@ -1789,7 +1267,7 @@ class SettingsDialog(QDialog):
         self._initialize_ui()
 
     def _initialize_ui(self) -> None:
-        self.ui = uic.loadUi(ui_settings_dial, self)
+        self.ui = uic.loadUi(Paths.ui_settings_dial, self)
 
     def initialize_from_file(self, url: str) -> None:
         """
@@ -1992,7 +1470,7 @@ class ModificationDialog(QDialog):
         self.view = None
         self.lst_nuc_model = None
         self.commands = []
-        self.conn = sqlite3.connect(database)
+        self.conn = sqlite3.connect(Paths.database)
         self.curs = self.conn.cursor()
         self.btn_col = QColor(47, 167, 212)
         self.initialize_ui()
@@ -2012,7 +1490,7 @@ class ModificationDialog(QDialog):
         super(ModificationDialog, self).reject()
 
     def initialize_ui(self) -> None:
-        self.ui = uic.loadUi(ui_modification_dial, self)
+        self.ui = uic.loadUi(Paths.ui_modification_dial, self)
         # Initialize channel selector
         chan_num = len(self.handler.idents)
         self.max = chan_num - 1
