@@ -33,7 +33,7 @@ from PyQt5.QtGui import QStandardItemModel, QStandardItem, QIcon, QPixmap, QColo
 from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, QSizePolicy, QWidget, \
     QVBoxLayout, QScrollArea, QMessageBox, QGraphicsScene, QGraphicsEllipseItem, QGraphicsView, QGraphicsItem, \
     QGraphicsPixmapItem, QLabel, QGraphicsLineItem, QStyleOptionGraphicsItem, QInputDialog, QFrame
-from gui.Dialogs import ExperimentDialog
+from gui.Dialogs import ExperimentDialog, ExperimentSelectionDialog, StatisticsDialog
 from skimage.draw import ellipse
 
 from core.Detector import Detector
@@ -841,153 +841,17 @@ class NucDetect(QMainWindow):
         # Create dialog window
         stat_dialog = QDialog()
         stat_dialog.ui = uic.loadUi(Paths.ui_stat_dial, stat_dialog)
-        # Load available experiments
-        exps = self.cursor.execute(
-            "SELECT * FROM experiments"
-        ).fetchall()
         # Open dialog to select an experiment
-        exp = QInputDialog.getItem(self,
-                                   "Select an experiment to analyse",
-                                   "Experiment: ",
-                                   [x[0] for x in exps])[0]
-        # If no experiment was selected, return
-        if not exp:
+        exp_sel_dial = ExperimentSelectionDialog()
+        code = exp_sel_dial.exec()
+        if code == QDialog.Accepted:
+            exp = exp_sel_dial.sel_exp
+            active_channels = exp_sel_dial.active_channels
+            stat_dialog = StatisticsDialog(experiment=exp,
+                                           active_channels=active_channels)
+            stat_dialog.exec()
+        else:
             return
-        stat_dialog.setWindowTitle(f"Statistics for {exp}")
-        stat_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
-        # Get the groups associated with the experiment
-        groups_raw = self.cursor.execute(
-            "SELECT * FROM groups WHERE experiment=?",
-            (exp,)
-        )
-        # Get the individual groups and corresponding images
-        groups = {}
-        for raw in groups_raw:
-            img = raw[0]
-            name = raw[2]
-            if name in groups:
-                groups[name].append(img)
-            else:
-                groups[name] = [img]
-        # Get number of Nuclei per group
-        group_data = {}
-        # Get the channels of the image
-        channels = self.cursor.execute(
-            "SELECT DISTINCT name, index_ FROM channels WHERE md5 IN (SELECT image FROM groups WHERE experiment=?)",
-            (exp,)
-        ).fetchall()
-        # Get main channel
-        main = self.cursor.execute(
-            "SELECT DISTINCT channel FROM roi WHERE associated IS NULL AND image"
-            " IN (SELECT image FROM groups WHERE experiment=?)",
-            (exp,)
-        ).fetchall()
-        # Check if accross the images multiple main channels are given
-        if len(main) > 1:
-            return
-        main = main[0][0]
-        # Clean up channels
-        channels = [x[0] for x in channels if x[0] != main]
-        # Get channel indices
-        for group, imgs in groups.items():
-            foci_per_nucleus = [[] for _ in range(len(channels))]
-            # Iterate over the images of the group
-            for key in imgs:
-                # Get all nuclei for this image
-                nuclei = self.cursor.execute(
-                    "SELECT hash FROM roi WHERE image=? AND associated IS NULL",
-                    (key,)
-                ).fetchall()
-                # Get the foci per individual nucleus
-                for nuc in nuclei:
-                    for channel in channels:
-                        # Get channel of respective of the
-                        foci_per_nucleus[channels.index(channel)].append(
-                            self.cursor.execute(
-                                "SELECT COUNT(*) FROM roi WHERE associated=? AND channel=?",
-                                (nuc[0], channel)
-                            ).fetchall()[0][0]
-                        )
-            group_data[group] = foci_per_nucleus
-        # Create plots
-        for i in range(len(channels)):
-            # Get the data for this channel
-            data = {key: value[i] for key, value in group_data.items()}
-            # Create PlotWidget for channel
-            d = list(data.values())
-            g = list(data.keys())
-            pw = BoxPlotWidget(data=d, groups=g)
-            pw.setTitle(f"{channels[i]} Analysis")
-            pw.laxis.setLabel("Foci/Nucleus")
-            stat_dialog.ui.vl_vals.addWidget(pw)
-            # Create the line to add
-            line = QFrame()
-            line.setFrameShape(QFrame.HLine)
-            line.setFrameShadow(QFrame.Sunken)
-            # Get plotting data of BoxPlot
-            p_data = pw.p_data
-            # Create Scroll Area
-            sa = QScrollArea()
-            sa.setWidgetResizable(True)
-            central_widget = QWidget()
-            layout = QVBoxLayout()
-            central_widget.setLayout(layout)
-            sa.setWidget(central_widget)
-            # Iterate over groups
-            for j in range(len(g)):
-                layout.addWidget(QLabel(
-                    f"<strong>Group: {g[j]}</strong>"
-                ))
-                layout.addWidget(QLabel(
-                    f"Values (w/o Outliers): {p_data[j]['number']}"
-                ))
-                layout.addWidget(QLabel(
-                    f"Average: {p_data[j]['average']:.2f}"
-                ))
-                layout.addWidget(QLabel(
-                    f"Median: {p_data[j]['median']}"
-                ))
-                layout.addWidget(QLabel(
-                    f"IQR: {p_data[j]['iqr']}"
-                ))
-                layout.addWidget(QLabel(
-                    f"Outliers: {len(p_data[j]['outliers'])}"
-                ))
-                layout.addSpacing(10)
-            stat_dialog.ui.val_par.addWidget(sa)
-            if i < len(channels) - 1:
-                stat_dialog.ui.val_par.addWidget(line)
-
-            # Add bool to check if a line was already created
-            check = False
-            # Create Poisson Plot for channel
-            for group, values in data.items():
-                poiss = PoissonPlotWidget(data=values, label=group)
-                poiss.setTitle(f"{group} - Comparison to Poisson Distribution")
-                # Create the line to add
-                line = QFrame()
-                line.setFrameShape(QFrame.HLine)
-                line.setFrameShadow(QFrame.Sunken)
-                # Add poisson plot
-                stat_dialog.ui.vl_poisson.addWidget(poiss)
-                # Add additional information
-                stat_dialog.ui.dist_par.addWidget(QLabel(f"Values: {len(values)}"))
-                stat_dialog.ui.dist_par.addWidget(QLabel(f"Average: {np.average(values):.2f}"))
-                stat_dialog.ui.dist_par.addWidget(QLabel(f"Min.: {np.amin(values)}"))
-                stat_dialog.ui.dist_par.addWidget(QLabel(f"Max.: {np.amax(values)}"))
-                # Add line and stretch
-                stat_dialog.ui.dist_par.addStretch(1)
-                if i == len(channels) - 1:
-                    if not check:
-                        stat_dialog.ui.dist_par.addWidget(line)
-                        check = True
-                else:
-                    stat_dialog.ui.dist_par.addWidget(line)
-                stat_dialog.ui.dist_par.addStretch(1)
-        stat_dialog.setWindowFlags(stat_dialog.windowFlags() |
-                                   QtCore.Qt.WindowSystemMenuHint |
-                                   QtCore.Qt.WindowMinMaxButtonsHint)
-        code = stat_dialog.exec()
 
     def show_categorization(self) -> None:
         """

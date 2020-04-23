@@ -109,7 +109,7 @@ QHLine, QVLine, Line{
       <attribute name="title">
        <string>Foci Distribution</string>
       </attribute>
-      <layout class="QHBoxLayout" name="horizontalLayout_2" stretch="8,2">
+      <layout class="QHBoxLayout" name="horizontalLayout_2" stretch="8">
        <item>
         <layout class="QVBoxLayout" name="vl_poisson">
          <property name="spacing">
@@ -126,25 +126,15 @@ QHLine, QVLine, Line{
          </property>
         </layout>
        </item>
-       <item>
-        <layout class="QVBoxLayout" name="dist_par">
-         <property name="sizeConstraint">
-          <enum>QLayout::SetDefaultConstraint</enum>
-         </property>
-        </layout>
-       </item>
       </layout>
      </widget>
      <widget class="QWidget" name="tab_val">
       <attribute name="title">
        <string>Values</string>
       </attribute>
-      <layout class="QHBoxLayout" name="horizontalLayout_3" stretch="8,2">
+      <layout class="QHBoxLayout" name="horizontalLayout_3" stretch="8">
        <item>
-        <layout class="QVBoxLayout" name="vl_vals"/>
-       </item>
-       <item>
-        <layout class="QVBoxLayout" name="val_par"/>
+        <layout class="QVBoxLayout" name="vl_values"/>
        </item>
       </layout>
      </widget>

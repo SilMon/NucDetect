@@ -2,10 +2,11 @@ import datetime
 import os
 import sqlite3
 from os.path import isfile
-from typing import List, Tuple
+from typing import List, Tuple, Union
 
 from PyQt5 import QtCore
 from PyQt5.QtGui import QStandardItem, QIcon
+from PyQt5.QtWidgets import QScrollArea, QVBoxLayout, QHBoxLayout, QWidget, QSizePolicy
 from skimage import io
 from skimage.transform import resize
 from concurrent.futures import ProcessPoolExecutor
@@ -20,6 +21,24 @@ IMAGE_FORMATS = [
         ".jpg",
         ".bmp"
 ]
+
+
+def create_scroll_area(layout_type: bool = False,
+                       widget_resizable: bool = True) -> Tuple[QScrollArea, Union[QVBoxLayout, QHBoxLayout]]:
+    """
+    Method to create a scroll area to fill
+
+    :param layout_type: False for QVBoxLayout, True for QHBoxLayout
+    :param widget_resizable: True if the central widget should be resizable
+    :return:The scroll area and the corresponding layout
+    """
+    sa = QScrollArea()
+    central_widget = QWidget()
+    layout = QVBoxLayout() if not layout_type else QHBoxLayout()
+    central_widget.setLayout(layout)
+    sa.setWidget(central_widget)
+    sa.setWidgetResizable(widget_resizable)
+    return sa, layout
 
 
 def create_image_item_list_from(paths: List[str],

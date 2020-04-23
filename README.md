@@ -1,4 +1,4 @@
-[![PyPI version](https://badge.fury.io/py/NucDetect.svg)](https://badge.fury.io/py/NucDetect)
+[![PyPI version](https://badge.fury.io/py/NucDetect.svg)](https://badge.fury.io/py/NucDetect) [![Downloads](https://pepy.tech/badge/nucdetect)](https://pepy.tech/project/nucdetect)
 
 NucDetect - A python package for Detection and Quantification of DNA Doublestrand Breaks
 ============

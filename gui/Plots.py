@@ -25,6 +25,7 @@ class BoxPlotWidget(pg.PlotWidget):
         self.showGrid(x=True, y=True)
         self.addItem(self.boxPlotItem)
         self._initialize_axis(**kargs)
+        self.setMinimumSize(600, 400)
         self.setToolTip("Median: Red Horizontal Line\nAverage: Yellow Horizontal Line")
         # Get max value of all data
         max = -1
@@ -203,6 +204,7 @@ class PoissonPlotWidget(pg.PlotWidget):
 
     def __init__(self, **kargs):
         super().__init__(**kargs)
+        self.setMinimumSize(600, 400)
         self.setBackground("w")
         self.showGrid(x=True, y=True)
         self.plotItem.setLabel("left", "Probability [%]")
