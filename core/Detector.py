@@ -51,12 +51,14 @@ class Detector:
         }
         self.logging: bool = logging
 
-    def analyse_image(self, path: str, logging: bool = True,
+    def analyse_image(self, path: str, analysis_settings: Dict[str, Union[List, bool]],
+                      logging: bool = True,
                       ml_analysis: bool = False) -> Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]:
         """
         Method to extract rois from the image given by path
 
         :param path: The URL of the image
+        :param analysis_settings: Dictionary containing the necessary information for analysis
         :param logging: Enables logging
         :param ml_analysis: Enable image analysis via U-Net
         :return: The analysis results as dict
@@ -68,16 +70,21 @@ class Detector:
         logging = logging if self.logging is None else self.logging
         imgdat = Detector.get_image_data(path)
         imgdat["id"] = Detector.calculate_image_id(path)
+        # Check if only a grayscale image was provided
+        if imgdat["channels"] == 1:
+            raise ValueError("Detector class can only analyse multichannel images, not grayscale!")
         image = Detector.load_image(path)
-        names = self.settings["names"].split(";")
-        main_channel = self.settings["main_channel"]
-        if imgdat["channels"] != 3:
-            if imgdat["channels"] == 1:
-                raise ValueError("Detector class can only analyse multichannel images, not grayscale!")
-            elif imgdat["channels"] > 3:
-                names.extend(range(imgdat["channels"]))
+        names = analysis_settings["names"]
+        main_channel = analysis_settings["main"]
         # Channel extraction
         channels = Detector.get_channels(image)
+        active = analysis_settings["active channels"]
+        # Check if all channels are activated
+        names = [names[x] for x in range(len(names)) if active[x]]
+        channels = [channels[x] for x in range(len(channels)) if active[x]]
+        # Adjust the index of the main channel
+        for x in range(main_channel):
+            main_channel -= 1 if active[x] else 0
         if not ml_analysis:
             # Channel thresholding
             thresh_chan = Detector.threshold_channels(channels, main_channel)
@@ -104,6 +111,11 @@ class Detector:
             handler.add_roi(roi)
         handler.idents = names
         imgdat["handler"] = handler
+        imgdat["names"] = names
+        imgdat["active channels"] = active
+        imgdat["main channel"] = main_channel
+        imgdat["add to experiment"] = analysis_settings["add_to_experiment"]
+        imgdat["experiment details"] = analysis_settings["experiment_details"]
         Detector.log(f"Total analysis time: {time.time()-start}", logging)
         return imgdat
 

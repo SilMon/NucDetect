@@ -24,6 +24,9 @@ class ROIHandler:
     ]
 
     def __init__(self, ident: int = None):
+        """
+        :param ident: md5 hash of the image this handler is associated with
+        """
         self.ident: str = ident
         self.rois: List[ROI] = []
         self.idents: List[str] = []

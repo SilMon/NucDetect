@@ -1,16 +1,93 @@
+import json
+import math
 import sqlite3
+from typing import List, Any, Tuple, Dict, Union
+
 import numpy as np
-from typing import List, Any, Tuple, Dict, Iterable, Union
-
+import pyqtgraph as pg
+import qtawesome as qta
+from PIL import Image
+from PIL.ImageQt import ImageQt
 from PyQt5 import QtGui, QtCore, uic
-from PyQt5.QtCore import QItemSelection, QItemSelectionModel
-from PyQt5.QtGui import QStandardItem, QStandardItemModel
+from PyQt5.QtCore import QItemSelection, QItemSelectionModel, QSize, Qt, QRectF
+from PyQt5.QtGui import QStandardItem, QStandardItemModel, QIcon, QPixmap, QColor, QResizeEvent, QKeyEvent, QMouseEvent, \
+    QBrush, QPen, QPainter
 from PyQt5.QtWidgets import QDialog, QMessageBox, QInputDialog, QCheckBox, QVBoxLayout, QFrame, QScrollArea, QWidget, \
-    QLabel, QHBoxLayout
+    QLabel, QHBoxLayout, QSizePolicy, QGraphicsView, QGraphicsEllipseItem, QGraphicsPixmapItem, QGraphicsLineItem, \
+    QStyleOptionGraphicsItem, QGraphicsItem, QGraphicsScene
+from skimage.draw import ellipse
 
+from core.Detector import Detector
+from core.ROI import ROI
+from core.ROIHandler import ROIHandler
 from gui import Paths, Util
 from gui.Definitions import Icon
 from gui.Plots import BoxPlotWidget, PoissonPlotWidget
+from gui.settings.Settings import SettingsShowWidget, SettingsSlider, SettingsDial, SettingsSpinner, \
+    SettingsDecimalSpinner, SettingsText, SettingsComboBox, SettingsCheckBox
+
+pg.setConfigOptions(imageAxisOrder='row-major')
+
+
+class AnalysisSettingsDialog(QDialog):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ui = None
+        self.initialize_ui()
+
+    def get_data(self) -> Dict[str, Union[List, bool]]:
+        """
+        Method to get the data from the interface
+
+        :return: A dictionary containing the data
+        """
+        return {
+            "add_to_experiment": self.ui.cbx_experiment.isChecked(),
+            "experiment_details": {
+                "name": self.ui.le_name.text(),
+                "details": self.ui.pte_details.toPlainText(),
+                "notes": self.ui.pte_notes.toPlainText()
+            },
+            "names": [
+                self.ui.le_one.text(),
+                self.ui.le_two.text(),
+                self.ui.le_three.text(),
+                self.ui.le_four.text(),
+                self.ui.le_five.text()
+            ],
+            "activated": [
+                self.ui.cbx_one.isChecked(),
+                self.ui.cbx_two.isChecked(),
+                self.ui.cbx_three.isChecked(),
+                self.ui.cbx_four.isChecked(),
+                self.ui.cbx_five.isChecked()
+            ],
+            "main": abs(self.ui.main_channel_btn_group.checkedId()) - 2
+        }
+
+    def initialize_ui(self) -> None:
+        """
+        Method to initialize the ui
+
+        :return: None
+        """
+        self.ui = uic.loadUi(Paths.ui_analysis_settings_dial, self)
+        # Bind experiment text boxes to experiment checkbox
+        self.ui.cbx_experiment.toggled.connect(self.ui.le_name.setEnabled)
+        self.ui.cbx_experiment.toggled.connect(self.ui.pte_details.setEnabled)
+        self.ui.cbx_experiment.toggled.connect(self.ui.pte_notes.setEnabled)
+        # Bind checkboxes for individual channels to the corresponding text edit
+        self.ui.cbx_one.toggled.connect(self.ui.le_one.setEnabled)
+        self.ui.cbx_one.toggled.connect(self.ui.rbtn_one.setEnabled)
+        self.ui.cbx_two.toggled.connect(self.ui.le_two.setEnabled)
+        self.ui.cbx_two.toggled.connect(self.ui.rbtn_two.setEnabled)
+        self.ui.cbx_three.toggled.connect(self.ui.le_three.setEnabled)
+        self.ui.cbx_three.toggled.connect(self.ui.rbtn_three.setEnabled)
+        self.ui.cbx_four.toggled.connect(self.ui.le_four.setEnabled)
+        self.ui.cbx_four.toggled.connect(self.ui.rbtn_four.setEnabled)
+        self.ui.cbx_five.toggled.connect(self.ui.le_five.setEnabled)
+        self.ui.cbx_five.toggled.connect(self.ui.rbtn_five.setEnabled)
 
 
 class ExperimentDialog(QDialog):
@@ -960,87 +1037,1019 @@ class StatisticsDialog(QDialog):
         self.ui.vl_poisson.addWidget(self.create_poisson_plots(channels, group_data))
         self.ui.vl_values.addWidget(self.create_value_plots(channels, group_data))
 
-        """
-        # Define scroll area for val tab
-        sa_main_val, layout_main_val = Util.create_scroll_area(layout_type=True)
-        # Define scroll area for poi tab
-        sa_main_poi, layout_main_poi = Util.create_scroll_area(layout_type=True)
-        
-        # Create plots
-        for i in range(len(channels)):
-            if not self.active_channels[channels[i]]:
-                continue
-            # Get the data for this channel
-            data = {key: value[i] for key, value in group_data.items()}
-            # Create PlotWidget for channel
-            d = list(data.values())
-            g = list(data.keys())
-            # Create layout to add plot and labels
-            plot_layout_val = QHBoxLayout()
-            label_layout_val = QVBoxLayout()
 
-            pw = BoxPlotWidget(data=d, groups=g)
-            pw.setTitle(f"{channels[i]} Analysis")
-            pw.laxis.setLabel("Foci/Nucleus")
-            plot_layout_val.addWidget(pw)
-            # Create the line to add
-            line = QFrame()
-            line.setFrameShape(QFrame.HLine)
-            line.setFrameShadow(QFrame.Sunken)
-            # Get plotting data of BoxPlot
-            p_data = pw.p_data
-            # Iterate over groups
-            for j in range(len(g)):
-                label_layout_val.addWidget(QLabel(
-                    f"<strong>Group: {g[j]}</strong>"
-                ))
-                label_layout_val.addWidget(QLabel(
-                    f"Values (w/o Outliers): {p_data[j]['number']}"
-                ))
-                label_layout_val.addWidget(QLabel(
-                    f"Average: {p_data[j]['average']:.2f}"
-                ))
-                label_layout_val.addWidget(QLabel(
-                    f"Median: {p_data[j]['median']}"
-                ))
-                label_layout_val.addWidget(QLabel(
-                    f"IQR: {p_data[j]['iqr']}"
-                ))
-                label_layout_val.addWidget(QLabel(
-                    f"Outliers: {len(p_data[j]['outliers'])}"
-                ))
-            plot_layout_val.addLayout(label_layout_val)
-            layout_main_val.addLayout(plot_layout_val)
-            #layout_main_val.addWidget(sa)
-            if i < len(channels) - 1:
-                layout_main_val.addWidget(line)
-            # Add bool to check if a line was already created
-            check = False
-            # Create Poisson Plot for channel
-            for group, values in data.items():
-                # Create layout to add plot and labels
-                plot_layout_poi = QHBoxLayout()
-                label_layout_poi = QVBoxLayout()
-                poiss = PoissonPlotWidget(data=values, label=group)
-                poiss.setTitle(f"{group} - Comparison to Poisson Distribution")
-                # Create the line to add
-                line = QFrame()
-                line.setFrameShape(QFrame.HLine)
-                line.setFrameShadow(QFrame.Sunken)
-                # Add poisson plot
-                plot_layout_poi.addWidget(poiss)
-                # Add additional information
-                label_layout_poi.addWidget(QLabel(f"Values: {len(values)}"))
-                label_layout_poi.addWidget(QLabel(f"Average: {np.average(values):.2f}"))
-                label_layout_poi.addWidget(QLabel(f"Min.: {np.amin(values)}"))
-                label_layout_poi.addWidget(QLabel(f"Max.: {np.amax(values)}"))
-                layout_main_poi.addLayout(label_layout_val)
+class ImgDialog(QDialog):
+    MARKERS = [
+        pg.mkPen(color="r", width=3),  # Red
+        pg.mkPen(color="g", width=3),  # Green
+        pg.mkPen(color="b", width=3),  # Blue
+        pg.mkPen(color="c", width=3),  # Cyan
+        pg.mkPen(color="m", width=3),  # Magenta
+        pg.mkPen(color="y", width=3),  # Yellow
+        pg.mkPen(color="k", width=3),  # Black
+        pg.mkPen(color="w", width=3),  # White
+        pg.mkPen(color=(0, 0, 0, 0))  # Invisible
+    ]
 
-                if i == len(channels) - 1:
-                    if not check:
-                        layout_main_poi.addWidget(line)
-                        check = True
+    def __init__(self, image: np.ndarray, handler: ROIHandler, parent: QWidget = None):
+        super(ImgDialog, self).__init__(parent)
+        self.orig = image.copy()
+        self.image = image
+        self.handler = handler
+        self.ui = uic.loadUi(Paths.ui_result_image_dialog, self)
+        self.graph_widget = pg.GraphicsView()
+        self.plot_item = pg.PlotItem()
+        self.view = self.plot_item.getViewBox()
+        self.view.setAspectLocked(True)
+        self.view.invertY(True)
+        self.graph_widget.setCentralWidget(self.plot_item)
+        self.img_item = pg.ImageItem()
+        self.plot_item.addItem(self.img_item)
+        self.nuc_pen = pg.mkPen(color="FFD700", width=3, style=QtCore.Qt.DashLine)
+        self.maj_ind = None
+        self.items = []
+        self.initialize_ui()
+        self.setAttribute(QtCore.Qt.WA_DeleteOnClose)
+        self.set_current_image()
+
+    def initialize_ui(self) -> None:
+        self.setWindowTitle("Result Dialog")
+        self.setWindowIcon(Icon.get_icon("LOGO"))
+        for ident in self.handler.idents:
+            # Add an selection item to combobox
+            self.ui.cbx_channels.addItem(ident)
+            # Add list to items to store QGraphicItems
+            self.items.append([])
+        # Create QGraphicsItems for display
+        for roi in self.handler.rois:
+            ind = self.handler.idents.index(roi.ident)
+            dims = roi.calculate_dimensions()
+            if roi.main:
+                params = roi.calculate_ellipse_parameters()
+                c = params["center"][1], params["center"][0]
+                d1 = params["minor_length"]
+                d2 = params["major_length"]
+                slope = params["major_slope"]
+                item = QGraphicsEllipseItem(-d1 / 2, -d2 / 2, d1, d2)
+                # Get the angle of the major axis
+                angle = params["major_angle"]
+                item.setData(0, self.nuc_pen)
+                item.setData(1, roi.main)
+                # Rotate the ellipse according to the angle
+                item.setTransformOriginPoint(item.sceneBoundingRect().center())
+                item.setRotation(-90 + angle if slope > 0 else 90 - angle)
+                item.setPos(c[0], c[1])
+                major = params["major_axis"]
+                maj = QGraphicsLineItem(major[0][1], major[0][0], major[1][1], major[1][0])
+                maj.setData(0, self.nuc_pen)
+                minor = params["minor_axis"]
+                min_ = QGraphicsLineItem(minor[0][1], minor[0][0], minor[1][1], minor[1][0])
+                min_.setData(0, self.nuc_pen)
+                self.items[ind].append(maj)
+                self.items[ind].append(min_)
+                self.plot_item.addItem(maj)
+                self.plot_item.addItem(min_)
+            else:
+                c = dims["minX"], dims["minY"]
+                d2 = dims["height"]
+                d1 = dims["width"]
+                item = QGraphicsEllipseItem(c[0], c[1], d1, d2)
+                item.setData(0, self.MARKERS[ind])
+                item.setData(1, roi.main)
+            self.items[ind].append(item)
+            self.plot_item.addItem(item)
+        # Add information
+        stats = self.handler.calculate_statistics()
+        assmap = Detector.create_association_map(self.handler)
+        self.ui.channel_selector.addWidget(QLabel(f"Nuclei: {len(assmap)}"))
+        empty = [key for key, val in assmap.items() if len(val) == 0]
+        self.ui.channel_selector.addWidget(QLabel(f"Thereof empty: {len(empty)}"))
+        roinum = {}
+        # Add foci related labels
+        for roi in self.handler:
+            if not roi.main:
+                if roi.ident not in roinum:
+                    roinum[roi.ident] = {roi.associated: 1}
+                elif roi.associated in roinum[roi.ident]:
+                    roinum[roi.ident][roi.associated] += 1
                 else:
-                    self.ui.dist_par.addWidget(line)
-                self.ui.dist_par.addStretch(1)
+                    roinum[roi.ident][roi.associated] = 1
+        for key in roinum.keys():
+            roinum[key].update({x: 0 for x in empty})
+        for ident in self.handler.idents:
+            if ident != self.handler.main:
+                number = [x for _, x in roinum[ident].items()]
+                std = np.std(number)
+                number = np.average(number)
+                self.ui.channel_selector.addWidget(QLabel(f"Foci/Nucleus ({ident}): {number:.2f} ± {std:.2f}"))
+        self.ui.channel_selector.addItem(QtGui.QSpacerItem(20, 40,
+                                                           QtGui.QSizePolicy.Minimum,
+                                                           QtGui.QSizePolicy.Expanding))
+        self.ui.cbx_channels.addItem("Composite")
+        self.ui.cbx_channels.setCurrentText("Composite")
+        self.ui.cbx_channels.currentIndexChanged.connect(self.on_channel_selection_change)
+        self.ui.cbx_nuclei.stateChanged.connect(
+            lambda: self.set_current_image()
+        )
+        self.ui.navbar.addWidget(self.graph_widget)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super(ImgDialog, self).resizeEvent(event)
+        self.set_current_image()
+
+    def on_channel_selection_change(self) -> None:
+        if self.ui.cbx_channels.currentIndex() < len(self.handler.idents):
+            self.image = self.orig[..., self.ui.cbx_channels.currentIndex()]
+        else:
+            self.image = self.orig
+        self.set_current_image()
+
+    def set_current_image(self) -> None:
+        draw_nuclei = self.ui.cbx_nuclei.isChecked()
+        cur_ind = self.ui.cbx_channels.currentIndex()
+        # Iterate over all stored items
+        for i in range(len(self.items)):
+            # Get the item
+            items = self.items[i]
+            for item in items:
+                # Select pen for the item
+                if i == cur_ind or cur_ind == len(self.handler.idents) or item.data(1) and draw_nuclei:
+                    pen = item.data(0)
+                else:
+                    pen = self.MARKERS[-1]
+                item.setPen(pen)
+        # Draw the background channel image
+        self.img_item.setImage(self.image)
+
+
+class SettingsDialog(QDialog):
+    """
+    Class to display a settings window, dynamically generated from a JSON file
+    """
+
+    def __init__(self, parent: QWidget = None):
+        super(SettingsDialog, self).__init__(parent)
+        self.data = {}
+        self.changed = {}
+        self.ui = None
+        self.json = None
+        self.url = None
+        self._initialize_ui()
+
+    def _initialize_ui(self) -> None:
+        self.ui = uic.loadUi(Paths.ui_settings_dial, self)
+        self.setWindowTitle("Settings Dialog")
+        self.setWindowIcon(Icon.get_icon("LOGO"))
+
+    def initialize_from_file(self, url: str) -> None:
         """
+        Method to initialize the settings window from a JSON file
+
+        :param url: The URL leading to the JSON
+        :return: None
+        """
+        if not url.lower().endswith(".json"):
+            raise ValueError("Only JSON files can be loaded!")
+        self.url = url
+        with open(url) as json_file:
+            j_dat = json.load(json_file)
+            self.json = j_dat
+            for section, p in j_dat.items():
+                self.add_menu_point(section, p)
+
+    def add_section(self, section: str) -> None:
+        """
+        Method to add a section to the settings
+
+        :param section: The name of the section
+        :return: None
+        """
+        try:
+            self.data[section]
+        except KeyError:
+            self.data[section] = {}
+            tab = QScrollArea()
+            tab.setWidgetResizable(True)
+            kernel = QWidget()
+            kernel.setSizePolicy(
+                QSizePolicy.Expanding,
+                QSizePolicy.Expanding
+            )
+            layout = QVBoxLayout()
+            kernel.setLayout(layout)
+            layout.setObjectName("base")
+            tab.setWidget(kernel)
+            self.ui.settings.addTab(tab, section)
+
+    def add_menu_point(self, section: str, menupoint: Dict[str, Union[str, float, int]]) -> None:
+        """
+        Method to add a menu point to the settings section
+
+        :param section: The name of the section
+        :param menupoint: The menupoint
+        :return: None
+        """
+        self.add_section(section)
+        for ind in range(self.ui.settings.count()):
+            if self.ui.settings.tabText(ind) == section:
+                tab = self.ui.settings.widget(ind)
+                base = tab.findChildren(QtGui.QVBoxLayout, "base")
+                for mp in menupoint:
+                    t = mp["type"].lower()
+                    p = None
+                    self.data[section][mp["id"]] = mp["value"]
+                    if t == "show":
+                        # TODO
+                        p = SettingsShowWidget(
+                            mp["widget"]
+                        )
+                    elif t == "slider":
+                        p = SettingsSlider(
+                            _id=mp["id"],
+                            title=mp["title"],
+                            desc=mp["desc"],
+                            min_val=mp["values"]["min"],
+                            max_val=mp["values"]["max"],
+                            step=mp["values"]["step"],
+                            value=mp["value"],
+                            unit=mp["values"]["unit"],
+                            parent=self,
+                            callback=self.menupoint_changed
+                        )
+                    elif t == "dial":
+                        p = SettingsDial(
+                            _id=mp["id"],
+                            title=mp["title"],
+                            desc=mp["desc"],
+                            min_val=mp["values"]["min"],
+                            max_val=mp["values"]["max"],
+                            step=mp["values"]["step"],
+                            value=mp["value"],
+                            unit=mp["values"]["unit"],
+                            parent=self,
+                            callback=self.menupoint_changed
+                        )
+                    elif t == "spin":
+                        p = SettingsSpinner(
+                            _id=mp["id"],
+                            title=mp["title"],
+                            desc=mp["desc"],
+                            min_val=mp["values"]["min"],
+                            max_val=mp["values"]["max"],
+                            step=mp["values"]["step"],
+                            value=mp["value"],
+                            prefix=mp["values"]["prefix"],
+                            suffix=mp["values"]["suffix"],
+                            parent=self,
+                            callback=self.menupoint_changed
+                        )
+                    elif t == "decspin":
+                        p = SettingsDecimalSpinner(
+                            _id=mp["id"],
+                            title=mp["title"],
+                            desc=mp["desc"],
+                            min_val=mp["values"]["min"],
+                            max_val=mp["values"]["max"],
+                            step=mp["values"]["step"],
+                            value=mp["value"],
+                            decimals=mp["values"]["decimals"],
+                            prefix=mp["values"]["prefix"],
+                            suffix=mp["values"]["suffix"],
+                            parent=self,
+                            callback=self.menupoint_changed
+                        )
+                    elif t == "text":
+                        p = SettingsText(
+                            _id=mp["id"],
+                            title=mp["title"],
+                            desc=mp["desc"],
+                            value=mp["value"],
+                            parent=self,
+                            callback=self.menupoint_changed
+                        )
+                    elif t == "combo":
+                        dat = mp["values"].split(",")
+                        p = SettingsComboBox(
+                            _id=mp["id"],
+                            title=mp["title"],
+                            desc=mp["desc"],
+                            data=dat,
+                            value=mp["value"],
+                            parent=self,
+                            callback=self.menupoint_changed
+                        )
+                    elif t == "check":
+                        p = SettingsCheckBox(
+                            _id=mp["id"],
+                            title=mp["title"],
+                            desc=mp["desc"],
+                            value=mp["value"],
+                            tristate=mp["values"]["tristate"],
+                            parent=self,
+                            callback=self.menupoint_changed
+                        )
+                    base[0].addWidget(p)
+                base[0].addStretch()
+
+    def menupoint_changed(self, _id: str = None, value: Union[str, int, float] = None) -> None:
+        """
+        Method to detect value changes of the settings widgets
+
+        :param _id: The id of the widget as str
+        :param value: The value of the widget. Types depends on widget type
+        :return: None
+        """
+        self.changed[_id] = value
+        self.data[_id] = value
+
+    def save_menu_settings(self) -> None:
+        """
+        Method to save the changes of the settings back to the defining JSON file
+
+        :return: None
+        :raises: RuntimeError if no JSON was loaded
+        """
+        if self.json is not None:
+            if self.changed:
+                # Update the saved JSON data
+                for section, p in self.json.items():
+                    for ind in range(len(p)):
+                        try:
+                            p[ind]["value"] = self.changed[p[ind]["id"]][0]
+                        except KeyError:
+                            pass
+                # Dump JSON data back to file
+                with open(self.url, 'w') as file:
+                    json.dump(self.json, file)
+        else:
+            raise RuntimeError("Settings not initialized!")
+
+
+class CategorizationDialog(QDialog):
+    """
+    Class to create a dialog to categorize singular images
+    """
+
+    def __init__(self, image: str = None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.ui = None
+        self.image = image
+
+    def initialize_ui(self) -> None:
+        """
+        Method to initialize the ui
+
+        :return: None
+        """
+        self.ui = uic.loadUi(Paths.ui_class_dial, self)
+        self.setWindowTitle(f"Classification of {self.cur_img['file_name']}")
+        self.setWindowIcon(Icon.get_icon("LOGO"))
+
+
+class ModificationDialog(QDialog):
+
+    def __init__(self, image: np.ndarray = None, handler: ROIHandler = None, parent: QWidget = None) -> None:
+        super(ModificationDialog, self).__init__(parent)
+        self.handler = handler
+        self.image = image
+        self.show = True
+        self.last_index = 0
+        self.cur_index = 0
+        self.cur_channel = 3
+        self.changed = False
+        self.max = 2
+        self.mp = None
+        self.ui = None
+        self.view = None
+        self.lst_nuc_model = None
+        self.commands = []
+        self.conn = sqlite3.connect(Paths.database)
+        self.curs = self.conn.cursor()
+        self.btn_col = QColor(47, 167, 212)
+        self.initialize_ui()
+
+    def accept(self) -> None:
+        for comm in self.commands:
+            self.curs.execute(
+                comm[0],
+                comm[1]
+            )
+        self.conn.commit()
+        self.conn.close()
+        self.changed = True
+        super(ModificationDialog, self).accept()
+
+    def reject(self) -> None:
+        super(ModificationDialog, self).reject()
+
+    def initialize_ui(self) -> None:
+        self.ui = uic.loadUi(Paths.ui_modification_dial, self)
+        self.setWindowTitle("Modification Dialog")
+        self.setWindowIcon(Icon.get_icon("LOGO"))
+        # Initialize channel selector
+        chan_num = len(self.handler.idents)
+        self.max = chan_num - 1
+        self.ui.sb_channel.setMaximum(chan_num)
+        self.view = NucView(self.image, self.handler, self.commands,
+                            self.cur_channel, self.show, True, self.max, self.curs, self)
+        self.ui.graph_par.insertWidget(0, self.view, 3)
+        self.lst_nuc_model = QStandardItemModel(self.ui.lst_nuc)
+        self.ui.lst_nuc.setModel(self.lst_nuc_model)
+        self.ui.lst_nuc.setIconSize(QSize(75, 75))
+        self.ui.lst_nuc.selectionModel().selectionChanged.connect(self.on_selection_change)
+        self.set_list_images(self.view.images)
+        self.update_list_indices()
+        # Initialize buttons
+        self.ui.sb_channel.valueChanged.connect(self.on_nucleus_selection_change)
+        self.ui.btn_split.clicked.connect(self.on_button_click)
+        self.ui.btn_split.setIcon(Icon.get_icon("RULER"))
+        self.ui.btn_show.clicked.connect(self.on_button_click)
+        self.ui.btn_show.setIcon(Icon.get_icon("EYE"))
+        self.ui.btn_merge.clicked.connect(self.on_button_click)
+        self.ui.btn_merge.setIcon(Icon.get_icon("OBJECT_GROUP"))
+        self.ui.btn_remove.clicked.connect(self.on_button_click)
+        self.ui.btn_remove.setIcon(Icon.get_icon("TRASH_ALT"))
+        self.ui.btn_edit.clicked.connect(self.on_button_click)
+        self.ui.btn_edit.setIcon(Icon.get_icon("EDIT"))
+        # Initialize interactivity of graphics view
+        self.set_current_image()
+
+    def set_list_images(self, images: List[np.ndarray]) -> None:
+        self.lst_nuc_model.clear()
+        for image in images:
+            item = QStandardItem()
+            item.setTextAlignment(QtCore.Qt.AlignLeft)
+            pmap = QPixmap()
+            pmap.convertFromImage(NucView.get_qimage_from_numpy(image[...,
+                                                                      self.handler.idents.index(self.handler.main)]
+                                                                ))
+            ic = QIcon(pmap)
+            item.setIcon(ic)
+            self.lst_nuc_model.appendRow(item)
+
+    def on_nucleus_selection_change(self) -> None:
+        self.cur_channel = self.ui.sb_channel.value()
+        self.set_current_image()
+
+    def on_button_click(self) -> None:
+        """
+        Method to handle button clicks
+
+        :return: None
+        """
+        ident = self.sender().objectName()
+        if ident == "btn_show":
+            self.show = self.ui.btn_show.isChecked()
+            if self.show:
+                self.ui.btn_show.setIcon(Icon.get_icon("EYE"))
+            else:
+                self.ui.btn_show.setIcon(Icon.get_icon("EYE_OFF"))
+            self.view.show = self.show
+        elif ident == "btn_edit":
+            self.view.edit = self.ui.btn_edit.isChecked()
+            if self.view.edit:
+                self.ui.btn_edit.setIcon(Icon.get_icon("EDIT"))
+            else:
+                self.ui.btn_edit.setIcon(Icon.get_icon("EDIT_OFF"))
+        elif ident == "btn_remove":
+            selection = self.ui.lst_nuc.selectionModel().selectedIndexes()
+            if selection:
+                sel = [x.row() for x in selection]
+                code = QMessageBox.question(self, "Remove Nuclei...",
+                                            f"Do you really want to remove following nuclei: {sel}",
+                                            QMessageBox.Yes | QMessageBox.No)
+                if code == QMessageBox.Yes:
+                    offset = 0
+                    for ind in sorted(sel):
+                        nuc = self.view.main[ind + offset]
+                        self.handler.remove_roi(nuc, cascade=True)
+                        self.view.main.remove(nuc)
+                        self.lst_nuc_model.removeRow(ind + offset)
+                        del self.view.images[ind + offset]
+                        offset -= 1
+                        self.commands.extend(
+                            (("DELETE FROM roi WHERE hash = ? OR associated = ?",
+                              (hash(nuc), hash(nuc))),
+                             ("DELETE FROM points WHERE hash = ?",
+                              (hash(nuc),)))
+                        )
+                    self.view.cur_ind = 0
+                    self.ui.lst_nuc.selectionModel().select(self.lst_nuc_model.createIndex(0, 0),
+                                                            QItemSelectionModel.ClearAndSelect)
+                    self.update_list_indices()
+        elif ident == "btn_merge":
+            selection = self.ui.lst_nuc.selectionModel().selectedIndexes()
+            sel = [x.row() for x in selection]
+            code = QMessageBox.question(self, "Merge Nuclei...",
+                                        f"Do you really want to merge following nuclei: {sel}",
+                                        QMessageBox.Yes | QMessageBox.No)
+            if code == QMessageBox.Yes:
+                seed = self.view.main[sel[0]]
+                offset = 0
+                ass_list = []
+                mergehash = [hash(seed)]
+                rem_list = []
+                for x in range(1, len(sel)):
+                    ind = sel[x]
+                    merger = self.view.main[ind + offset]
+                    mergehash.append(hash(merger))
+                    seed.merge(merger)
+                    ass_list.append(merger)
+                    rem_list.append(ind + offset)
+                    self.handler.rois.remove(merger)
+                    del self.view.images[ind + offset]
+                    del self.view.main[ind + offset]
+                    offset -= 1
+                for nuc in ass_list:
+                    for foc in self.view.assmap[nuc]:
+                        foc.associated = seed
+                nuc_dims = seed.calculate_dimensions()
+                stats = seed.calculate_statistics()
+                ellp = seed.calculate_ellipse_parameters()
+                imghash = self.handler.ident
+                self.commands.append(
+                    ("UPDATE roi SET hash = ?, auto = ?, center = ?, width = ?, height = ? WHERE hash = ?",
+                     (hash(seed), False, str(nuc_dims["center"]), nuc_dims["width"], nuc_dims["height"], mergehash[0]))
+                )
+                self.commands.append(
+                    ("INSERT OR IGNORE INTO statistics VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (hash(seed), imghash, stats["area"], stats["intensity average"], stats["intensity median"],
+                      stats["intensity maximum"], stats["intensity minimum"], stats["intensity std"],
+                      str(ellp["center"]), str(ellp["major_axis"][0]), str(ellp["major_axis"][1]),
+                      ellp["major_slope"], ellp["major_length"], ellp["major_angle"], str(ellp["minor_axis"][0]),
+                      str(ellp["minor_axis"][1]), ellp["minor_length"], ellp["shape_match"]))
+                )
+                for h in mergehash:
+                    self.commands.extend(
+                        (("UPDATE roi SET associated = ? WHERE associated = ?",
+                          (hash(seed), h)),
+                         ("UPDATE points SET hash = ? WHERE hash = ?",
+                          (hash(seed), h)),
+                         ("DELETE FROM roi WHERE hash = ?",
+                          (h,)),
+                         ("DELETE FROM statistics WHERE hash = ?",
+                          (h,)))
+                    )
+                self.view.assmap = Detector.create_association_map(self.handler.rois)
+                for rem in rem_list:
+                    self.lst_nuc_model.removeRow(rem)
+                self.ui.lst_nuc.selectionModel().select(selection[0], QItemSelectionModel.Select)
+                pmap = QPixmap()
+                pmap.convertFromImage(NucView.get_qimage_from_numpy(seed.get_as_numpy()
+                                                                    ))
+                ic = QIcon(pmap)
+                self.lst_nuc_model.itemFromIndex(selection[0]).setIcon(ic)
+                self.update_list_indices()
+        elif ident == "btn_split":
+            if self.ui.btn_split.isChecked():
+                self.ui.btn_remove.setEnabled(False)
+                self.ui.btn_edit.setEnabled(False)
+                self.ui.btn_show.setEnabled(False)
+                self.ui.btn_merge.setEnabled(False)
+                self.view.split = True
+            else:
+                self.ui.btn_remove.setEnabled(True)
+                self.ui.btn_edit.setEnabled(True)
+                self.ui.btn_show.setEnabled(True)
+                if self.ui.lst_nuc.selectionModel().selectedIndexes():
+                    self.ui.btn_merge.setEnabled(True)
+                self.view.split = False
+        self.set_current_image()
+
+    def update_nucleus_list(self) -> None:
+        """
+        Method to update the interface list after changes
+        :return: None
+        """
+        self.set_list_images(self.view.images)
+        self.cur_index = len(self.view.images) - 1
+        self.update_list_indices()
+        self.set_current_image()
+
+    def update_list_indices(self) -> None:
+        """
+        Method to change the displayed indices in the interface list after changes
+        :return: None
+        """
+        for a in range(len(self.view.main)):
+            self.lst_nuc_model.item(a, 0).setText("Index: {}\nHash: {}".format(a, hash(self.view.main[a])))
+
+    def on_selection_change(self) -> None:
+        """
+        Method to handle selection changes
+        :return: None
+        """
+        index = self.ui.lst_nuc.selectionModel().selectedIndexes()
+        self.ui.btn_merge.setEnabled(False)
+        if index:
+            self.last_index = self.cur_index
+            self.cur_index = index[0].row()
+            self.set_current_image()
+            if len(index) > 1:
+                self.ui.btn_merge.setEnabled(True)
+
+    def set_current_image(self) -> None:
+        """
+        Method to change the displayed image
+        :return: None
+        """
+        if self.cur_index < len(self.view.main):
+            self.view.show_nucleus(self.cur_index, self.cur_channel)
+            self.update_counting_label()
+
+    def update_counting_label(self) -> None:
+        """
+        Method to update the counting label
+        :return:
+        """
+        self.ui.lbl_number.setText("Foci: {}".format(self.view.cur_foc_num))
+
+
+class NucView(QGraphicsView):
+
+    def __init__(self, image: np.ndarray, handler: ROIHandler, commands: List[Tuple[str, Tuple[Any]]],
+                 cur_channel: int = None, show: bool = True, edit: bool = False, max_channel: int = None,
+                 db_curs: sqlite3.Cursor = None, parent: QWidget = None):
+        super(NucView, self).__init__()
+        self.par = parent
+        self.setMouseTracking(True)
+        self.setSizePolicy(
+            QSizePolicy.Expanding,
+            QSizePolicy.Expanding
+        )
+        self.setMinimumSize(
+            400,
+            400
+        )
+        self.image = image
+        self.handler = handler
+        self.assmap = Detector.create_association_map(handler.rois)
+        self.main = list(self.assmap.keys())
+        self.main_channel = self.handler.idents.index(self.main[0].ident)
+        self.cur_ind = 0
+        self.cur_nuc = self.main[0]
+        self.channel = cur_channel
+        self.max_channel = max_channel
+        self.curs = db_curs
+        self.show = show
+        self.edit = edit
+        self.split = False
+        self.temp_split = None
+        self.pos = None
+        self.temp_foc = None
+        self.images = []
+        self.foc_group = []
+        self.map = {}
+        self.commands = commands
+        self.cur_foc_num = 0
+        scene = QGraphicsScene(self)
+        scene.setSceneRect(0, 0, self.width(), self.height())
+        self.setScene(scene)
+        for nuc in self.main:
+            self.images.append(self.convert_roi_to_numpy(nuc))
+        # Initialization of the background image
+        self.sc_bckg = self.scene().addPixmap(QPixmap())
+        self.show_nucleus(self.cur_ind, self.channel)
+
+    def show_nucleus(self, cur_ind: int, channel: int) -> None:
+        """
+        Method to show a channel of the nucleus specified by index
+        :param cur_ind: The index of the nucleus
+        :param channel: The channel to show
+        :return: None
+        """
+        self.cur_ind = cur_ind
+        self.cur_nuc = self.main[cur_ind]
+        self.channel = channel
+        self.scene().setSceneRect(0, 0, self.width() - 5, self.height() - 5)
+        pmap = QPixmap()
+        pmap.convertFromImage(NucView.get_qimage_from_numpy(
+            self.convert_roi_to_numpy(self.cur_nuc), mode="RGB" if self.channel > self.max_channel else "L"))
+        tempmap = pmap.scaled(self.width(), self.height(), Qt.KeepAspectRatio)
+        self.sc_bckg.setPixmap(tempmap)
+        x_scale = tempmap.width() / pmap.width()
+        y_scale = tempmap.height() / pmap.height()
+        x_trans = self.scene().width() / 2 - tempmap.width() / 2
+        y_trans = self.scene().height() / 2 - tempmap.height() / 2
+        self.sc_bckg.setPos(self.scene().width() / 2 - tempmap.width() / 2,
+                            self.scene().height() / 2 - tempmap.height() / 2)
+        self.clear_scene()
+        self.cur_foc_num = 0
+        if self.show and self.channel != self.main_channel:
+            nuc_dat = self.cur_nuc.calculate_dimensions()
+            x_offset = nuc_dat["minX"]
+            y_offset = nuc_dat["minY"]
+            for focus in self.assmap[self.cur_nuc]:
+                c_ind = self.handler.idents.index(focus.ident)
+                if c_ind == self.channel or self.channel > len(self.handler.idents) - 1:
+                    foc = QGraphicsFocusItem(color_index=self.handler.idents.index(focus.ident))
+                    temp = focus.calculate_dimensions()
+                    dim = (temp["width"], temp["height"])
+                    c = temp["center"]
+                    ulp = ((c[0] - dim[0] / 2 - x_offset) * x_scale + x_trans,
+                           (c[1] - dim[1] / 2 - y_offset) * y_scale + y_trans)
+                    bbox = QRectF(ulp[0], ulp[1], dim[0] * x_scale, dim[1] * y_scale)
+                    foc.setRect(bbox)
+                    self.map[foc] = focus
+                    self.foc_group.append(foc)
+                    self.scene().addItem(foc)
+                    self.cur_foc_num += 1
+
+    @staticmethod
+    def get_qimage_from_numpy(numpy: np.ndarray, mode: str = None) -> ImageQt:
+        """
+        Method to convert a numpy array to an QImage
+
+        :param numpy: The array to convert
+        :param mode: The mode to use for conversion
+        :return: The QImage
+        """
+        img = Image.fromarray(numpy, mode)
+        qimg = ImageQt(img)
+        return qimg
+
+    def clear_scene(self) -> None:
+        """
+        Method to remove all displayed foci from the screen
+        :return: None
+        """
+        for item in self.foc_group:
+            self.scene().removeItem(item)
+        self.foc_group.clear()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        self.show_nucleus(self.cur_ind, self.channel)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        super(NucView, self).keyPressEvent(event)
+        if event.key() == Qt.Key_Delete and not self.split:
+            rem = []
+            for item in self.foc_group:
+                if item.isSelected():
+                    self.handler.remove_roi(self.map[item])
+                    self.commands.extend((("DELETE FROM roi WHERE hash=?",
+                                           (hash(self.map[item]),)),
+                                          ("DELETE FROM points WHERE hash=?",
+                                           (hash(self.map[item]),))))
+                    self.assmap[self.map[item].associated].remove(self.map[item])
+                    del self.map[item]
+                    rem.append(item)
+                    self.scene().removeItem(item)
+                    self.cur_foc_num -= 1
+                    self.par.update_counting_label()
+            for item in rem:
+                self.foc_group.remove(item)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        super(NucView, self).mousePressEvent(event)
+        if self.edit and event.button() == Qt.LeftButton and \
+                self.channel < self.handler.idents.index(self.handler.main) and not self.split:
+            point = self.mapToScene(event.pos())
+            p = self.itemAt(point.x(), point.y())
+            if isinstance(p, QGraphicsPixmapItem):
+                self.pos = event.pos()
+                self.temp_foc = QGraphicsFocusItem(color_index=self.channel)
+                self.scene().addItem(self.temp_foc)
+        elif self.split and event.button() == Qt.LeftButton:
+            point = self.mapToScene(event.pos())
+            p = self.itemAt(point.x(), point.y())
+            if isinstance(p, QGraphicsPixmapItem):
+                self.pos = event.pos()
+                self.temp_split = QGraphicsLineItem()
+                pen = QPen()
+                pen.setStyle(Qt.DashDotLine)
+                pen.setWidth(3)
+                pen.setBrush(QBrush(QColor(207, 255, 4)))
+                pen.setCapStyle(Qt.RoundCap)
+                pen.setJoinStyle(Qt.RoundJoin)
+                self.temp_split.setPen(pen)
+                self.scene().addItem(self.temp_split)
+        else:
+            self.pos = None
+            if self.temp_split is not None:
+                self.scene().removeItem(self.temp_split)
+            if self.temp_foc is not None:
+                self.scene().removeItem(self.temp_foc)
+            self.temp_foc = None
+            self.temp_split = None
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        super(NucView, self).mouseMoveEvent(event)
+        if self.temp_foc is not None:
+            tw = max(event.pos().x(), self.pos.x()) - min(self.pos.x(), event.pos().x())
+            th = max(event.pos().y(), self.pos.y()) - min(self.pos.y(), event.pos().y())
+            width = max(tw, th)
+            height = max(tw, th)
+            x = self.pos.x() - width
+            y = self.pos.y() - height
+            bbox = QRectF(
+                x,
+                y,
+                width * 2,
+                height * 2
+            )
+            self.temp_foc.setRect(bbox)
+        elif self.temp_split is not None:
+            self.temp_split.setLine(self.pos.x(), self.pos.y(), event.pos().x(), event.pos().y())
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        super(NucView, self).mouseReleaseEvent(event)
+        if self.temp_foc is not None:
+            cur_nump = self.convert_roi_to_numpy(self.main[self.cur_ind])
+            offset_factor = self.sc_bckg.boundingRect().height() / len(cur_nump)
+            hard_offset = self.sc_bckg.pos()
+            bbox = self.temp_foc.boundingRect()
+            tx = bbox.x() + 1 / 2 * bbox.width()
+            ty = bbox.y() + 1 / 2 * bbox.height()
+            x_center = (tx - hard_offset.x()) / offset_factor
+            y_center = (ty - hard_offset.y()) / offset_factor
+            height = bbox.height() / offset_factor / 2
+            width = bbox.width() / offset_factor / 2
+            mask = np.zeros(shape=(len(cur_nump), len(cur_nump[0])))
+            rr, cc = ellipse(y_center, x_center, height, width, shape=mask.shape)
+            mask[rr, cc] = 1
+            cur_roi = ROI(main=False, auto=False, channel=self.handler.idents[self.channel],
+                          associated=self.cur_nuc)
+            nuc_dat = self.cur_nuc.calculate_dimensions()
+            x_offset = nuc_dat["minX"]
+            y_offset = nuc_dat["minY"]
+            for y in range(len(mask)):
+                for x in range(len(mask[0])):
+                    if mask[y][x] > 0:
+                        inten = cur_nump[y][x]
+                        cur_roi.add_point((x + x_offset, y + y_offset), inten)
+                        self.commands.append(("INSERT INTO points VALUES(?, ?, ?, ?)",
+                                              (-1, x + x_offset, y + y_offset, np.int(inten))))
+            self.handler.rois.append(cur_roi)
+            roidat = cur_roi.calculate_dimensions()
+            stats = cur_roi.calculate_statistics()
+            ellp = cur_roi.calculate_ellipse_parameters()
+            imghash = self.handler.ident
+            self.commands.extend(
+                (("INSERT INTO roi VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+                  (hash(cur_roi), imghash, False, cur_roi.ident, str(roidat["center"]), roidat["width"],
+                   roidat["height"], hash(self.cur_nuc))),
+                 ("UPDATE points SET hash=? WHERE hash=-1",
+                  (hash(cur_roi),)),
+                 ("INSERT OR IGNORE INTO statistics VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                  (hash(cur_roi), imghash, stats["area"], stats["intensity average"], stats["intensity median"],
+                   stats["intensity maximum"], stats["intensity minimum"], stats["intensity std"],
+                   str(ellp["center"]), str(ellp["major_axis"][0]), str(ellp["major_axis"][1]),
+                   ellp["major_slope"], ellp["major_length"], ellp["major_angle"], str(ellp["minor_axis"][0]),
+                   str(ellp["minor_axis"][1]), ellp["minor_length"], ellp["shape_match"])))
+            )
+            self.foc_group.append(self.temp_foc)
+            self.map[self.temp_foc] = cur_roi
+            self.pos = None
+            self.temp_foc = None
+            self.scene().update()
+            self.assmap = Detector.create_association_map(self.handler.rois)
+            self.cur_foc_num += 1
+            self.par.update_counting_label()
+        elif self.temp_split is not None:
+            cur_nump = self.main[self.cur_ind].get_as_numpy()
+            offset_factor = self.sc_bckg.boundingRect().height() / len(cur_nump)
+            hard_offset = self.sc_bckg.pos()
+            nuc_dat = self.cur_nuc.calculate_dimensions()
+            x_offset = nuc_dat["minX"]
+            y_offset = nuc_dat["minY"]
+            start_x = (self.pos.x() - hard_offset.x()) / offset_factor + x_offset
+            start_y = (self.pos.y() - hard_offset.y()) / offset_factor + y_offset
+            stop_x = (event.pos().x() - hard_offset.x()) / offset_factor + x_offset
+            stop_y = (event.pos().y() - hard_offset.y()) / offset_factor + y_offset
+            # Calculate line equation y = mx + n
+            m = (stop_y - start_y) / (stop_x - start_x)
+            n = stop_y - stop_x * m
+            # Compare each point of nucleus with line
+            aroi = ROI(channel=self.cur_nuc.ident)
+            broi = ROI(channel=self.cur_nuc.ident)
+            # Compare each center of foci with line
+            for p in self.cur_nuc.points:
+                ly = m * p[0] + n
+                if ly > p[1]:
+                    aroi.add_point(p, self.cur_nuc.inten[p])
+                else:
+                    broi.add_point(p, self.cur_nuc.inten[p])
+            c = (aroi.calculate_dimensions()["center"], broi.calculate_dimensions()["center"])
+            for foc in self.assmap[self.cur_nuc]:
+                fc = foc.calculate_dimensions()["center"]
+                d1 = math.sqrt((c[0][0] - fc[0]) ** 2 + (c[0][1] - fc[1]) ** 2)
+                d2 = math.sqrt((c[1][0] - fc[0]) ** 2 + (c[1][1] - fc[1]) ** 2)
+                if d1 < d2:
+                    foc.associated = aroi
+                else:
+                    foc.associated = broi
+            # Remove line
+            self.scene().removeItem(self.temp_split)
+            self.handler.rois.remove(self.cur_nuc)
+            self.handler.rois.extend((aroi, broi))
+            self.assmap = Detector.create_association_map(self.handler.rois)
+            adat = aroi.calculate_dimensions()
+            bdat = broi.calculate_dimensions()
+            astat = aroi.calculate_statistics()
+            bstat = broi.calculate_statistics()
+            aell = aroi.calculate_ellipse_parameters()
+            bell = broi.calculate_ellipse_parameters()
+            imghash = self.handler.ident
+            self.commands.extend((
+                ("INSERT INTO roi VALUES (?, ?, ?, ?, ? ,?, ?, ?)",
+                 (hash(aroi), imghash, False, self.cur_nuc.ident, str(adat["center"]), adat["width"],
+                  adat["height"], None)),
+                ("INSERT INTO statistics VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (hash(aroi), imghash, astat["area"], astat["intensity average"], astat["intensity median"],
+                  astat["intensity maximum"], astat["intensity minimum"], astat["intensity std"],
+                  str(aell["center"]), str(aell["major_axis"][0]), str(aell["major_axis"][1]), aell["major_slope"],
+                  aell["major_length"], aell["major_angle"], str(aell["minor_axis"][0]), str(aell["minor_axis"][1]),
+                  aell["minor_length"], aell["shape_match"])),
+                ("INSERT INTO roi VALUES (?, ?, ?, ?, ? ,?, ?, ?)",
+                 (hash(broi), imghash, False, self.cur_nuc.ident, str(bdat["center"]), bdat["width"],
+                  bdat["height"], None)),
+                ("INSERT INTO statistics VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (hash(broi), imghash, bstat["area"], bstat["intensity average"], bstat["intensity median"],
+                  bstat["intensity maximum"], bstat["intensity minimum"], bstat["intensity std"],
+                  str(bell["center"]), str(bell["major_axis"][0]), str(bell["major_axis"][1]), bell["major_slope"],
+                  bell["major_length"], bell["major_angle"], str(bell["minor_axis"][0]), str(bell["minor_axis"][1]),
+                  bell["minor_length"], bell["shape_match"])),
+                ("DELETE FROM roi WHERE hash=?",
+                 (hash(self.cur_nuc),)),
+                ("DELETE FROM points WHERE hash=?",
+                 (hash(self.cur_nuc),)),
+            ))
+            for p, inten in aroi.inten.items():
+                self.commands.append(
+                    ("INSERT INTO points VALUES (?, ?, ?, ?)",
+                     (hash(aroi), p[0], p[1], inten))
+                )
+            for p, inten in broi.inten.items():
+                self.commands.append(
+                    ("INSERT INTO points VALUES (?, ?, ?, ?)",
+                     (hash(broi), p[0], p[1], inten))
+                )
+            for foc in self.assmap[aroi]:
+                self.commands.append(
+                    ("UPDATE roi SET associated=? WHERE hash=?",
+                     (hash(aroi), hash(foc)))
+                )
+            for foc in self.assmap[broi]:
+                self.commands.append(
+                    ("UPDATE roi SET associated=? WHERE hash=?",
+                     (hash(broi), hash(foc)))
+                )
+            self.main.remove(self.cur_nuc)
+            self.main.extend((aroi, broi))
+            del self.images[self.cur_ind]
+            self.images.extend([self.convert_roi_to_numpy(x, True) for x in (aroi, broi)])
+            self.cur_nuc = aroi
+            self.temp_split = None
+            self.par.update_nucleus_list()
+            self.scene().update()
+
+    def convert_roi_to_numpy(self, roi, full=False):
+        dims = roi.calculate_dimensions()
+        y_dist = dims["maxY"] - dims["minY"] + 1
+        x_dist = dims["maxX"] - dims["minX"] + 1
+        if self.channel > self.max_channel or full:
+            channel = self.image
+            numpy = np.zeros((y_dist, x_dist, 3), dtype=np.uint8)
+        else:
+            channel = self.image[..., self.channel]
+            numpy = np.zeros((y_dist, x_dist), dtype=np.uint8)
+        for p in roi.points:
+            numpy[p[1] - dims["minY"], p[0] - dims["minX"]] = channel[p[1]][p[0]]
+        return numpy
+
+
+class QGraphicsFocusItem(QGraphicsEllipseItem):
+    COLORS = [
+        QColor(255, 50, 0),  # Red
+        QColor(50, 255, 0),  # Green
+        QColor(255, 255, 0),  # Yellow
+        QColor(255, 0, 255),  # Magenta
+        QColor(0, 255, 255),  # Cyan
+    ]
+
+    def __init__(self, color_index: int = 0):
+        super(QGraphicsFocusItem, self).__init__()
+        col_num = len(QGraphicsFocusItem.COLORS)
+        self.main_color = QGraphicsFocusItem.COLORS[color_index if color_index < col_num else col_num % color_index]
+        self.hover_color = self.main_color.lighter(150)
+        self.sel_color = self.main_color.lighter(200)
+        self.cur_col = self.main_color
+        self.setAcceptHoverEvents(True)
+        self.setFlag(QGraphicsItem.ItemIsSelectable)
+
+    def hoverEnterEvent(self, *args, **kwargs):
+        self.cur_col = self.hover_color
+        self.update()
+
+    def hoverLeaveEvent(self, *args, **kwargs):
+        self.cur_col = self.main_color
+        self.update()
+
+    def paint(self, painter: QPainter, style: QStyleOptionGraphicsItem, widget: QWidget = None) -> None:
+        if self.isSelected():
+            painter.setPen(QPen(self.sel_color, 6))
+        else:
+            painter.setPen(QPen(self.cur_col, 3))
+        painter.drawEllipse(self.rect())
+        self.scene().update()

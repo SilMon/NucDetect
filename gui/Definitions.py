@@ -4,7 +4,15 @@ from PyQt5.QtCore import QSize
 from PyQt5.QtGui import QIcon, QColor
 
 
+class Color:
+    BRIGHT_RED = QColor(222, 23, 56)
+    LIGHT_BLUE = QColor(47, 167, 212)
+
+
 class Icon:
+    STANDARD = Color.LIGHT_BLUE
+    STANDARD_OFF = Color.LIGHT_BLUE.darker()
+    HIGHLIGHT = Color.BRIGHT_RED
 
     @staticmethod
     def get_icon(ident: str) -> QIcon:
@@ -15,21 +23,27 @@ class Icon:
         :return: QIcon
         """
         icons = {
-            "LOGO": QtGui.QIcon('logo.png'),
-            "CLIPBOARD": qta.icon("fa5.clipboard", color=Color.LIGHT_BLUE),
-            "FOLDER_OPEN": qta.icon("fa5.folder-open", color=Color.LIGHT_BLUE),
-            "FLASK": qta.icon("fa5s.flask", color=Color.LIGHT_BLUE),
-            "SAVE": qta.icon("fa5.save", color=Color.LIGHT_BLUE),
-            "MICROSCOPE": qta.icon("fa5s.microscope", color=Color.LIGHT_BLUE),
-            "CHART_BAR": qta.icon("fa5.chart-bar", color=Color.LIGHT_BLUE),
-            "LIST_UL": qta.icon("fa5s.list-ul", color=Color.LIGHT_BLUE),
-            "COGS": qta.icon("fa.cogs", color=Color.LIGHT_BLUE),
-            "TOOLS": qta.icon("fa5s.tools", color=Color.LIGHT_BLUE),
-            "HAT_WIZARD_BLUE": qta.icon("fa5s.hat-wizard", color=Color.LIGHT_BLUE),
-            "HAT_WIZARD_RED": qta.icon("fa5s.hat-wizard", color=Color.BRIGHT_RED),
-            "TIMES": qta.icon("fa5s.times", color=Color.LIGHT_BLUE),
-            "TRASH_ALT": qta.icon("fa5s.trash-alt", color=Color.LIGHT_BLUE),
-            "SYNC": qta.icon("fa5s.sync", color=Color.LIGHT_BLUE)
+            "LOGO": QtGui.QIcon("logo.png"),
+            "RULER": qta.icon("fa5s.ruler", color=Icon.STANDARD),
+            "EYE": qta.icon("fa5.eye", color=Icon.STANDARD),
+            "EYE_OFF": qta.icon("fa5.eye-slash", color=Icon.STANDARD_OFF),
+            "OBJECT_GROUP": qta.icon("fa5.object-group", color=Icon.STANDARD),
+            "EDIT": qta.icon("fa5.edit", color=Icon.STANDARD),
+            "EDIT_OFF": qta.icon("fa5.edit", color=Icon.STANDARD_OFF),
+            "CLIPBOARD": qta.icon("fa5.clipboard", color=Icon.STANDARD),
+            "FOLDER_OPEN": qta.icon("fa5.folder-open", color=Icon.STANDARD),
+            "FLASK": qta.icon("fa5s.flask", color=Icon.STANDARD),
+            "SAVE": qta.icon("fa5.save", color=Icon.STANDARD),
+            "MICROSCOPE": qta.icon("fa5s.microscope", color=Icon.STANDARD),
+            "CHART_BAR": qta.icon("fa5.chart-bar", color=Icon.STANDARD),
+            "LIST_UL": qta.icon("fa5s.list-ul", color=Icon.STANDARD),
+            "COGS": qta.icon("fa.cogs", color=Icon.STANDARD),
+            "TOOLS": qta.icon("fa5s.tools", color=Icon.STANDARD),
+            "HAT_WIZARD_BLUE": qta.icon("fa5s.hat-wizard", color=Icon.STANDARD),
+            "HAT_WIZARD_RED": qta.icon("fa5s.hat-wizard", color=Icon.HIGHLIGHT),
+            "TIMES": qta.icon("fa5s.times", color=Icon.STANDARD),
+            "TRASH_ALT": qta.icon("fa5s.trash-alt", color=Icon.STANDARD),
+            "SYNC": qta.icon("fa5s.sync", color=Icon.STANDARD)
         }
         return icons.get(ident, QIcon())
 
@@ -39,7 +53,3 @@ class Icon:
             "LIST_ITEM": QSize(75, 75)
         }
         return sizes.get(ident, QSize(75, 75))
-
-class Color:
-    BRIGHT_RED = QColor(222, 23, 56)
-    LIGHT_BLUE = QColor(47, 167, 212)
