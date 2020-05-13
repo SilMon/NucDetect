@@ -6,6 +6,40 @@ from numba import jit
 from numba.typed import List as nList
 
 
+@jit(nopython=True)
+def automatic_whitebalance(image: np.ndarray, cutoff: float = 0.05) -> np.ndarray:
+    """
+    Function to perform automatic white balance for an image
+
+    :param image: The image to balance
+    :param cutoff: The amount of pixels to go into saturation
+    :return: The balanced image
+    """
+    # Create copy of image
+    image = image.copy()
+    # Calculate histogram of image
+    hist = np.histogram(image, bins=256)
+    # Calculate pixel threshold
+    thresh = cutoff * image.shape[0] * image.shape[1]
+    # Iterate over histogram to get min and max
+    amin, amax = 0, 255
+    # Counts of pixels
+    cmin, cmax = 0, 0
+    for ind in range(len(hist[0])):
+        cmin += hist[0][ind]
+        cmax += hist[0][255 - ind]
+        if cmin <= thresh:
+            amin += 1
+        if cmax <= thresh:
+            amax -= 1
+    # Calculate balance ratio
+    ratio = 255 / (amax - amin)
+    # Create iterator for image
+    with np.nditer(image, op_flags=['readwrite']) as it:
+        for x in it:
+            x[...] = ratio * x
+    return image
+
 @jit(nopython=True, cache=True)
 def eu_dist(p1: Tuple[int, int], p2: Tuple[int, int]) -> float:
     """

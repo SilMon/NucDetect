@@ -40,6 +40,7 @@ class Detector:
     def __init__(self, settings: Dict[str, Any] = None, logging: bool = None):
         """
         Constructor of the detector class
+
         :param settings: The settings of the class
         :param logging: Indicates if analysis messages should be printed to the console
         """
@@ -50,6 +51,7 @@ class Detector:
             "min_foc_area": 9
         }
         self.logging: bool = logging
+        self.analyser = None
 
     def analyse_image(self, path: str, analysis_settings: Dict[str, Union[List, bool]],
                       logging: bool = True,
@@ -63,9 +65,6 @@ class Detector:
         :param ml_analysis: Enable image analysis via U-Net
         :return: The analysis results as dict
         """
-        # TODO not PEP8 compliant
-        if ml_analysis:
-            self.analyser = FCN()
         start = time.time()
         logging = logging if self.logging is None else self.logging
         imgdat = Detector.get_image_data(path)
@@ -78,20 +77,21 @@ class Detector:
         main_channel = analysis_settings["main"]
         # Channel extraction
         channels = Detector.get_channels(image)
-        active = analysis_settings["active channels"]
+        active = analysis_settings["activated"]
         # Check if all channels are activated
         names = [names[x] for x in range(len(names)) if active[x]]
         channels = [channels[x] for x in range(len(channels)) if active[x]]
         # Adjust the index of the main channel
         for x in range(main_channel):
             main_channel -= 1 if active[x] else 0
-        if not ml_analysis:
+        if not analysis_settings["type"]:
             # Channel thresholding
             thresh_chan = Detector.threshold_channels(channels, main_channel)
             rois = Detector.classic_roi_extraction(channels, thresh_chan, names,
                                                    main_map=main_channel, quality_check=not ml_analysis,
                                                    logging=logging)
         else:
+            self.analyser = FCN()
             nuclei = self.analyser.predict_image(path,
                                                  self.analyser.NUCLEI,
                                                  channels=(main_channel, ), threshold=0.95, logging=logging)[0]
@@ -107,6 +107,7 @@ class Detector:
                                               main_map=main_channel,
                                               logging=logging)
         handler = ROIHandler(ident=imgdat["id"])
+        print(len(rois))
         for roi in rois:
             handler.add_roi(roi)
         handler.idents = names
@@ -116,7 +117,7 @@ class Detector:
         imgdat["main channel"] = main_channel
         imgdat["add to experiment"] = analysis_settings["add_to_experiment"]
         imgdat["experiment details"] = analysis_settings["experiment_details"]
-        Detector.log(f"Total analysis time: {time.time()-start}", logging)
+        Detector.log(f"Total analysis time: {time.time()-start:.4f}", logging)
         return imgdat
 
     @staticmethod
@@ -367,7 +368,6 @@ class Detector:
         rem_list.clear()
         Detector.log(f"Time: {time.time() - s4:4f}", logging)
         rois.clear()
-        # TODO Reihenfolge wichtig, ausbessern da undynamisch
         rois.extend(foci)
         rois.extend(main)
         Detector.log(f"Total Quality Check Time: {time.time() - s7}", logging)

@@ -43,6 +43,7 @@ class AnalysisSettingsDialog(QDialog):
         :return: A dictionary containing the data
         """
         return {
+            "type": abs(self.ui.type_btn_group.checkedId()) - 2,
             "add_to_experiment": self.ui.cbx_experiment.isChecked(),
             "experiment_details": {
                 "name": self.ui.le_name.text(),

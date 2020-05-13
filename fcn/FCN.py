@@ -82,11 +82,11 @@ class FCN:
         # Merge predictions for the tiles to create the prediction map
         for p in pred_tiles:
             maps.append(FCN.merge_prediction_masks(p, img.shape))
-        FCN.log(f"Merging finished: {time.time() - start} secs", logging)
+        FCN.log(f"Merging finished: {time.time() - start:.4f} secs", logging)
         # Threshold maps
         for m in maps:
             threshs.append(FCN.threshold_prediction_mask(m, threshold=threshold))
-        FCN.log(f"Thresholding finished: {time.time() - start} secs", logging)
+        FCN.log(f"Thresholding finished: {time.time() - start:.4f} secs", logging)
         return threshs
 
     @staticmethod
