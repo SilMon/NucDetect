@@ -303,7 +303,6 @@ class NucDetect(QMainWindow):
                 self.ui.lbl_status.setText("Program ready")
                 self.res_table_model.setRowCount(0)
                 self.enable_buttons(False, ana_buttons=False)
-                self.ui.btn_analyse.setEnabled(True)
         else:
             self.ui.btn_analyse.setEnabled(False)
 
@@ -323,8 +322,6 @@ class NucDetect(QMainWindow):
         # Re-enable buttons and list
         self.ui.list_images.setEnabled(True)
         self.enable_buttons()
-        # Disable analysis button -> Useless if image was already analysed
-        self.ui.btn_analyse.setEnabled(False)
         self.prg_signal.emit(f"Data loaded from database for {self.cur_img['file_name']}",
                              100, 100, "")
 
@@ -433,7 +430,6 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        self.res_table_model.setRowCount(0)
         if not self.cur_img:
             self.ui.list_images.select(self.img_list_model.index(0, 0))
         # Get settings for this analysis
@@ -444,9 +440,9 @@ class NucDetect(QMainWindow):
         else:
             # If the dialog was rejected, abort analysis
             return
+        self.res_table_model.setRowCount(0)
         self.prg_signal.emit(f"Analysing {self.cur_img['file_name']}",
                              0, 100, "")
-
         thread = Thread(target=self.analyze_image,
                         args=(self.cur_img["path"],
                               "Analysis finished in {} -- Program ready",
@@ -505,7 +501,7 @@ class NucDetect(QMainWindow):
         self.ui.list_images.setEnabled(False)
         self.unsaved_changes = True
         # Get settings for this analysis
-        anal_sett_dial = AnalysisSettingsDialog()
+        anal_sett_dial = AnalysisSettingsDialog(all_=True)
         code = anal_sett_dial.exec()
         if code == QDialog.Accepted:
             settings = anal_sett_dial.get_data()
@@ -524,14 +520,15 @@ class NucDetect(QMainWindow):
         :return: None
         """
         start_time = time.time()
-        with ProcessPoolExecutor(max_workers=None) as e:
+        max_workers = 1 if settings["type"] else None
+        with ProcessPoolExecutor(max_workers=max_workers) as e:
             logstate = self.detector.logging
             self.detector.logging = False
             self.prg_signal.emit("Starting multi image analysis", 0, 100, "")
             paths = []
             for ind in range(self.img_list_model.rowCount()):
                 data = self.img_list_model.item(ind).data()
-                if not bool(data["analysed"]):
+                if not bool(data["analysed"]) or settings["re-analyse"]:
                     paths.append(data["path"])
             ind = 1
             cur_batch = 1
@@ -574,7 +571,9 @@ class NucDetect(QMainWindow):
             self.selec_signal.emit(True)
         print(f"Total analysis time: {time.time() - start_time:.3f} secs")
 
-    def save_rois_to_database(self, data: Dict[str, Union[int, float, str]], all: bool = False) -> None:
+    def save_rois_to_database(self,
+                              data: Dict[str, Union[int, float, str]],
+                              all: bool = False) -> None:
         """
         Method to save the data stored in the ROIHandler rois to the database
 
@@ -594,9 +593,15 @@ class NucDetect(QMainWindow):
                     "SELECT hash FROM roi WHERE image = ?",
                     (key,)
             ).fetchall():
+                # Delete saved points
                 curs.execute(
                     "DELETE FROM points where hash = ?",
                     (h[0],)
+                )
+                # Delete saved statistics
+                curs.execute(
+                    "DELETE FROM statistics where hash = ?",
+                    (h[0], )
                 )
             curs.execute(
                 "DELETE FROM roi WHERE image = ?",
@@ -702,7 +707,6 @@ class NucDetect(QMainWindow):
                                  ind, max, "")
             temproi = ROI(channel=entry[3], main=entry[7] is None, associated=entry[7])
             temproi.id = entry[0]
-            print(entry[0])
             stats = crs.execute(
                 "SELECT * FROM statistics WHERE hash = ?",
                 (entry[0],)

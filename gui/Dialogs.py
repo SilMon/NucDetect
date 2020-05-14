@@ -31,9 +31,10 @@ pg.setConfigOptions(imageAxisOrder='row-major')
 
 class AnalysisSettingsDialog(QDialog):
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, all_=False, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.ui = None
+        self.all = all_
         self.initialize_ui()
 
     def get_data(self) -> Dict[str, Union[List, bool]]:
@@ -44,6 +45,7 @@ class AnalysisSettingsDialog(QDialog):
         """
         return {
             "type": abs(self.ui.type_btn_group.checkedId()) - 2,
+            "re-analyse": self.cbx_reanalyse.isChecked(),
             "add_to_experiment": self.ui.cbx_experiment.isChecked(),
             "experiment_details": {
                 "name": self.ui.le_name.text(),
@@ -73,7 +75,12 @@ class AnalysisSettingsDialog(QDialog):
 
         :return: None
         """
+        # Load UI definition
         self.ui = uic.loadUi(Paths.ui_analysis_settings_dial, self)
+        # Check if single image analysis or multi image analysis is performed
+        if not self.all:
+            self.ui.cbx_reanalyse.hide()
+            self.ui.lbl_reanalyse.hide()
         # Bind experiment text boxes to experiment checkbox
         self.ui.cbx_experiment.toggled.connect(self.ui.le_name.setEnabled)
         self.ui.cbx_experiment.toggled.connect(self.ui.pte_details.setEnabled)
@@ -430,6 +437,7 @@ class ExperimentDialog(QDialog):
             exp.setText(
                 f"{exp_data['name']}\n{exp_data['details'][:47]}...\nGroups: {group_str}"
             )
+            self.ui.le_groups.setText(group_str)
 
 
 class ImageSelectionDialog(QDialog):
@@ -708,8 +716,11 @@ class GroupDialog(QDialog):
 
         :return: None
         """
+        # Create connection and cursor to db
+        conn = sqlite3.connect(Paths.database)
+        curs = conn.cursor()
         # Get selected group
-        index = self.ui.lv_images.selectionModel().selectedIndexes()[0].row()
+        index = self.ui.lv_groups.selectionModel().selectedIndexes()[0].row()
         item = self.group_model.item(index)
         data = item.data()
         clk = QMessageBox.question(self, "Erase group",
@@ -721,11 +732,11 @@ class GroupDialog(QDialog):
             self.group_model.removeRow(index)
             # Update images in database
             for key in data["keys"]:
-                self.cursor.execute(
+                curs.execute(
                     "DELETE FROM groups WHERE image=?",
                     (key,)
                 )
-            self.connection.commit()
+            conn.commit()
 
 
 class ExperimentSelectionDialog(QDialog):
@@ -1139,7 +1150,7 @@ class ImgDialog(QDialog):
             roinum[key].update({x: 0 for x in empty})
         for ident in self.handler.idents:
             if ident != self.handler.main:
-                number = [x for _, x in roinum[ident].items()]
+                number = [x for _, x in roinum.get(ident, {"": []}).items()]
                 std = np.std(number)
                 number = np.average(number)
                 self.ui.channel_selector.addWidget(QLabel(f"Foci/Nucleus ({ident}): {number:.2f} ± {std:.2f}"))

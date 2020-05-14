@@ -107,7 +107,6 @@ class Detector:
                                               main_map=main_channel,
                                               logging=logging)
         handler = ROIHandler(ident=imgdat["id"])
-        print(len(rois))
         for roi in rois:
             handler.add_roi(roi)
         handler.idents = names
@@ -541,7 +540,6 @@ class Detector:
         unique = list(np.unique(ws))
         t = time.time()
         relabel_array(ws)
-        # TODO
         Detector.log(f"Time relabeling: {time.time() - t}", False)
         thresh[main_channel] = ws
         # Extract nuclei from watershed

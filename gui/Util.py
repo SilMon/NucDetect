@@ -61,7 +61,7 @@ def create_image_item_list_from(paths: List[str],
     for path in paths:
         items.append(create_list_item(path))
         if indicate_progress:
-            print(f"{ind}/{len(paths)} loaded")
+            print(f"Loading: {ind}/{len(paths)}")
             ind += 1
     return items
 
