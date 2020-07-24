@@ -11,7 +11,7 @@ from typing import Union, Dict, List, Tuple
 
 import numpy as np
 
-from core.ROI import ROI
+from core.roi.ROI import ROI
 
 
 class ROIHandler:
@@ -27,7 +27,7 @@ class ROIHandler:
         """
         :param ident: md5 hash of the image this handler is associated with
         """
-        self.ident: str = ident
+        self.ident = ident
         self.rois: List[ROI] = []
         self.idents: List[str] = []
         self.stats: Dict[str, Union[int, float]] = {}
@@ -67,10 +67,11 @@ class ROIHandler:
             self.rois = [x for x in self.rois if x.associated is not roi]
         self.stats.clear()
 
-    def calculate_statistics(self) -> Dict[str, Union[int, float]]:
+    def calculate_statistics(self, img: np.ndarray) -> Dict[str, Union[int, float]]:
         """
         Method to calculate statistics about the saved ROIs
 
+        :param img: The image this handler is associated to
         :return: dict -- A dictonary containing the calculated statistics
         """
         if not self.stats:
@@ -81,8 +82,9 @@ class ROIHandler:
                 "intensity": []
             }
             sec = {}
+            channels = [img[..., x] for x in range(img.shape[2])]
             for roi in self.rois:
-                temp_stat = roi.calculate_statistics()
+                temp_stat = roi.calculate_statistics(channels[self.idents.index(roi.ident)])
                 if roi.main:
                     main["num"] += 1
                     main["area"].append(temp_stat["area"])

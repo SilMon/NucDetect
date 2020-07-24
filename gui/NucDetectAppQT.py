@@ -8,6 +8,7 @@ import sys
 import time
 import traceback
 import warnings
+import numpy as np
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from threading import Thread
 from typing import Union, Dict, Iterable
@@ -22,8 +23,8 @@ from PyQt5.QtGui import QStandardItemModel, QStandardItem, QPixmap
 from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, QMessageBox
 
 from core.Detector import Detector
-from core.ROI import ROI
-from core.ROIHandler import ROIHandler
+from core.roi.ROI import ROI
+from core.roi.ROIHandler import ROIHandler
 from gui import Paths, Util
 from gui.Definitions import Icon
 from gui.Dialogs import ExperimentDialog, ExperimentSelectionDialog, StatisticsDialog, ImgDialog, SettingsDialog, \
@@ -86,91 +87,92 @@ class NucDetect(QMainWindow):
         cursor.executescript(
             '''
             BEGIN TRANSACTION;
-            CREATE TABLE IF NOT EXISTS "groups" (
-                "image"	INTEGER,
-                "experiment"	INTEGER,
-                "name"	INTEGER,
-                PRIMARY KEY("image","experiment")
-            ) WITHOUT ROWID ;
-            CREATE TABLE IF NOT EXISTS "experiments" (
-                "name"	TEXT,
-                "details"	TEXT,
-                "notes"	TEXT,
-                PRIMARY KEY("name")
-            ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS "images" (
-                "md5"	TEXT,
-                "datetime"	TEXT,
-                "channels"	INTEGER NOT NULL,
-                "width"	INTEGER NOT NULL,
-                "height"	INTEGER NOT NULL,
-                "x_res"	INTEGER,
-                "y_res"	INTEGER,
-                "unit"	INTEGER,
-                "analysed"	INTEGER NOT NULL,
-                "settings"	TEXT,
-                "experiment"	TEXT,
-                "group"	TEXT,
-                PRIMARY KEY("md5")
-            ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS "points" (
-                "hash"	INTEGER,
-                "x"	INTEGER,
-                "y"	INTEGER,
-                "intensity"	INTEGER,
-                PRIMARY KEY("hash","x","y")
-            ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS "settings" (
-                "key_"	TEXT,
-                "value"	TEXT,
-                PRIMARY KEY("key_")
-            ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS "categories" (
-                "image"	INTEGER,
-                "category"	TEXT,
-                PRIMARY KEY("image","category")
+                            "image"	INTEGER,
+                            "category"	TEXT,
+                            PRIMARY KEY("image","category")
             ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS "channels" (
-                "md5"	INTEGER,
-                "index"	INTEGER,
-                "name"	INTEGER,
-                PRIMARY KEY("md5","index")
+                            "md5"	INTEGER,
+                            "index_"	INTEGER,
+                            "name"	INTEGER,
+                            "active"	INTEGER,
+                            "main"	INTEGER,
+                            PRIMARY KEY("md5","index_")
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS "experiments" (
+                            "name"	TEXT,
+                            "details"	TEXT,
+                            "notes"	TEXT,
+                            PRIMARY KEY("name")
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS "groups" (
+                            "image"	INTEGER,
+                            "experiment"	INTEGER,
+                            "name"	TEXT,
+                            PRIMARY KEY("image","experiment")
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS "images" (
+                            "md5"	TEXT,
+                            "datetime"	TEXT,
+                            "channels"	INTEGER NOT NULL,
+                            "width"	INTEGER NOT NULL,
+                            "height"	INTEGER NOT NULL,
+                            "x_res"	INTEGER,
+                            "y_res"	INTEGER,
+                            "unit"	INTEGER,
+                            "analysed"	INTEGER NOT NULL,
+                            "settings"	TEXT,
+                            "experiment"	TEXT,
+                            PRIMARY KEY("md5")
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS "points" (
+                            "hash"	INTEGER,
+                            "row"	INTEGER,
+                            "column"	INTEGER,
+                            "width"	INTEGER,
+                            PRIMARY KEY("hash","row","column")
             ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS "roi" (
-                "hash"	INTEGER,
-                "image"	INTEGER,
-                "auto"	INTEGER,
-                "channel"	TEXT,
-                "center"	TEXT,
-                "width"	INTEGER,
-                "height"	INTEGER,
-                "associated"	INTEGER,
-                PRIMARY KEY("hash","image")
+                            "hash"	INTEGER,
+                            "image"	INTEGER,
+                            "auto"	INTEGER,
+                            "channel"	TEXT,
+                            "center"	TEXT,
+                            "width"	INTEGER,
+                            "height"	INTEGER,
+                            "associated"	INTEGER,
+                            PRIMARY KEY("hash","image")
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS "settings" (
+                            "key_"	TEXT,
+                            "value"	TEXT,
+                            PRIMARY KEY("key_")
             ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS "statistics" (
-                "hash"	INTEGER,
-                "image"	INTEGER,
-                "area"	INTEGER,
-                "intensity_average"	INTEGER,
-                "intensity_median"	INTEGER,
-                "intensity_maximum"	INTEGER,
-                "intensity_minimum"	INTEGER,
-                "intensity_std"	INTEGER,
-                "ellipse_center"	INTEGER,
-                "ellipse_major_axis_p0"	INTEGER,
-                "ellipse_major_axis_p1"	INTEGER,
-                "ellipse_major_axis_slope"	INTEGER,
-                "ellipse_major_axis_length"	INTEGER,
-                "ellipse_major_axis_angle"	INTEGER,
-                "ellipse_minor_axis_p0"	INTEGER,
-                "ellipse_minor_axis_p1"	INTEGER,
-                "ellipse_minor_axis_length"	INTEGER,
-                "ellipticity"	INTEGER,
-                PRIMARY KEY("hash","image")
+                            "hash"	INTEGER,
+                            "image"	INTEGER,
+                            "area"	INTEGER,
+                            "intensity_average"	INTEGER,
+                            "intensity_median"	INTEGER,
+                            "intensity_maximum"	INTEGER,
+                            "intensity_minimum"	INTEGER,
+                            "intensity_std"	INTEGER,
+                            "eccentricity"	INTEGER,
+                            "roundness"	INTEGER,
+                            "ellipse_center"	TEXT,
+                            "ellipse_major"	INTEGER,
+                            "ellipse_minor"	INTEGER,
+                            "ellipse_angle"	INTEGER,
+                            "ellipse_area"	INTEGER,
+                            "orientation_vector"	TEXT,
+                            "ellipticity"	INTEGER,
+                            PRIMARY KEY("hash","image")
             ) WITHOUT ROWID;
             COMMIT;
             '''
         )
+        # TODO
         # Create the standard settings
         cursor.executescript(
             '''
@@ -365,13 +367,16 @@ class NucDetect(QMainWindow):
         :param url: The path of the folder
         :return: None
         """
+        start = time.time()
         paths = []
         for t in os.walk(url):
             for file in t[2]:
                 paths.append(os.path.join(t[0], file))
         items = Util.create_image_item_list_from(paths, indicate_progress=True)
+        print("Add items to list")
         for item in items:
             self.add_item_to_list(item)
+        print(f"Finished: {time.time() - start: .2f} secs")
 
     def add_item_to_list(self, item: QStandardItem) -> None:
         """
@@ -473,10 +478,9 @@ class NucDetect(QMainWindow):
         self.roi_cache = data["handler"]
         s0 = time.time()
         self.prg_signal.emit(f"Ellipse parameter calculation", maxi * 0.75, maxi, "")
-        with ThreadPoolExecutor(max_workers=None) as e:
-            for roi in self.roi_cache:
-                if roi.main:
-                    e.submit(roi.calculate_ellipse_parameters)
+        for roi in self.roi_cache:
+            if roi.main:
+                roi.calculate_ellipse_parameters()
         self.prg_signal.emit("Creating result table", maxi * 0.65, maxi, "")
         print(f"Calculation of ellipse parameters: {time.time() - s0:.4f}")
         self.create_result_table_from_list(data["handler"])
@@ -488,7 +492,7 @@ class NucDetect(QMainWindow):
         self.prg_signal.emit(message.format(f"{time.time() - start:.2f} secs"),
                              percent, maxi, "")
         self.enable_buttons()
-        self.ui.btn_analyse.setEnabled(False)
+        #self.ui.btn_analyse.setEnabled(False)
         self.ui.list_images.setEnabled(True)
 
     def analyze_all(self) -> None:
@@ -505,6 +509,7 @@ class NucDetect(QMainWindow):
         code = anal_sett_dial.exec()
         if code == QDialog.Accepted:
             settings = anal_sett_dial.get_data()
+            print(settings)
         else:
             # If the dialog was rejected, abort analysis
             return
@@ -535,7 +540,7 @@ class NucDetect(QMainWindow):
             curind = 0
             # Define needed batch variables
             start = batch_size + 1 if batch_size < len(paths) else len(paths) + 1
-            stop = len(paths) + batch_size if len(paths) > batch_size else len(paths) + 1
+            stop = len(paths) + batch_size if len(paths) > batch_size else len(paths) + 2
             step = batch_size
             # Iterate over all images in batches
             for b in range(start, stop, step):
@@ -544,6 +549,7 @@ class NucDetect(QMainWindow):
                 t_setts = [settings for _ in range(len(paths))]
                 res = e.map(self.detector.analyse_image, tpaths, t_setts)
                 maxi = len(paths)
+
                 for r in res:
                     self.prg_signal.emit(f"Analysed images: {ind}/{maxi}",
                                          ind, maxi, "")
@@ -555,7 +561,6 @@ class NucDetect(QMainWindow):
                       f"Total: {time.time() - start_time:.3f} secs")
                 curind = b
                 cur_batch += 1
-            self.roi_cache = list(res)[:-1]
             self.enable_buttons()
             self.ui.list_images.setEnabled(True)
             self.detector.logging = logstate
@@ -572,7 +577,7 @@ class NucDetect(QMainWindow):
         print(f"Total analysis time: {time.time() - start_time:.3f} secs")
 
     def save_rois_to_database(self,
-                              data: Dict[str, Union[int, float, str]],
+                              data: Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]],
                               all: bool = False) -> None:
         """
         Method to save the data stored in the ROIHandler rois to the database
@@ -609,11 +614,16 @@ class NucDetect(QMainWindow):
             )
         # Check if image should be added to experiment
         if data["add to experiment"]:
-            exp_data = data["experiment"]
+            exp_data = data["experiment details"]
             # Add new experiment
             curs.execute(
                 "INSERT OR IGNORE INTO experiments VALUES (?, ?, ?)",
                 (exp_data["name"], exp_data["details"], exp_data["notes"])
+            )
+            # Add image to standard group
+            curs.execute(
+                "INSERT OR IGNORE INTO groups VALUES(?, ?, ?)",
+                (key, exp_data["name"], "Standard")
             )
             # Update experiment column in images table
             curs.execute(
@@ -637,17 +647,17 @@ class NucDetect(QMainWindow):
         for roi in data["handler"].rois:
             dim = roi.calculate_dimensions()
             ellp = roi.calculate_ellipse_parameters()
-            stats = roi.calculate_statistics()
+            # Get the channel of the roi
+            stats = roi.calculate_statistics(data["channels"][data["handler"].idents.index(roi.ident)])
             asso = hash(roi.associated) if roi.associated is not None else None
             roidat.append((hash(roi), key, True, roi.ident, str(dim["center"]), dim["width"], dim["height"], asso))
-            for p in roi.points:
-                pdat.append((hash(roi), p[0], p[1], roi.inten[p]))
+            for p in roi.area:
+                pdat.append((hash(roi), p[0], p[1], p[2]))
             elldat.append(
                 (hash(roi), key, stats["area"], stats["intensity average"], stats["intensity median"],
                  stats["intensity maximum"], stats["intensity minimum"], stats["intensity std"],
-                 str(ellp["center"]), str(ellp["major_axis"][0]), str(ellp["major_axis"][1]),
-                 ellp["major_slope"], ellp["major_length"], ellp["major_angle"], str(ellp["minor_axis"][0]),
-                 str(ellp["minor_axis"][1]), ellp["minor_length"], ellp["shape_match"])
+                 ellp["eccentricity"], ellp["roundness"], str(ellp["center"]), ellp["major_axis"], ellp["minor_axis"],
+                 ellp["angle"], ellp["area"], str(ellp["orientation"]), ellp["shape_match"])
             )
         # Save data to database
         curs.executemany(
@@ -659,7 +669,7 @@ class NucDetect(QMainWindow):
             pdat
         )
         curs.executemany(
-            "INSERT OR IGNORE INTO statistics VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO statistics VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             elldat
         )
         curs.execute(
@@ -697,9 +707,9 @@ class NucDetect(QMainWindow):
         sec = []
         statkeys = ("area", "intensity average",
                     "intensity median", "intensity maximum",
-                    "intensity minimum", "intensity std")
-        ellkeys = ("center", "major_axis", "major_slope", "major_length",
-                   "major_angle", "minor_axis", "minor_length", "shape_match")
+                    "intensity minimum", "intensity std", "eccentricity", "roundness")
+        ellkeys = ("center", "major_axis", "minor_axis", "angle",
+                   "orientation", "area", "shape_match")
         ind = 1
         max = len(entries)
         for entry in entries:
@@ -711,28 +721,37 @@ class NucDetect(QMainWindow):
                 "SELECT * FROM statistics WHERE hash = ?",
                 (entry[0],)
             ).fetchall()[0]
-            temproi.stats = dict(zip(statkeys, stats[2:8]))
+            temproi.stats = dict(zip(statkeys, stats[2:10]))
             if temproi.main:
                 main_.append(temproi)
             else:
                 sec.append(temproi)
+            rle = []
             for p in crs.execute(
                     "SELECT * FROM points WHERE hash = ?",
                     (entry[0],)
             ).fetchall():
-                temproi.add_point((p[1], p[2]), p[3])
+                rle.append((p[1], p[2], p[3]))
+            temproi.add_to_area(rle)
             if temproi.main:
-                center = re.search(r"\((\d*)\D*(\d*)\)?", stats[8])
-                maj = re.search(r"\((\d*)\D*(\d*)\)?", stats[9]), re.search(r"\((\d*)\D*(\d*)\)?", stats[10])
-                mino = re.search(r"\((\d*)\D*(\d*)\)?", stats[14]), re.search(r"\((\d*)\D*(\d*)\)?", stats[15])
+                center = re.search(r"\((\d*)\D*(\d*)\)?", stats[10])
                 center = (int(center.group(1)), int(center.group(2)))
-                major = (int(maj[0].group(1)), int(maj[0].group(2))), (int(maj[1].group(1)), int(maj[1].group(2)))
-                minor = (int(mino[0].group(1)), int(mino[0].group(2))), (int(mino[1].group(1)), int(mino[1].group(2)))
+                major = stats[11]
+                minor = stats[12]
+                angle = stats[13]
+                area = stats[14]
+                ov = re.search(r"\((-?\d*\.\d*)\D*(-?\d*\.\d*)\)?", stats[15])
+                ov = (float(ov.group(1)), float(ov.group(2)))
+                ellip = stats[16]
             else:
                 center = (None, None)
-                major = (None, None), (None, None)
-                minor = (None, None), (None, None)
-            ellp = (center, major, stats[11], stats[12], stats[13], minor, stats[16], stats[17])
+                major = None
+                minor = None
+                angle = None
+                area = None
+                ov = None, None
+                ellip = None
+            ellp = (center, major, minor, angle, ov, area, ellip)
             temproi.ell_params = dict(zip(ellkeys, ellp))
             rois.add_roi(temproi)
             ind += 1
@@ -973,6 +992,8 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
+        # TODO Reimplement
+        return
         mod = ModificationDialog(image=Detector.load_image(self.cur_img["path"]), handler=self.roi_cache)
         mod.setWindowTitle(f"Modification Dialog for {self.cur_img['file_name']}")
         mod.setWindowIcon(QtGui.QIcon("logo.png"))
@@ -1050,7 +1071,7 @@ def main() -> None:
         pixmap = QPixmap("banner_norm.png")
         splash = QSplashScreen(pixmap)
         splash.show()
-        splash.showMessage("Loading")
+        splash.showMessage("Loading...")
         main_win = NucDetect()
         splash.finish(main_win)
         main_win.show()

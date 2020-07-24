@@ -75,7 +75,6 @@ class BoxPlotItem(pg.GraphicsObject):
         self.p_data = []
         self.generate_picture(self.kwargs)
 
-
     def generate_picture(self, kwargs) -> None:
         """
         Method to plot the dictionary data.
@@ -104,7 +103,7 @@ class BoxPlotItem(pg.GraphicsObject):
         max = -1
         # Get max y value
         if num_data == 1:
-            for val in raw_data:
+            for val in raw_data[0]:
                 if val > max:
                     max = val
         else:
@@ -116,7 +115,7 @@ class BoxPlotItem(pg.GraphicsObject):
             fill.setColor(self.FILL_COLORS[i % 3])
             outlines.setColor(self.FILL_COLORS[i % 3].lighter())
             num = i * 10
-            data = self._calculate_plotting_data(raw_data[i] if num_data > 1 else raw_data)
+            data = self._calculate_plotting_data(raw_data[i] if num_data > 1 else raw_data[0])
             self.p_data.append(data)
             # Set up the painter
             p.setPen(outlines)

@@ -22,7 +22,6 @@ IMAGE_FORMATS = [
         ".bmp"
 ]
 
-
 def create_scroll_area(layout_type: bool = False,
                        widget_resizable: bool = True) -> Tuple[QScrollArea, Union[QVBoxLayout, QHBoxLayout]]:
     """

@@ -1,12 +1,53 @@
 import math
 import numpy as np
 
-from typing import Tuple, Union, List
-from numba import jit
+from typing import Tuple, Union, List, Iterable
+from numba import njit
 from numba.typed import List as nList
 
 
-@jit(nopython=True)
+@njit(cache=True)
+def get_region_outlines(binary_map: np.ndarray) -> np.ndarray:
+    """
+    Function to get the outlines of the given binary map
+
+    :param binary_map: The map to get the outlines from
+    :return:The outlines as array
+    """
+    # Create contour map
+    contours = np.zeros(shape=binary_map.shape)
+    # Check for alternation of black and white pixels
+    for y in range(1, binary_map.shape[0], 1):
+        for x in range(1, binary_map.shape[1], 1):
+            label = binary_map[y][x]
+            # Get previous labels for both axis
+            plabel_x = binary_map[y][x - 1]
+            plabel_y = binary_map[y - 1][x]
+            # Check for alternation
+            if label + plabel_x == 1 or label + plabel_y == 1:
+                if label:
+                    contours[y][x] = 1
+                else:
+                    if plabel_y:
+                        contours[y - 1][x] = 1
+                    if plabel_x:
+                        contours[y][x] = 1
+    return contours
+
+
+@njit(cache=True)
+def convert_to_map(area: Iterable[Tuple]) -> np.ndarray:
+    """
+    Converion of a run length encoded region to an array
+
+    :param area: The encoded area
+    :return: The created binary map
+    """
+    height, width = np.average([])
+    pass
+
+
+@njit(cache=True)
 def automatic_whitebalance(image: np.ndarray, cutoff: float = 0.05) -> np.ndarray:
     """
     Function to perform automatic white balance for an image
@@ -40,7 +81,7 @@ def automatic_whitebalance(image: np.ndarray, cutoff: float = 0.05) -> np.ndarra
             x[...] = ratio * x
     return image
 
-@jit(nopython=True, cache=True)
+@njit(cache=True)
 def eu_dist(p1: Tuple[int, int], p2: Tuple[int, int]) -> float:
     """
     Function to calculate the euclidean distance between two two dimensional points
@@ -74,7 +115,7 @@ def create_circular_mask(h: Union[int, float], w: Union[int, float],
     return mask
 
 
-@jit(nopython=True, cache=True)
+@njit(cache=True)
 def relabel_array(array: np.ndarray) -> None:
     """
     Function to relabel a given binary map
@@ -89,7 +130,7 @@ def relabel_array(array: np.ndarray) -> None:
             array[y][x] = nums[unique.index(array[y][x])]
 
 
-@jit(nopython=True, cache=True)
+@njit(cache=True)
 def get_major_axis(points: nList) -> Tuple[Tuple[int, int], Tuple[int, int]]:
     """
     Function to get the two points with the highest distance from a list of points
@@ -112,7 +153,7 @@ def get_major_axis(points: nList) -> Tuple[Tuple[int, int], Tuple[int, int]]:
     return p0, p1
 
 
-@jit(nopython=True, cache=True)
+@njit(cache=True)
 def get_minor_axis(points: nList, p0: Tuple[int, int], p1: Tuple[int, int]) -> Tuple[Tuple[int, int],
                                                                                      Tuple[int, int]]:
     """
@@ -151,7 +192,7 @@ def get_minor_axis(points: nList, p0: Tuple[int, int], p1: Tuple[int, int]) -> T
     return center, pmin
 
 
-@jit(nopython=True, cache=True)
+@njit(cache=True)
 def imprint_data_into_channel(channel: np.ndarray, data: np.ndarray, offset: Union[int, float]) -> None:
     """
     Function to transfer the information stored in data into channel. Works in place

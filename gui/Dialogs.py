@@ -1,11 +1,10 @@
 import json
 import math
 import sqlite3
-from typing import List, Any, Tuple, Dict, Union
+from typing import List, Any, Tuple, Dict, Union, Iterable
 
 import numpy as np
 import pyqtgraph as pg
-import qtawesome as qta
 from PIL import Image
 from PIL.ImageQt import ImageQt
 from PyQt5 import QtGui, QtCore, uic
@@ -18,8 +17,9 @@ from PyQt5.QtWidgets import QDialog, QMessageBox, QInputDialog, QCheckBox, QVBox
 from skimage.draw import ellipse
 
 from core.Detector import Detector
-from core.ROI import ROI
-from core.ROIHandler import ROIHandler
+from core.roi import AreaAnalysis
+from core.roi.ROI import ROI
+from core.roi.ROIHandler import ROIHandler
 from gui import Paths, Util
 from gui.Definitions import Icon
 from gui.Plots import BoxPlotWidget, PoissonPlotWidget
@@ -77,6 +77,8 @@ class AnalysisSettingsDialog(QDialog):
         """
         # Load UI definition
         self.ui = uic.loadUi(Paths.ui_analysis_settings_dial, self)
+        self.setWindowIcon(Icon.get_icon("LOGO"))
+        self.setWindowTitle("Analysis Settings")
         # Check if single image analysis or multi image analysis is performed
         if not self.all:
             self.ui.cbx_reanalyse.hide()
@@ -1087,6 +1089,7 @@ class ImgDialog(QDialog):
     def initialize_ui(self) -> None:
         self.setWindowTitle("Result Dialog")
         self.setWindowIcon(Icon.get_icon("LOGO"))
+        self.setToolTip("Dashed yellow line: Detected ellipsis with major and minor axis\nMagenta: Main axis")
         for ident in self.handler.idents:
             # Add an selection item to combobox
             self.ui.cbx_channels.addItem(ident)
@@ -1098,40 +1101,49 @@ class ImgDialog(QDialog):
             dims = roi.calculate_dimensions()
             if roi.main:
                 params = roi.calculate_ellipse_parameters()
-                c = params["center"][1], params["center"][0]
-                d1 = params["minor_length"]
-                d2 = params["major_length"]
-                slope = params["major_slope"]
-                item = QGraphicsEllipseItem(-d1 / 2, -d2 / 2, d1, d2)
-                # Get the angle of the major axis
-                angle = params["major_angle"]
-                item.setData(0, self.nuc_pen)
-                item.setData(1, roi.main)
+                cy, cx = params["center"][0], params["center"][1]
+                d1 = params["minor_axis"]
+                d2 = params["major_axis"]
+                angle = params["angle"]
+                ovx, ovy = params["orientation"]
+                ellipse = QGraphicsEllipseItem(0, 0, d2 * 2, d1 * 2)
+                ellipse.setData(0, self.nuc_pen)
+                ellipse.setData(1, roi.main)
                 # Rotate the ellipse according to the angle
-                item.setTransformOriginPoint(item.sceneBoundingRect().center())
-                item.setRotation(-90 + angle if slope > 0 else 90 - angle)
-                item.setPos(c[0], c[1])
-                major = params["major_axis"]
-                maj = QGraphicsLineItem(major[0][1], major[0][0], major[1][1], major[1][0])
-                maj.setData(0, self.nuc_pen)
-                minor = params["minor_axis"]
-                min_ = QGraphicsLineItem(minor[0][1], minor[0][0], minor[1][1], minor[1][0])
-                min_.setData(0, self.nuc_pen)
-                self.items[ind].append(maj)
-                self.items[ind].append(min_)
-                self.plot_item.addItem(maj)
-                self.plot_item.addItem(min_)
+                ellipse.setTransformOriginPoint(ellipse.sceneBoundingRect().center())
+                ellipse.setRotation(-angle)
+                ellipse.setPos(cx - d2, cy - d1)
+                # Draw main axis
+                main_axis = QGraphicsLineItem(cx - ovx * 25, cy - ovy * 25,
+                                              cx + ovx * 25, cy + ovy * 25)
+                main_axis.setData(0, ImgDialog.MARKERS[4])
+                # Draw major axis
+                major_axis = QGraphicsLineItem(-d2, 0, d2, 0)
+                major_axis.setData(0, self.nuc_pen)
+                major_axis.setPos(cx, cy)
+                major_axis.setRotation(-angle)
+                self.items[ind].append(major_axis)
+                # Draw minor axis
+                minor_axis = QGraphicsLineItem(-d1, 0, d1, 0)
+                minor_axis.setData(0, self.nuc_pen)
+                minor_axis.setPos(cx, cy)
+                minor_axis.setRotation(-angle + 90)
+                self.items[ind].append(major_axis)
+                self.items[ind].append(main_axis)
+                self.items[ind].append(minor_axis)
+                self.plot_item.addItem(main_axis)
+                self.plot_item.addItem(major_axis)
+                self.plot_item.addItem(minor_axis)
             else:
                 c = dims["minX"], dims["minY"]
                 d2 = dims["height"]
                 d1 = dims["width"]
-                item = QGraphicsEllipseItem(c[0], c[1], d1, d2)
-                item.setData(0, self.MARKERS[ind])
-                item.setData(1, roi.main)
-            self.items[ind].append(item)
-            self.plot_item.addItem(item)
+                ellipse = QGraphicsEllipseItem(c[0], c[1], d1, d2)
+                ellipse.setData(0, self.MARKERS[ind])
+                ellipse.setData(1, roi.main)
+            self.items[ind].append(ellipse)
+            self.plot_item.addItem(ellipse)
         # Add information
-        stats = self.handler.calculate_statistics()
         assmap = Detector.create_association_map(self.handler)
         self.ui.channel_selector.addWidget(QLabel(f"Nuclei: {len(assmap)}"))
         empty = [key for key, val in assmap.items() if len(val) == 0]
@@ -1676,6 +1688,20 @@ class ModificationDialog(QDialog):
         """
         self.ui.lbl_number.setText("Foci: {}".format(self.view.cur_foc_num))
 
+class EditorView(pg.GraphicsView):
+    COLORS = [
+        QColor(255, 50, 0),  # Red
+        QColor(50, 255, 0),  # Green
+        QColor(255, 255, 0),  # Yellow
+        QColor(255, 0, 255),  # Magenta
+        QColor(0, 255, 255),  # Cyan
+    ]
+
+    def __init__(self):
+        super(EditorView, self).__init__()
+
+    def show_nucleus(self, nucleus: ROI, ) -> None:
+        pass
 
 class NucView(QGraphicsView):
 
@@ -1718,7 +1744,8 @@ class NucView(QGraphicsView):
         scene.setSceneRect(0, 0, self.width(), self.height())
         self.setScene(scene)
         for nuc in self.main:
-            self.images.append(self.convert_roi_to_numpy(nuc))
+            ind = self.handler.idents.index(nuc.ident)
+            self.images.append(AreaAnalysis.convert_area_to_array(nuc.area, image[..., ind]))
         # Initialization of the background image
         self.sc_bckg = self.scene().addPixmap(QPixmap())
         self.show_nucleus(self.cur_ind, self.channel)
@@ -1726,6 +1753,7 @@ class NucView(QGraphicsView):
     def show_nucleus(self, cur_ind: int, channel: int) -> None:
         """
         Method to show a channel of the nucleus specified by index
+
         :param cur_ind: The index of the nucleus
         :param channel: The channel to show
         :return: None
@@ -1734,9 +1762,12 @@ class NucView(QGraphicsView):
         self.cur_nuc = self.main[cur_ind]
         self.channel = channel
         self.scene().setSceneRect(0, 0, self.width() - 5, self.height() - 5)
+        # Extract image channel
+        cur_img = self.image[..., channel] if channel < len(self.handler.idents) else self.image
         pmap = QPixmap()
         pmap.convertFromImage(NucView.get_qimage_from_numpy(
-            self.convert_roi_to_numpy(self.cur_nuc), mode="RGB" if self.channel > self.max_channel else "L"))
+            self.area_to_numpy(self.cur_nuc.area, cur_img),
+            mode="RGB" if self.channel > self.max_channel else "L"))
         tempmap = pmap.scaled(self.width(), self.height(), Qt.KeepAspectRatio)
         self.sc_bckg.setPixmap(tempmap)
         x_scale = tempmap.width() / pmap.width()
@@ -1766,6 +1797,21 @@ class NucView(QGraphicsView):
                     self.foc_group.append(foc)
                     self.scene().addItem(foc)
                     self.cur_foc_num += 1
+
+    @staticmethod
+    def area_to_numpy(area: Iterable[Tuple[int, int ,int]], image: np.ndarray) -> np.ndarray:
+        """
+        Function to convert a given area to a numpy
+
+        :param area: The area to convert
+        :param image: The image the area is derived from
+        :return: The extracted area
+        """
+        if len(image.shape) > 2:
+            return AreaAnalysis.convert_area_to_array(area, image)
+        else:
+            return AreaAnalysis.convert_area_to_binary_map(area)
+
 
     @staticmethod
     def get_qimage_from_numpy(numpy: np.ndarray, mode: str = None) -> ImageQt:
@@ -1885,13 +1931,11 @@ class NucView(QGraphicsView):
             nuc_dat = self.cur_nuc.calculate_dimensions()
             x_offset = nuc_dat["minX"]
             y_offset = nuc_dat["minY"]
-            for y in range(len(mask)):
-                for x in range(len(mask[0])):
-                    if mask[y][x] > 0:
-                        inten = cur_nump[y][x]
-                        cur_roi.add_point((x + x_offset, y + y_offset), inten)
-                        self.commands.append(("INSERT INTO points VALUES(?, ?, ?, ?)",
-                                              (-1, x + x_offset, y + y_offset, np.int(inten))))
+            area = Detector.encode_areas(mask)["1"]
+            cur_roi.set_area(area)
+            for rl in area:
+                self.commands.append(("INSERT INTO points VALUES(?, ?, ?)",
+                                     (-1, rl[0] + y_offset, rl[1] + x_offset, rl[2])))
             self.handler.rois.append(cur_roi)
             roidat = cur_roi.calculate_dimensions()
             stats = cur_roi.calculate_statistics()
@@ -1906,9 +1950,8 @@ class NucView(QGraphicsView):
                  ("INSERT OR IGNORE INTO statistics VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                   (hash(cur_roi), imghash, stats["area"], stats["intensity average"], stats["intensity median"],
                    stats["intensity maximum"], stats["intensity minimum"], stats["intensity std"],
-                   str(ellp["center"]), str(ellp["major_axis"][0]), str(ellp["major_axis"][1]),
-                   ellp["major_slope"], ellp["major_length"], ellp["major_angle"], str(ellp["minor_axis"][0]),
-                   str(ellp["minor_axis"][1]), ellp["minor_length"], ellp["shape_match"])))
+                   ellp["eccentricity"], ellp["roundness"], str(ellp["center"]), ellp["major_axis"], ellp["minor_axis"],
+                   ellp["angle"],  ellp["shape_match"])))
             )
             self.foc_group.append(self.temp_foc)
             self.map[self.temp_foc] = cur_roi
@@ -1919,7 +1962,7 @@ class NucView(QGraphicsView):
             self.cur_foc_num += 1
             self.par.update_counting_label()
         elif self.temp_split is not None:
-            cur_nump = self.main[self.cur_ind].get_as_numpy()
+            cur_nump = AreaAnalysis.convert_area_to_array(self.main[self.cur_ind])
             offset_factor = self.sc_bckg.boundingRect().height() / len(cur_nump)
             hard_offset = self.sc_bckg.pos()
             nuc_dat = self.cur_nuc.calculate_dimensions()
@@ -1935,6 +1978,7 @@ class NucView(QGraphicsView):
             # Compare each point of nucleus with line
             aroi = ROI(channel=self.cur_nuc.ident)
             broi = ROI(channel=self.cur_nuc.ident)
+            # TODO fix
             # Compare each center of foci with line
             for p in self.cur_nuc.points:
                 ly = m * p[0] + n

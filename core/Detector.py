@@ -7,8 +7,8 @@ import datetime
 import hashlib
 import os
 import time
-from typing import Union, Dict, List, Tuple, Any
 import matplotlib.pyplot as plt
+from typing import Union, Dict, List, Tuple, Any, Iterable
 
 import numpy as np
 import piexif
@@ -19,12 +19,13 @@ from skimage.draw import circle
 from skimage.feature import canny, blob_log
 from skimage.filters import threshold_local
 from skimage.filters.rank import maximum
-from skimage.morphology import watershed, dilation
-from skimage.morphology.binary import binary_opening, binary_erosion, binary_dilation
+from skimage.segmentation import watershed
+from skimage.morphology import dilation
+from skimage.morphology.binary import binary_opening, binary_erosion
 
 from core.JittedFunctions import eu_dist, create_circular_mask, relabel_array, imprint_data_into_channel
-from core.ROI import ROI
-from core.ROIHandler import ROIHandler
+from core.roi.ROI import ROI
+from core.roi.ROIHandler import ROIHandler
 from fcn.FCN import FCN
 
 
@@ -77,13 +78,14 @@ class Detector:
         main_channel = analysis_settings["main"]
         # Channel extraction
         channels = Detector.get_channels(image)
+        plt.title(str(analysis_settings["activated"]))
         active = analysis_settings["activated"]
         # Check if all channels are activated
         names = [names[x] for x in range(len(names)) if active[x]]
         channels = [channels[x] for x in range(len(channels)) if active[x]]
         # Adjust the index of the main channel
         for x in range(main_channel):
-            main_channel -= 1 if active[x] else 0
+            main_channel -= 1 if not active[x] and x < main_channel else 0
         if not analysis_settings["type"]:
             # Channel thresholding
             thresh_chan = Detector.threshold_channels(channels, main_channel)
@@ -106,23 +108,25 @@ class Detector:
             rois = Detector.ml_roi_extraction(channels, foci, names,
                                               main_map=main_channel,
                                               logging=logging)
+
         handler = ROIHandler(ident=imgdat["id"])
         for roi in rois:
             handler.add_roi(roi)
         handler.idents = names
         imgdat["handler"] = handler
         imgdat["names"] = names
+        imgdat["channels"] = channels
         imgdat["active channels"] = active
         imgdat["main channel"] = main_channel
         imgdat["add to experiment"] = analysis_settings["add_to_experiment"]
         imgdat["experiment details"] = analysis_settings["experiment_details"]
-        Detector.log(f"Total analysis time: {time.time()-start:.4f}", logging)
+        Detector.log(f"Total analysis time: {time.time() - start: .4f}", logging)
         return imgdat
 
     @staticmethod
-    def ml_roi_extraction(channels: List[np.ndarray], bin_maps: List[np.ndarray],
-                          names: List[str], main_map: int = 2,
-                          logging: bool = True) -> List[ROI]:
+    def ml_roi_extraction(channels: Iterable[np.ndarray], bin_maps: Iterable[np.ndarray],
+                          names: Iterable[str], main_map: int = 2,
+                          logging: bool = True) -> Iterable[ROI]:
         s0 = time.time()
         rois = []
         markers, lab_nums = Detector.perform_labelling(bin_maps, main_map=main_map)
@@ -158,9 +162,9 @@ class Detector:
         return rois
 
     @staticmethod
-    def classic_roi_extraction(channels: List[np.ndarray], bin_maps: List[np.ndarray],
-                               names: List[str], main_map: int = 2, quality_check: bool = True,
-                               logging: bool = True) -> List[ROI]:
+    def classic_roi_extraction(channels: Iterable[np.ndarray], bin_maps: Iterable[np.ndarray],
+                               names: Iterable[str], main_map: int = 2, quality_check: bool = True,
+                               logging: bool = True) -> Iterable[ROI]:
         """
         Method to extract ROI objects from the given binary maps
 
@@ -215,12 +219,12 @@ class Detector:
         rois.extend(main)
         Detector.log(f"Finished second focus extraction {time.time() - s2:.4f}", logging)
         if quality_check:
-            Detector.perform_roi_quality_check(rois, logging=logging)
+            Detector.perform_roi_quality_check(rois, channels, names, logging=logging)
         return rois
 
     @staticmethod
-    def extract_roi_from_main_map(binary_maps: List[np.ndarray], lab_nums: List[int],
-                                  channels: List[np.ndarray], main_map: int, names: List[str]) -> List[ROI]:
+    def extract_roi_from_main_map(binary_maps: Iterable[np.ndarray], lab_nums: Iterable[int],
+                                  channels: Iterable[np.ndarray], main_map: int, names: Iterable[str]) -> Iterable[ROI]:
         """
         Method to extract the main roi
 
@@ -232,20 +236,51 @@ class Detector:
         :return: A list of extracted ROI
         """
         main_markers = binary_maps[main_map] if not isinstance(binary_maps, np.ndarray) else binary_maps
-        num = lab_nums[main_map] + 1 if not isinstance(binary_maps, np.ndarray) else lab_nums + 1
-        main = [None] * num
-        # Extraction of main rois
-        for y in range(len(main_markers)):
-            for x in range(len(main_markers[0])):
-                lab = main_markers[y][x]
-                if lab != 0:
-                    if main[lab] is None:
-                        roi = ROI(channel=names[main_map], main=True)
-                        roi.add_point((x, y), int(channels[main_map][y][x]))
-                        main[lab] = roi
-                    else:
-                        main[lab].add_point((x, y), int(channels[main_map][y][x]))
+        # Define list for main roi
+        main = []
+        # Get RLE for map
+        areas = Detector.encode_areas(main_markers)
+        for _, rl in areas.items():
+            roi = ROI(channel=names[main_map], main=True)
+            roi.set_area(rl)
+            main.append(roi)
         return main
+
+    @staticmethod
+    def encode_areas(area_map: np.ndarray) -> Dict[int, List[Tuple[int, int]]]:
+        """
+        Method to extract individual areas from the given binary map.
+
+        :param area_map: The map to extract the areas from
+        :return: Dictionary containing the label for each area as well as the associated area given bei image row
+        and run length
+        """
+        height, width = area_map.shape
+        # Define dict for detected areas
+        areas = {}
+        # Iterate over map
+        for y in range(height):
+            x = 0
+            while x < width:
+                # Get label at y:x
+                label = area_map[y][x]
+                if label != 0:
+                    if areas.get(label) is None:
+                        areas[label] = []
+                    col = x
+                    # run length
+                    rl = 0
+                    # Iterate over row
+                    while area_map[y][x] == label:
+                        rl += 1
+                        x += 1
+                        # Break if x reaches border
+                        if x == width:
+                            break
+                    areas[label].append((y, col, rl))
+                else:
+                    x += 1
+        return areas
 
     @staticmethod
     def extract_rois_from_map(binary_maps: List[np.ndarray], lab_nums: List[int],
@@ -265,6 +300,17 @@ class Detector:
         rois: List[ROI] = []
         for ind in range(len(binary_maps)):
             if ind != main_map:
+                areas = Detector.encode_areas(binary_maps[ind])
+                for _, rl in areas.items():
+                    # Define focus roi
+                    roi = ROI(channel=names[ind], main=False)
+                    roi.set_area(rl)
+                    # Get associated main roi
+                    y, x = roi.calculate_dimensions()["center"]
+                    if binary_maps[main_map][y][x] > 0:
+                        roi.associated = main[binary_maps[main_map][y][x] - 1]
+                        rois.append(roi)
+                """
                 temprois = [None] * (lab_nums[ind] + 1)
                 for y in range(len(binary_maps[ind])):
                     for x in range(len(binary_maps[ind][0])):
@@ -283,18 +329,20 @@ class Detector:
                                 temprois[lab].add_point((x, y), int(channels[ind][y][x]))
                 del temprois[0]
                 rois.extend(temprois)
+                """
         return rois
 
     @staticmethod
-    def perform_roi_quality_check(rois: List[ROI], max_focus_overlapp: float = .75, min_dist: int = 45,
-                                  min_thresh: int = 25, max_thresh: int = 60, min_main_area: int = 400,
-                                  min_foc_area: int = 5, max_main_area: int = 16000, ws_line: bool = False,
+    def perform_roi_quality_check(rois: List[ROI], channels: Iterable[np.ndarray], channel_names: Iterable[str],
+                                  max_focus_overlapp: float = .75, min_main_area: int = 400, min_foc_area: int = 5,
                                   logging: bool = True) -> None:
         """
         Method to check detected rois for their quality. Changes ROI in place.
 
         :param min_foc_area: The minimal area of a focus
         :param rois: A list of detected rois
+        :param channels: List of channels the roi are derived from
+        :param channel_names: Identifier for each channel as list
         :param max_focus_overlapp: The threshold used to determine if two rois are considered duplicates
         :param min_dist: The minimal distance between 2 nuclei
         :param min_thresh: The lower percentile to check for oversegmentation
@@ -309,7 +357,7 @@ class Detector:
         temp = []
         main = []
         foci = []
-        s7 = time.time()
+        s0 = time.time()
         for roi in rois:
             if roi.main:
                 main.append(roi)
@@ -317,17 +365,15 @@ class Detector:
             else:
                 foci.append(roi)
         Detector.log(f"Detected nuclei:{len(main)}\nDetected foci: {len(foci)}", logging)
-        Detector.log("Checking for very small nuclei", logging)
         # Remove very small or extremly large main ROI
         #main = [x for x in main if 1000 < len(x) < 15000]
-        Detector.log(f"Time: {time.time() - s7:4f}\nRemove not associated foci", logging)
-        s8 = time.time()
+        Detector.log(f"Checking for very small nuclei: {time.time() - s0: .4f} secs\nRemove not associated foci", logging)
+        s1 = time.time()
         # Remove foci that are either unassociated or whose nucleus was deleted
         maincop = main.copy()
         maincop.extend(foci)
         ass = {key: value for key, value in Detector.create_association_map(maincop).items() if
               len(key) > min_main_area}
-        Detector.log(f"Assmap-Creation: {time.time() - s8}", logging)
         mainlen = len(main)
         main = [x for x, _ in ass.items()]
         Detector.log(f"Removed nuclei: {mainlen - len(main)}", logging)
@@ -336,13 +382,14 @@ class Detector:
         Detector.log(f"Removed unassociated foci: {foclen - len(foci)}", logging)
         # Remove very small foci
         foci = [x for x in foci if len(x) > min_foc_area]
-        Detector.log(f"Total Removed foci: {foclen - len(foci)}\nTime: {time.time() - s8:4f}\nFocus Quality Check",
+        Detector.log(f"Total Removed foci: {foclen - len(foci)}\nTime: {time.time() - s1: .4f} secs",
                      logging)
         # Focus quality check
-        s4 = time.time()
+        s2 = time.time()
         for ind in range(len(foci)):
             focus = foci[ind]
-            focint = focus.calculate_statistics()["intensity average"]
+            # TODO add channel
+            focint = focus.calculate_statistics(channels[channel_names.index(focus.ident)])["intensity average"]
             if focint < 20:
                 focus.marked = True
             focdim = focus.calculate_dimensions()
@@ -365,11 +412,11 @@ class Detector:
                                 break
         foci = [x for x in foci if not x.marked]
         rem_list.clear()
-        Detector.log(f"Time: {time.time() - s4:4f}", logging)
+        Detector.log(f"Focus Quality Check: {time.time() - s2: .4f}", logging)
         rois.clear()
         rois.extend(foci)
         rois.extend(main)
-        Detector.log(f"Total Quality Check Time: {time.time() - s7}", logging)
+        Detector.log(f"Total Quality Check Time: {time.time() - s0: .4f} secs", logging)
 
     @staticmethod
     def create_association_map(rois: List[ROI]) -> Dict[ROI, List[ROI]]:
@@ -487,6 +534,7 @@ class Detector:
         :param pad: Padding used to account for edge areas (should be 1)
         :return: The thresholded channels
         """
+        start = time.time()
         thresh: List[Union[None, np.ndarray]] = [None] * len(channels)
         iterations = 5
         size = 7
@@ -502,6 +550,7 @@ class Detector:
         # Normalize edm
         xmax, xmin = edm.max(), edm.min()
         x = (edm - xmin) / (xmax - xmin)
+        # TODO convert to uint8
         # Determine maxima of EDM
         maxi = maximum(x, selem=selem)
         # Iteratively determine maximum
@@ -538,9 +587,7 @@ class Detector:
         ws = watershed(-edm, cmask, mask=ch_main_bin, watershed_line=True)
         # Check number of unique watershed labels
         unique = list(np.unique(ws))
-        t = time.time()
         relabel_array(ws)
-        Detector.log(f"Time relabeling: {time.time() - t}", False)
         thresh[main_channel] = ws
         # Extract nuclei from watershed
         det: List[Tuple[int, int]] = [None] * len(unique)
@@ -607,7 +654,6 @@ class Detector:
         :param img: The image as ndarray
         :return: A list of all channels
         """
-        t = time.time()
         channels = []
         for ind in range(img.shape[2]):
             channels.append(img[..., ind])
@@ -681,7 +727,7 @@ class Detector:
             raise Warning("Unsupported image format ->{}!".format(os.path.splitext(path)[1]))
 
     @staticmethod
-    def calculate_image_id(path: str) -> int:
+    def calculate_image_id(path: str) -> str:
         """
         Method to calculate the md5 hash sum of the image described by path
 

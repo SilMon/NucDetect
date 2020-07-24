@@ -46,6 +46,11 @@ The program can be started by running the NucDetectAppQT.py:
 cd %UserProfile%/AppData/local/Programs/Python/python37/Lib/site-packages/gui
 python -m NucDetectAppQT
 ```
+*First start*: Switch to the created NucDetect Folder, which will be created in User directory. Then place images you
+want to analyse into the images folder and click the reload button. This will load all images and create a thumbnail for
+each (needed to decrease the memory footprint of QT). This can take several minutes, depending on the number of images
+and used hardware (e.g. around 5 min for 2200 images on a Ryzen 3700X processor). Progress will be displayed in the
+command prompt.
 
 ### Supported Image Formats
 
@@ -54,6 +59,11 @@ Following image formats are supported by NucDetect:
 * PNG
 * JPG
 * BMP
+
+### Not supported
+
+* Grayscale images
+* Binary images
 
 ___
 
