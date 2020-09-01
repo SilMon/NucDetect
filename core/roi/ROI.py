@@ -54,6 +54,12 @@ class ROI:
         self.marked = marked
         self.id = None
 
+    def __add__(self, other):
+        if isinstance(other, ROI):
+            self.add_to_area(other.area)
+        else:
+            raise AttributeError("Addition only supported for ROI class!")
+
     def __eq__(self, other: ROI):
         if isinstance(other, ROI):
             return set(self.area) == set(other.area)

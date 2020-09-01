@@ -10,10 +10,10 @@ from PIL.ImageQt import ImageQt
 from PyQt5 import QtGui, QtCore, uic
 from PyQt5.QtCore import QItemSelection, QItemSelectionModel, QSize, Qt, QRectF
 from PyQt5.QtGui import QStandardItem, QStandardItemModel, QIcon, QPixmap, QColor, QResizeEvent, QKeyEvent, QMouseEvent, \
-    QBrush, QPen, QPainter
+    QBrush, QPen, QPainter, QWheelEvent
 from PyQt5.QtWidgets import QDialog, QMessageBox, QInputDialog, QCheckBox, QVBoxLayout, QFrame, QScrollArea, QWidget, \
     QLabel, QHBoxLayout, QSizePolicy, QGraphicsView, QGraphicsEllipseItem, QGraphicsPixmapItem, QGraphicsLineItem, \
-    QStyleOptionGraphicsItem, QGraphicsItem, QGraphicsScene
+    QStyleOptionGraphicsItem, QGraphicsItem, QGraphicsScene, QGraphicsRectItem, QGraphicsSceneHoverEvent
 from skimage.draw import ellipse
 
 from core.Detector import Detector
@@ -1688,21 +1688,6 @@ class ModificationDialog(QDialog):
         """
         self.ui.lbl_number.setText("Foci: {}".format(self.view.cur_foc_num))
 
-class EditorView(pg.GraphicsView):
-    COLORS = [
-        QColor(255, 50, 0),  # Red
-        QColor(50, 255, 0),  # Green
-        QColor(255, 255, 0),  # Yellow
-        QColor(255, 0, 255),  # Magenta
-        QColor(0, 255, 255),  # Cyan
-    ]
-
-    def __init__(self):
-        super(EditorView, self).__init__()
-
-    def show_nucleus(self, nucleus: ROI, ) -> None:
-        pass
-
 class NucView(QGraphicsView):
 
     def __init__(self, image: np.ndarray, handler: ROIHandler, commands: List[Tuple[str, Tuple[Any]]],
@@ -1829,6 +1814,7 @@ class NucView(QGraphicsView):
     def clear_scene(self) -> None:
         """
         Method to remove all displayed foci from the screen
+
         :return: None
         """
         for item in self.foc_group:
@@ -2109,3 +2095,673 @@ class QGraphicsFocusItem(QGraphicsEllipseItem):
             painter.setPen(QPen(self.cur_col, 3))
         painter.drawEllipse(self.rect())
         self.scene().update()
+
+
+class EditorView(pg.GraphicsView):
+    COLORS = [
+        QColor(255, 50, 0),  # Red
+        QColor(50, 255, 0),  # Green
+        QColor(255, 255, 0),  # Yellow
+        QColor(255, 0, 255),  # Magenta
+        QColor(0, 255, 255),  # Cyan
+    ]
+
+    def __init__(self, image: np.ndarray, roi: ROIHandler, parent: QDialog):
+        super(EditorView, self).__init__()
+        self.parent = parent
+        self.mode = -1
+        self.image = image
+        self.active_channel = None
+        self.roi = roi
+        self.plot_item = pg.PlotItem()
+        self.view = self.plot_item.getViewBox()
+        self.view.setAspectLocked(True)
+        self.view.invertY(True)
+        self.pos_track = True
+        self.img_item = pg.ImageItem()
+        self.plot_item.addItem(self.img_item)
+        self.plot_vb = self.plot_item.vb
+        # Set proxy to detect mouse movement
+        self.proxy = pg.SignalProxy(self.scene().sigMouseMoved, rateLimit=45, slot=self.mouse_moved)
+        self.mpos = 0, 0
+        # Activate mouse tracking for widget
+        self.setMouseTracking(True)
+        self.setCentralWidget(self.plot_item)
+        self.draw_additional = True
+        self.items = self.draw_roi()
+        self.temp_items = []
+        self.show_channel(3)
+
+    def draw_additional_items(self, state: bool = True) -> None:
+        """
+        Method to signal if additional items besides nuclei and foci should be drawn
+
+        :param state: Boolean decider
+        :return: None
+        """
+        self.draw_additional = state
+        ROIDrawer.draw_additional_items(self.items, self.draw_additional)
+
+    def show_channel(self, channel: int) -> None:
+        """
+        Method to show the specified channel of the image
+
+        :param channel: The index of the channel
+        :return: None
+        """
+        self.active_channel = channel
+        if channel == self.image.shape[2]:
+            self.img_item.setImage(self.image)
+        else:
+            self.img_item.setImage(self.image[..., channel])
+        ROIDrawer.change_channel(self.items, channel, self.draw_additional)
+
+    def change_mode(self, mode: int = 0) -> None:
+        """
+        Method to change the edit mode
+
+        :param mode: 0 for add new, 1 for edit
+        :return: None
+        """
+        self.mode = mode
+
+    def track_mouse_position(self, state: bool = True) -> None:
+        """
+        Enables mouse coordinate tracking
+
+        :param state: Boolean decider
+        :return: None
+        """
+        self.pos_track = state
+
+    def draw_roi(self) -> Iterable[QGraphicsEllipseItem]:
+        """
+        Method to draw the roi
+
+        :param active_channel: The channel to draw
+        :return: None
+        """
+        return ROIDrawer.draw_roi(self.plot_item, self.roi)
+
+    def get_roi_index(self, roi) -> int:
+        """
+        Method to get the channel index for the given ROI
+
+        :param roi: The ROI
+        :return: The channel index as int
+        """
+        return self.roi.idents.index(roi.ident)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        super().keyPressEvent(event)
+        mode = -1
+        if event.key() == Qt.Key_Delete:
+            mode = 1
+        elif event.key() == Qt.Key_Plus:
+            mode = 2
+        elif event.key() == Qt.Key_Minus:
+            mode = 3
+        elif event.key() == Qt.Key_1:
+            self.change_mode(0)
+        elif event.key() == Qt.Key_2:
+            self.change_mode(1)
+        elif event.key() == Qt.Key_3:
+            self.change_mode(2)
+        if mode != -1:
+            for item in self.scene().selectedItems():
+                rect: QRectF = item.boundingRect()
+                if mode == 1:
+                    if not item.data(2):
+                        self.temp_items.remove(item)
+                    self.scene().removeItem(item)
+                elif mode == 2:
+                    rect.adjust(
+                        rect.x() - 1,
+                        rect.y() - 1,
+                        rect.width() + 1,
+                        rect.height() + 1
+                    )
+                    self.item.setRect(rect)
+                elif mode == 3:
+                    rect.adjust(
+                        rect.x() + 1,
+                        rect.y() + 1,
+                        max(rect.width() - 1, 1),
+                        max(rect.height() - 1, 1)
+                    )
+                self.item.setRect(rect)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        super().mousePressEvent(event)
+        point =event.pos()# self.mapToScene(event.pos())
+        print(point)
+        p = self.itemAt(point.x(), point.y())
+        print(p)
+        if self.mode == 0 and self.active_channel != 3 and event.button() == Qt.RightButton and\
+           isinstance(p, EditorView):
+            item = FocusItem(self.mpos.x(), self.mpos.y(), 5, 5, self.active_channel)
+            pen = ROIDrawer.MARKERS[self.active_channel]
+            item.setData(0, self.active_channel)
+            item.setData(1,  pen)
+            item.setData(2, 1)
+            item.setPen(pen)
+            self.items.append(item)
+            self.temp_items.append(item)
+            self.addItem(item)
+            item.setSelected(True)
+        elif self.mode == 1 and self.active_channel != 3 and event.button() == Qt.LeftButton and \
+             isinstance(p, FocusItem) or isinstance(p, NucleusItem):
+                p.enable_editing(True)
+
+    def mouse_moved(self, event: QMouseEvent) -> None:
+        if self.pos_track:
+            pos = event[0]
+            if self.plot_item.sceneBoundingRect().contains(pos):
+                coord = self.plot_vb.mapSceneToView(pos)
+                self.mpos = coord
+                self.parent.set_status(f"X: {coord.x():.0f} Y: {coord.y():.0f}")
+
+
+class Editor(QDialog):
+
+    __slots__ = [
+        "ui",
+        "image",
+        "roi",
+        "temp_items"
+    ]
+
+    def __init__(self, image: np.ndarray, roi: ROIHandler):
+        """
+        Constructor
+
+        :param image: The image to edit
+        :param roi: The detected roi
+        """
+        super(Editor, self).__init__()
+        self.ui = None
+        self.editor = None
+        self.image = image
+        self.roi = roi
+        self.temp_items = []
+        self.initialize_ui()
+
+    def initialize_ui(self) -> None:
+        """
+        Method to initialize the ui of this widget
+
+        :return: None
+        """
+        self.ui = uic.loadUi(Paths.ui_editor_dial, self)
+        self.editor = EditorView(self.image, self.roi, self)
+        self.ui.view.addWidget(self.editor)
+        # Add icons to buttons
+        self.ui.btn_add.setIcon(Icon.get_icon("PLUS_CIRCLE"))
+        self.ui.btn_edit.setIcon(Icon.get_icon("EDIT"))
+        self.ui.btn_edit_nuclei.setIcon(Icon.get_icon("CIRCLE"))
+        self.ui.btn_edit_foci.setIcon(Icon.get_icon("DOT_CIRCLE"))
+        self.ui.btn_show.setIcon(Icon.get_icon("CIRCLE"))
+        self.ui.btn_coords.setIcon(Icon.get_icon("MOUSE"))
+        self.ui.btn_coords.toggled.connect(
+            lambda: self.editor.track_mouse_position(self.ui.btn_coords.isChecked())
+        )
+        self.ui.btn_coords.toggled.connect(
+            lambda: self.set_status(f"Coordinate Tracking: {self.ui.btn_coords.isChecked()}")
+        )
+        # Fill combobox with available channels
+        for ident in self.roi.idents:
+            self.ui.cbx_channel.addItem(ident)
+        self.ui.cbx_channel.addItem("Composite")
+        self.ui.cbx_channel.setCurrentText("Composite")
+        self.ui.cbx_channel.currentIndexChanged.connect(
+            lambda: self.editor.show_channel(self.ui.cbx_channel.currentIndex())
+        )
+        # React to Draw Ellipsis Button toggle
+        self.ui.btn_show.toggled.connect(
+            lambda: self.editor.draw_additional_items(self.ui.btn_show.isChecked())
+        )
+        self.ui.btng_mode.idToggled.connect(self.change_mode)
+        
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        super().keyPressEvent(event)
+        if event.key() == Qt.Key_1:
+            self.set_mode(0)
+        elif event.key() == Qt.Key_2:
+            self.set_mode(1)
+        elif event.key() == Qt.Key_3:
+            self.set_mode(2)
+        elif event.key() == Qt.Key_4:
+            self.ui.btn_edit_nuclei.setChecked(True)
+        elif event.key() == Qt.Key_5:
+            self.ui.btn_edit_foci.setChecked(True)
+        elif event.key() == Qt.Key_6:
+            self.ui.btn_coords.setChecked(not self.ui.btn_coords.isChecked())
+        elif event.key() == Qt.Key_7:
+            print(f"Check: {not self.ui.btn_show.isChecked()}")
+            self.ui.btn_show.setChecked(not self.ui.btn_show.isChecked())
+
+    def set_mode(self, mode: int) -> None:
+        """
+        Method to change the displayed mode
+        
+        :param mode: The mode to select
+        :return: None
+        """
+        if mode == 0:
+            self.ui.btn_view.setChecked(True)
+        elif mode == 1:
+            self.ui.btn_add.setChecked(True)
+        elif mode == 2:
+            self.ui.btn_edit.setChecked(True)
+
+    def change_mode(self, id_, checked) -> None:
+        """
+        Method to change the editor mode
+
+        :return: None
+        """
+        if checked:
+            self.editor.change_mode(abs(id_) - 3)
+
+    def set_status(self, status: str) -> None:
+        """
+        Method to display a status in the status bar
+
+        :param status: The status to display
+        :return: None
+        """
+        self.ui.lbl_status.setText(status)
+
+
+class EditingRectangle(QGraphicsRectItem):
+
+    __slots__ = [
+        "width",
+        "height",
+        "center",
+        "x",
+        "y",
+        "pen",
+        "ipen",
+        "color",
+    ]
+
+    def __init__(self, cx, cy, width, height):
+        super().__init__(cx, cy, width, height)
+        self.active = False
+        self.width = width
+        self.height = height
+        self.center = cx, cy
+        self.x = cx - width / 2
+        self.y = cy - height / 2
+        self.pen = None
+        self.color = None
+        self.initialize()
+
+    def initialize(self):
+        """
+        Method to initialize this class
+
+        :return:  None
+        """
+        self.pen = pg.mkPen(color="#bdff00", width=3, style=QtCore.Qt.DashLine)
+        self.ipen = ROIDrawer.MARKERS[-1]
+        self.setPen(self.pen)
+
+    def activate(self, enable: bool = True) -> None:
+        """
+        Method to activate this item
+
+        :param enable: Bool
+        :return: None
+        """
+        if enable:
+            self.setPen(self.pen)
+        else:
+            self.setPen(self.ipen)
+
+
+class NucleusItem(QGraphicsEllipseItem):
+
+    __slots__ = [
+        "pen",
+        "width",
+        "channel_index",
+        "height",
+        "orientation",
+        "angle",
+        "center",
+        "indicators"
+        "pen",
+        "iapen",
+        "ipen"
+    ]
+
+    def __init__(self, x, y, width, height, center_x, center_y, angle, orientation, index):
+        super().__init__(x, y, width, height)
+        self.angle = -angle
+        self.width = width
+        self.height = height
+        self.center = center_x, center_y
+        self.orientation = orientation
+        self.channel_index = index
+        self.indicators = []
+        self.edit = False
+        self.edit_rect = None
+        self.pen = None
+        self.ipen = None
+        self.iapen = None
+        self.view = None
+        self.initialize()
+
+    def is_active(self, active: bool = True) -> None:
+        """
+        Method to set the activity of this item
+
+        :param active: Bool
+        :return: None
+        """
+        if not active:
+            self.edit_rect.activate(active)
+        self.setPen(self.iapen if not active else self.pen)
+
+    def update_indicators(self, draw: bool = True) -> None:
+        """
+        Method update the drawing of indicators
+
+        :param draw: Bool to indicate if the indicators should be drawn
+        :return: None
+        """
+        for indicator in self.indicators:
+            indicator.setPen(self.ipen if draw else self.iapen)
+
+    def set_pens(self, pen: pg.mkPen, indicator_pen: pg.mkPen,
+                 inactive_pen: pg.mkPen) -> None:
+        """
+        Method to set the pen to draw this item
+
+        :param pen: The pen to draw this item when active
+        :param indicator_pen: The pen to draw the indicators of this item with
+        :param inactive_pen: The pen to use if this item is set to inactive
+        :return: None
+        """
+        self.pen = pen
+        self.ipen = indicator_pen
+        self.iapen = inactive_pen
+        self.setPen(self.pen)
+        for indicator in self.indicators:
+            indicator.setPen(self.ipen)
+
+    def initialize(self) -> None:
+        """
+        Method to initialize the display of this item
+
+        :return: None
+        """
+        op = self.sceneBoundingRect().center()
+        self.setTransformOriginPoint(op)
+        self.setRotation(self.angle)
+        cx, cy = self.center
+        r1, r2 = self.height / 2, self.width / 2
+        ovx, ovy = self.orientation
+        self.setPos(cx - r2, cy - r1)
+        # Draw main axis
+        main_axis = QGraphicsLineItem(cx - ovx * 25, cy - ovy * 25,
+                                      cx + ovx * 25, cy + ovy * 25)
+        main_axis.setPen(ROIDrawer.MARKERS[4])
+        # Draw major axis
+        major_axis = QGraphicsLineItem(-r2, 0, r2, 0)
+        major_axis.setPos(cx, cy)
+        major_axis.setRotation(self.angle)
+        # Draw minor axis
+        minor_axis = QGraphicsLineItem(-r1, 0, r1, 0)
+        minor_axis.setPos(cx, cy)
+        minor_axis.setRotation(self.angle + 90)
+        # Draw indicator handles
+        rect = EditingRectangle(cx - r2, cy - r1, self.width, self.height)
+        rect.setTransformOriginPoint(rect.sceneBoundingRect().center())
+        rect.setRotation(self.angle)
+        h1 = QGraphicsEllipseItem(cx - 5, cy - 5, 10, 10)
+        self.indicators.extend([
+            h1,
+            major_axis,
+            minor_axis,
+        ])
+        self.edit_rect = rect
+        self.edit_rect.activate(False)
+        self.setEnabled(False)
+
+    def add_to_view(self, view) -> None:
+        """
+        Method to add this item and all associated items to the given view
+
+        :param view: The view to add to
+        :return: None
+        """
+        self.view = view
+        view.addItem(self.edit_rect)
+        view.addItem(self)
+        for indicator in self.indicators:
+            view.addItem(indicator)
+
+    def enable_editing(self, enable: bool = True) -> None:
+        """
+        Method to enable the editing of this item
+
+        :param enable: Bool
+        :return: None
+        """
+        if enable:
+            self.setEnabled(enable)
+            self.view.addItem(self.edit_rect)
+            self.edit_rect.activate(enable)
+        else:
+            self.setEnabled(enable)
+            self.view.removeItem(self.edit_rect)
+            self.edit_rect.activate(enable)
+
+
+class FocusItem(QGraphicsEllipseItem):
+
+    __slots__ = [
+        "x",
+        "y",
+        "width",
+        "height",
+        "edit_rect",
+        "channel_index",
+        "pen",
+        "ipen"
+        "hover_color",
+        "main_color",
+        "sel_color"
+    ]
+
+    def __init__(self, x, y, width, height, index):
+        super().__init__(x, y, width, height)
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.channel_index = index
+        self.pen: pg.mkPen = None
+        self.ipen: pg.mkPen = None
+        self.main_color = None
+        self.hover_color = None
+        self.sel_color = None
+        self.view = None
+        self.edit_rect = None
+        self.setEnabled(False)
+
+    def is_active(self, active: bool = True) -> None:
+        """
+        Method to set the activity of this item
+
+        :param active: Bool
+        :return: None
+        """
+        self.setPen(self.pen if active else self.ipen)
+
+    def update_indicators(self, draw: bool = True) -> None:
+        """
+        Dummy Method to be compatible with NucleusItem
+        """
+        pass
+
+    def set_pen(self, pen: pg.mkPen, inactive_pen: pg.mkPen):
+        self.pen = pen
+        self.ipen = inactive_pen
+        # Define needed colors
+        self.main_color = pen.color()
+        self.hover_color = self.main_color.lighter(100)
+        self.sel_color = self.main_color.lighter(150)
+        super().setPen(pen)
+
+    def add_to_view(self, view) -> None:
+        """
+        Method to add this item and all associated items to the given view
+
+        :param view: View to add to
+        :return: None
+        """
+        self.view = view
+        view.addItem(self)
+        rect = EditingRectangle(self.x, self.y, self.width, self.height)
+        rect.activate(False)
+        self.edit_rect = rect
+
+    def enable_editing(self, enable: bool = True) -> None:
+        """
+        Method to enable the editing of this item
+
+        :param enable: Bool
+        :return: None
+        """
+        if enable:
+            self.setEnabled(enable)
+            self.view.addItem(self.edit_rect)
+            self.edit_rect.activate(enable)
+        else:
+            self.setEnabled(enable)
+            self.view.removeItem(self.edit_rect)
+            self.edit_rect.activate(enable)
+
+
+class ROIDrawer:
+
+    __slots__ = ()
+
+    MARKERS = [
+        pg.mkPen(color="r", width=3),  # Red
+        pg.mkPen(color="g", width=3),  # Green
+        pg.mkPen(color="b", width=3),  # Blue
+        pg.mkPen(color="c", width=3),  # Cyan
+        pg.mkPen(color="m", width=3),  # Magenta
+        pg.mkPen(color="y", width=3),  # Yellow
+        pg.mkPen(color="k", width=3),  # Black
+        pg.mkPen(color="w", width=3),  # White
+        pg.mkPen(color=(0, 0, 0, 0))  # Invisible
+    ]
+
+    @staticmethod
+    def change_channel(items: Iterable[QGraphicsItem],
+                       active_channel: int = 3,
+                       draw_additional: bool = False,
+                       editing: bool = False) -> None:
+        """
+        Method to change the drawing of foci and nuclei according to the active channel
+
+        :param items: The items that are drawn on the view
+        :param active_channel: The active channel
+        :param draw_additional: Parameter to draw items for additional information
+        :return: None
+        """
+        for item in items:
+            if item.channel_index != active_channel and active_channel != 3:
+                if isinstance(item, NucleusItem) and draw_additional:
+                    item.is_active(True)
+                else:
+                    item.is_active(False)
+            else:
+                item.is_active(True)
+            item.update_indicators(draw_additional)
+
+    @staticmethod
+    def draw_roi(view: pg.PlotItem, handler) -> List[QGraphicsEllipseItem]:
+        """
+        Method to populate the given plot with the roi stored in the handler
+
+        :param view: The PlotItem to populate
+        :param handler: The ROIHandler
+        :return: List of all created items
+        """
+        items = []
+        for roi in handler:
+            ind = handler.idents.index(roi.ident)
+            if roi.main:
+                items.append(ROIDrawer.draw_nucleus(view, roi, ind))
+            else:
+                items.append(ROIDrawer.draw_focus(view, roi, ind))
+        return items
+
+    @staticmethod
+    def draw_focus(view: pg.PlotItem, roi: ROI, ind) -> QGraphicsEllipseItem:
+        """
+        Function to draw a focus onto the given view
+
+        :param view: The view to draw on
+        :param roi: The focus to draw
+        :param ind: The index of the roi channel
+        :return: None
+        """
+        dims = roi.calculate_dimensions()
+        pen = ROIDrawer.MARKERS[ind]
+        c = dims["minX"], dims["minY"]
+        d2 = dims["height"]
+        d1 = dims["width"]
+        ellipse = FocusItem(c[0], c[1], d1, d2, ind)
+        ellipse.set_pen(pen, ROIDrawer.MARKERS[-1])
+        ellipse.add_to_view(view)
+        return ellipse
+
+    @staticmethod
+    def draw_nucleus(view: pg.PlotItem, roi: ROI, ind) -> QGraphicsEllipseItem:
+        """
+        Function to draw a nucleus onto the given view
+
+        :param view: The view to draw on
+        :param roi: The nucleus to draw
+        :param ind: The index of the roi channel
+        :return: None
+        """
+        pen = pg.mkPen(color="FFD700", width=3, style=QtCore.Qt.DashLine)
+        params = roi.calculate_ellipse_parameters()
+        cy, cx = params["center"][0], params["center"][1]
+        r1 = params["minor_axis"]
+        r2 = params["major_axis"]
+        angle = params["angle"]
+        ovx, ovy = params["orientation"]
+        ellipse = NucleusItem(0, 0, r2 * 2, r1 * 2, cx, cy, angle, (ovx, ovy), ind)
+        ellipse.set_pens(
+            pen,
+            pen,
+            ROIDrawer.MARKERS[-1]
+        )
+        ellipse.is_active()
+        ellipse.update_indicators()
+        ellipse.add_to_view(view)
+        return ellipse
+
+    @staticmethod
+    def draw_additional_items(items: List[QGraphicsItem], draw_additional: bool = True) -> None:
+        """
+        Method to activate the drawing of additional items
+
+        :param items: The list of items to activate
+        :param draw_additional: Bool
+        :return: None
+        """
+        for item in items:
+            if isinstance(item, NucleusItem):
+                item.is_active(draw_additional)
+            item.update_indicators(draw_additional)

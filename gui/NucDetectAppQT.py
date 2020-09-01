@@ -28,7 +28,7 @@ from core.roi.ROIHandler import ROIHandler
 from gui import Paths, Util
 from gui.Definitions import Icon
 from gui.Dialogs import ExperimentDialog, ExperimentSelectionDialog, StatisticsDialog, ImgDialog, SettingsDialog, \
-    ModificationDialog, AnalysisSettingsDialog
+    ModificationDialog, AnalysisSettingsDialog, Editor
 
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, False)
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, False)
@@ -992,6 +992,14 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
+        editor = Editor(image=Detector.load_image(self.cur_img["path"]), roi=self.roi_cache)
+        editor.setWindowTitle(f"Modification Dialog for {self.cur_img['file_name']}")
+        editor.setWindowIcon(QtGui.QIcon("logo.png"))
+        editor.setWindowFlags(editor.windowFlags() |
+                           QtCore.Qt.WindowSystemMenuHint |
+                           QtCore.Qt.WindowMinMaxButtonsHint |
+                           QtCore.Qt.Window)
+        code = editor.exec()
         # TODO Reimplement
         return
         mod = ModificationDialog(image=Detector.load_image(self.cur_img["path"]), handler=self.roi_cache)

@@ -39,6 +39,9 @@ class ROIHandler:
     def __getitem__(self, item):
         return self.rois[item]
 
+    def __iter__(self):
+        return iter(self.rois)
+
     def add_roi(self, roi: ROI) -> None:
         """
         Method to add a ROI to this handler

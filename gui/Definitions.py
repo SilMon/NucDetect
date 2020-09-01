@@ -43,7 +43,12 @@ class Icon:
             "HAT_WIZARD_RED": qta.icon("fa5s.hat-wizard", color=Icon.HIGHLIGHT),
             "TIMES": qta.icon("fa5s.times", color=Icon.STANDARD),
             "TRASH_ALT": qta.icon("fa5s.trash-alt", color=Icon.STANDARD),
-            "SYNC": qta.icon("fa5s.sync", color=Icon.STANDARD)
+            "SYNC": qta.icon("fa5s.sync", color=Icon.STANDARD),
+            "PLUS_CIRCLE": qta.icon("fa5s.plus-circle", color=Icon.STANDARD),
+            "CIRCLE": qta.icon("fa5.circle", color=Icon.STANDARD),
+            "DOT_CIRCLE": qta.icon("fa5.dot-circle", color=Icon.STANDARD),
+            "DRAFTING_COMPASS": qta.icon("fa5s.drafting-compass", color=Icon.STANDARD),
+            "MOUSE": qta.icon("fa5s.mouse-pointer", color=Icon.STANDARD)
         }
         return icons.get(ident, QIcon())
 
