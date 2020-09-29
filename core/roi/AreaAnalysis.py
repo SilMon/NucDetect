@@ -72,6 +72,20 @@ def convert_area_to_array(area: Iterable[Tuple[int, int, int]], channel: np.ndar
     return carea
 
 
+def imprint_area_into_array(area: Iterable[Tuple[int, int, int]], array: np.ndarray, ident: int) -> None:
+    """
+    Method to imprint the specified area into the specified area
+
+    :param area: The run length encoced area to imprint
+    :param array: The array to imprint into
+    :param ident: The identifier to use for the imprint
+    :return: None
+    """
+    # Get normalization factors
+    for ar in area:
+        array[ar[0], ar[1]: ar[1] + ar[2]] = ident
+
+
 @njit(cache=True)
 def get_bounding_box(area: Iterable[Tuple], rle=True) -> Tuple[int, int, int, int]:
     """

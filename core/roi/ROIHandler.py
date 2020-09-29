@@ -7,11 +7,14 @@ from __future__ import annotations
 import csv
 import datetime
 import os
-from typing import Union, Dict, List, Tuple
+from typing import Union, Dict, List, Tuple, Iterable
 
 import numpy as np
 
+from core.roi import AreaAnalysis
 from core.roi.ROI import ROI
+
+import matplotlib.pyplot as plt
 
 
 class ROIHandler:
@@ -216,3 +219,21 @@ class ROIHandler:
                     data[0] = ident
                 writer.writerow(data)
         return True
+
+    def create_hash_association_maps(self, shape: Tuple[int, int], ignore: Iterable[ROI]) -> Iterable[np.ndarray]:
+        """
+        Method to create arrays with labelling hashes for each saved ROI
+
+        :param shape: The shape of the original image
+        :param ignore: List of changed
+        :return: The created maps
+        """
+        maps = []
+        # Create empty maps
+        for _ in range(len(self.idents)):
+            maps.append(np.zeros(shape, dtype="int64"))
+        for roi in self.rois:
+            # Get channel index of ROI
+            if roi.ident not in ignore:
+                AreaAnalysis.imprint_area_into_array(roi.area, maps[self.idents.index(roi.ident)], hash(roi))
+        return maps

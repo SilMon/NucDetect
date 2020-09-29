@@ -28,7 +28,7 @@ from core.roi.ROIHandler import ROIHandler
 from gui import Paths, Util
 from gui.Definitions import Icon
 from gui.Dialogs import ExperimentDialog, ExperimentSelectionDialog, StatisticsDialog, ImgDialog, SettingsDialog, \
-    ModificationDialog, AnalysisSettingsDialog, Editor
+                        AnalysisSettingsDialog, Editor
 
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, False)
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, False)
@@ -779,7 +779,7 @@ class NucDetect(QMainWindow):
                 item = QStandardItem()
                 show_text = str(dat)
                 if isinstance(dat, tuple):
-                    show_text = f"{int(dat[1]):#>5d} | {int(dat[0]):#<5d}"
+                    show_text = f"{int(dat[0]):#>5d} | {int(dat[1]):#<5d}"
                 elif isinstance(dat, float):
                     show_text = f"{dat * 100:.3f}"
                 item.setText(show_text)
@@ -1000,21 +1000,8 @@ class NucDetect(QMainWindow):
                            QtCore.Qt.WindowMinMaxButtonsHint |
                            QtCore.Qt.Window)
         code = editor.exec()
-        # TODO Reimplement
-        return
-        mod = ModificationDialog(image=Detector.load_image(self.cur_img["path"]), handler=self.roi_cache)
-        mod.setWindowTitle(f"Modification Dialog for {self.cur_img['file_name']}")
-        mod.setWindowIcon(QtGui.QIcon("logo.png"))
-        mod.setWindowFlags(mod.windowFlags() |
-                           QtCore.Qt.WindowSystemMenuHint |
-                           QtCore.Qt.WindowMinMaxButtonsHint |
-                           QtCore.Qt.Window)
-        code = mod.exec()
         if code == QDialog.Accepted:
             self.create_result_table_from_list(self.roi_cache)
-        elif code == QDialog.Rejected:
-            if mod.changed:
-                self.load_saved_data()
 
     def on_close(self) -> None:
         """

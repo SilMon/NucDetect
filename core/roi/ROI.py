@@ -134,7 +134,6 @@ class ROI:
         self.stats.clear()
         self.ell_params.clear()
         self.length = -1
-
         self.calculate_dimensions()
 
     def set_area(self, rle: Iterable) -> None:
@@ -212,7 +211,7 @@ class ROI:
                 # Add elements to area
                 [numba_area.append(x) for x in self.area]
                 y, x, height, width = get_bounding_box(numba_area)
-                cy, cx = get_center(numba_area)
+                center = get_center(numba_area)
                 area = get_surface(numba_area)
                 self.dims["minX"] = x
                 self.dims["maxX"] = x + width
@@ -220,7 +219,7 @@ class ROI:
                 self.dims["maxY"] = y + height
                 self.dims["width"] = width
                 self.dims["height"] = height
-                self.dims["center"] = cy, cx
+                self.dims["center"] = center
                 self.dims["area"] = area
             else:
                 raise Exception(f"ROI {self.id} does not contain any points!")

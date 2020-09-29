@@ -12,6 +12,7 @@ from skimage.transform import resize
 from concurrent.futures import ProcessPoolExecutor
 
 from core.Detector import Detector
+from core.roi.ROI import ROI
 from gui import Paths
 
 IMAGE_FORMATS = [
@@ -21,6 +22,7 @@ IMAGE_FORMATS = [
         ".jpg",
         ".bmp"
 ]
+
 
 def create_scroll_area(layout_type: bool = False,
                        widget_resizable: bool = True) -> Tuple[QScrollArea, Union[QVBoxLayout, QHBoxLayout]]:

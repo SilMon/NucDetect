@@ -48,7 +48,8 @@ class Icon:
             "CIRCLE": qta.icon("fa5.circle", color=Icon.STANDARD),
             "DOT_CIRCLE": qta.icon("fa5.dot-circle", color=Icon.STANDARD),
             "DRAFTING_COMPASS": qta.icon("fa5s.drafting-compass", color=Icon.STANDARD),
-            "MOUSE": qta.icon("fa5s.mouse-pointer", color=Icon.STANDARD)
+            "MOUSE": qta.icon("fa5s.mouse-pointer", color=Icon.STANDARD),
+            "CHECK": qta.icon("fa5s.check", color=Icon.HIGHLIGHT)
         }
         return icons.get(ident, QIcon())
 
