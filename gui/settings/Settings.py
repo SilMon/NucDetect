@@ -153,12 +153,6 @@ class SettingsSpinner(SettingsWidget):
         self.spin.valueChanged.connect(self._on_value_changed)
 
     def _on_value_changed(self):
-        val = self.spin.value()
-        if val % self.step != 0:
-            self.value = val - val % self.step
-            self.spin.setValue(val - val % self.step)
-        else:
-            self.value = val
         super(SettingsSpinner, self)._change_emit()
 
 
@@ -188,12 +182,6 @@ class SettingsDecimalSpinner(SettingsWidget):
         self.spin.valueChanged.connect(self._on_value_changed)
 
     def _on_value_changed(self):
-        val = self.spin.value()
-        if val % self.step != 0:
-            self.value = val - val % self.step
-            self.spin.setValue(val - val % self.step)
-        else:
-            self.value = val
         super(SettingsDecimalSpinner, self)._change_emit()
 
 

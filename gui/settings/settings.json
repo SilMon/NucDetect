@@ -70,9 +70,9 @@
       "type": "slider",
       "value": 1200,
       "values": {
-        "min": 50,
-        "max": 2000000,
-        "step": 50,
+        "min": 200,
+        "max": 200000,
+        "step": 200,
         "unit": "pix"
       }
     },
@@ -186,7 +186,7 @@
       "values": {
         "min": 3,
         "max": 31,
-        "step": 2,
+        "step": 1,
         "unit": "pix"
       }
     },
@@ -317,7 +317,7 @@
       "type": "check",
       "value": 1,
       "values": {
-        "tristate": 2
+        "tristate": 0
       }
     },
     {
@@ -327,7 +327,7 @@
       "type": "check",
       "value": 1,
       "values": {
-        "tristate": 2
+        "tristate": 0
       }
     }
   ]

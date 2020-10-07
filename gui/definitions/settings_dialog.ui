@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>629</width>
+    <width>735</width>
     <height>534</height>
    </rect>
   </property>
@@ -20,7 +20,7 @@
 	border: none;
 	font-size: 14px;
  	text-align: center;
-     display: inline-block;
+    display: inline-block;
 	min-height: 25;
 	min-width: 60;
 }
@@ -60,26 +60,26 @@ QTabBar::tab{
 	font-size: 12vw;
 	min-width: 40;
 	min-height: 25;
-	padding-right: 1px;
+	padding: 5px;
 	margin: 1px
 }
 
 QTabBar::tab:!selected:hover{
-	background-color: rgba(92,92,92,128);
+	background-color: rgba(112,112,112,128);
 }
 
 QTabBar::tab:selected{
-	background-color: rgba(102,102,102,128);
+	background-color: rgba(122,122,122,128);
 	border-bottom-color: #c2c7cb
 }
 
 QTabBar::tab:selected:hover{
-	background-color: rgba(102,102,102, 128)
+	background-color: rgba(132,132,132, 128)
 }
 
 QTabBar::tab:!selected {
 	background-color: rgba(82,82,82,128);
-	margin-top: 3px
+	margin-top: 10px
 }
 
 QLabel{
@@ -89,7 +89,8 @@ QLabel{
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox{
 	color:white;
 	background-color: rgba(128, 128, 128, 128);
-	border: none
+	border: none;
+	padding: 5px;
 }
 
 QSpinBox, QDoubleSpinBox{
