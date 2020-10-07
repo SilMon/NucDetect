@@ -98,12 +98,12 @@ def get_bounding_box(area: Iterable[Tuple], rle=True) -> Tuple[int, int, int, in
     xmin = amin([a[1] for a in area])
     yvals = [a[0] for a in area]
     ymin = amin(yvals)
-    ymax = amax(yvals) - ymin
+    height = len(area)
     if rle:
-        xmax = amax([a[1] + a[2] for a in area]) - xmin
+        width = amax([a[1] + a[2] for a in area]) - xmin
     else:
-        xmax = amax([a[1] for a in area]) - xmin
-    return ymin, xmin, ymax, xmax
+        width = amax([a[1] for a in area]) - xmin + 1
+    return ymin, xmin, height, width
 
 
 @njit(cache=True)

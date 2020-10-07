@@ -188,7 +188,7 @@ class SettingsDecimalSpinner(SettingsWidget):
         self.spin.valueChanged.connect(self._on_value_changed)
 
     def _on_value_changed(self):
-        val = self.dial.value()
+        val = self.spin.value()
         if val % self.step != 0:
             self.value = val - val % self.step
             self.spin.setValue(val - val % self.step)

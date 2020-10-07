@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1038</width>
+    <width>1039</width>
     <height>800</height>
    </rect>
   </property>
@@ -220,7 +220,7 @@ QDialog{
           <item>
            <widget class="QPushButton" name="btn_settings">
             <property name="enabled">
-             <bool>false</bool>
+             <bool>true</bool>
             </property>
             <property name="maximumSize">
              <size>

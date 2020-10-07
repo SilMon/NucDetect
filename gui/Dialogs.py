@@ -32,7 +32,7 @@ pg.setConfigOptions(imageAxisOrder='row-major')
 
 class AnalysisSettingsDialog(QDialog):
 
-    def __init__(self, all_=False, *args, **kwargs):
+    def __init__(self, all_=False,  *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.ui = None
         self.all = all_
@@ -1271,7 +1271,7 @@ class SettingsDialog(QDialog):
         Method to add a menu point to the settings section
 
         :param section: The name of the section
-        :param menupoint: The menupoint
+        :param menupoint: The menupoint to add
         :return: None
         """
         self.add_section(section)

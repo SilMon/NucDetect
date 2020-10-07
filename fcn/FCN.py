@@ -51,8 +51,7 @@ class FCN:
                       model: int,
                       channels: List[int],
                       threshold: float = 0.35,
-                      logging=True,
-                      thresholding=False) -> List[np.ndarray]:
+                      logging=True) -> List[np.ndarray]:
         """
         Method to create the prediction mask of an image, specified by path
 

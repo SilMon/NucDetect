@@ -60,9 +60,9 @@ class NucDetect(QMainWindow):
         self.create_tables(self.cursor)
         # Load the settings from database
         self.settings = self.load_settings()
+        print(self.settings)
         # Create detector for analysis
-        self.detector = Detector(settings=[].extend(list(self.settings.values())),
-                                 logging=self.settings["logging"])
+        self.detector = Detector()
         # Initialize needed variables
         self.reg_images = []
         self.cur_img = None
@@ -147,6 +147,7 @@ class NucDetect(QMainWindow):
             CREATE TABLE IF NOT EXISTS "settings" (
                             "key_"	TEXT,
                             "value"	TEXT,
+                            "type_" TEXT,
                             PRIMARY KEY("key_")
             ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS "statistics" (
@@ -172,15 +173,35 @@ class NucDetect(QMainWindow):
             COMMIT;
             '''
         )
-        # TODO
         # Create the standard settings
         cursor.executescript(
             '''
             BEGIN TRANSACTION;
-            INSERT OR IGNORE INTO settings (key_, value) VALUES ("logging", 1);
-            INSERT OR IGNORE INTO settings (key_, value) VALUES ("res_path", "./results");
-            INSERT OR IGNORE INTO settings (key_, value) VALUES ("names", "Blue;Red;Green");
-            INSERT OR IGNORE INTO settings (key_, value) VALUES ("main_channel", 2);
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("logging", 1, "bool");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("exp_std_name", "Default", "str");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("names", "Red;Green;Blue", "str");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("main_channel", 2, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("logging", 1, "bool");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("ml_analysis", 0, "bool");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_check", 1, "bool");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_min_main_area", 1200, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_min_foc_area", 5, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("blob_min_sigma", 1, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("blob_max_sigma", 5, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("blob_num_sigma", 10, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("blob_threshold", 0.1, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("thresh_iterations", 5, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("thresh_mask_size", 7, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("thresh_percent_hmax", 0.05, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("thresh_local_thresh_mult", 8, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("thresh_max_mult", 2, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("canny_sigma", 1, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("canny_low_thresh", 0.1, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("canny_up_thresh", 0.2, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_nuclei_certainty", 0.95, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_foci", 0.99, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("show_ellipsis", 1, "bool");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("track_mouse", 1, "bool");
             COMMIT;
             '''
         )
@@ -208,9 +229,30 @@ class NucDetect(QMainWindow):
         :return: None
         """
         self.cursor.execute(
-            "SELECT key_, value FROM settings"
+            "SELECT * FROM settings"
         )
-        return dict(self.cursor.fetchall())
+        settings = {}
+        for row in self.cursor.fetchall():
+            settings[row[0]] = self.convert_to_type(row[1], row[2])
+        return settings
+
+    @staticmethod
+    def convert_to_type(value: str, type_: str) -> Union[int, float, str, bool]:
+        """
+        Method to convert the given value into its specified type
+
+        :param value: The value as string
+        :param type_: The type as string
+        :return: The converted type
+        """
+        if type_ == "int":
+            return int(value)
+        elif type_ == "float":
+            return float(value)
+        elif type_ == "bool":
+            return bool(value)
+        else:
+            return value
 
     def closeEvent(self, event) -> None:
         """
@@ -237,8 +279,9 @@ class NucDetect(QMainWindow):
         self.ui.list_images.setIconSize(QSize(75, 75))
         # Initialization of the result table
         self.res_table_model = QStandardItemModel(self.ui.table_results)
-        self.res_table_model.setHorizontalHeaderLabels(["Image", "Center[(y, x)]", "Area [px]", "Ellipticity [%]",
-                                                        "Foci"])
+        self.res_table_model.setHorizontalHeaderLabels(["Image Identifier", "ROI Identifier", "Center[(y, x)]",
+                                                        "Area [px]", "Ellipticity[%]", "Or. Angle [deg]",
+                                                        "Maj. Axis", "Min. Axis"])
         self.res_table_sort_model = TableFilterModel(self)
         self.res_table_sort_model.setSourceModel(self.res_table_model)
         self.ui.table_results.setModel(self.res_table_sort_model)
@@ -442,6 +485,7 @@ class NucDetect(QMainWindow):
         code = anal_sett_dial.exec()
         if code == QDialog.Accepted:
             settings = anal_sett_dial.get_data()
+            settings["analysis_settings"] = self.settings
         else:
             # If the dialog was rejected, abort analysis
             return
@@ -474,7 +518,7 @@ class NucDetect(QMainWindow):
         self.prg_signal.emit("Starting analysis", 0, maxi, "")
         self.unsaved_changes = True
         self.prg_signal.emit("Analysing image", maxi * 0.05, maxi, "")
-        data = self.detector.analyse_image(path, analysis_settings=analysis_settings)
+        data = self.detector.analyse_image(path, settings=analysis_settings)
         self.roi_cache = data["handler"]
         s0 = time.time()
         self.prg_signal.emit(f"Ellipse parameter calculation", maxi * 0.75, maxi, "")
@@ -773,15 +817,20 @@ class NucDetect(QMainWindow):
         self.res_table_model.setRowCount(0)
         self.res_table_model.setHorizontalHeaderLabels(tabdat["header"])
         self.res_table_model.setColumnCount(len(tabdat["header"]))
+        normal = (0, 1, 3, 8, 9)
         for x in range(len(tabdat["data"])):
             row = []
-            for dat in tabdat["data"][x]:
+            for data_index in range(len(tabdat["data"][x])):
                 item = QStandardItem()
-                show_text = str(dat)
-                if isinstance(dat, tuple):
+                dat = tabdat["data"][x][data_index]
+                if data_index in normal:
+                    show_text = str(dat)
+                elif data_index == 2:
                     show_text = f"{int(dat[0]):#>5d} | {int(dat[1]):#<5d}"
-                elif isinstance(dat, float):
+                elif data_index == 4:
                     show_text = f"{dat * 100:.3f}"
+                elif 4 < data_index < 8:
+                    show_text = f"{dat:.2f}"
                 item.setText(show_text)
                 item.setData(dat)
                 item.setTextAlignment(QtCore.Qt.AlignCenter)

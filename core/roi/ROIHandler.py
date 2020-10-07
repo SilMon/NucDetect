@@ -150,9 +150,10 @@ class ROIHandler:
         :return: The data as dict
         """
         tempdat = {}
-        header = ["Image", "Center[(y, x)]", "Area [px]", "Ellipticity[%]"]
+        header = ["Image Identifier", "ROI Identifier", "Center[(y, x)]", "Area [px]",
+                  "Ellipticity[%]", "Or. Angle [deg]", "Maj. Axis", "Min. Axis"]
         if self.idents:
-            header.extend([x for x in self.idents if x != self.main])
+            header.extend([f"{x} Foci" for x in self.idents if x != self.main])
             tempdat["header"] = header
             tempdat["data"] = []
             tempdat["footer"] = []
@@ -164,9 +165,13 @@ class ROIHandler:
                     tempell = roi.calculate_ellipse_parameters()
                     row = [
                         self.ident,
+                        hash(roi),
                         tempstat["center"],
                         tempstat["area"],
-                        tempell["shape_match"]
+                        tempell["shape_match"],
+                        tempell["angle"],
+                        tempell["major_axis"],
+                        tempell["minor_axis"]
                     ]
                     secstat = {}
                     for roi2 in self.rois:
