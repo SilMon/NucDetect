@@ -26,11 +26,11 @@ class ROIHandler:
         "stats",
     ]
 
-    def __init__(self, ident: int = None):
+    def __init__(self, ident: str = None):
         """
         :param ident: md5 hash of the image this handler is associated with
         """
-        self.ident = ident
+        self.ident: str = ident
         self.rois: List[ROI] = []
         self.idents: List[str] = []
         self.stats: Dict[str, Union[int, float]] = {}

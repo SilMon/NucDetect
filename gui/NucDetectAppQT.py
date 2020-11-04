@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import os
 import re
 import shutil
@@ -9,9 +10,10 @@ import time
 import traceback
 import warnings
 import numpy as np
+import csv
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from threading import Thread
-from typing import Union, Dict, Iterable
+from typing import Union, Dict, Iterable, List, Tuple
 
 import PyQt5
 import pyqtgraph as pg
@@ -65,6 +67,9 @@ class NucDetect(QMainWindow):
         self.detector = Detector()
         # Initialize needed variables
         self.reg_images = []
+        # Contains the displayed table data
+        self.data = None
+        self.cur_exp = None
         self.cur_img = None
         self.roi_cache = None
         self.unsaved_changes = False
@@ -620,8 +625,8 @@ class NucDetect(QMainWindow):
             self.selec_signal.emit(True)
         print(f"Total analysis time: {time.time() - start_time:.3f} secs")
 
-    def save_rois_to_database(self,
-                              data: Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]],
+    @staticmethod
+    def save_rois_to_database(data: Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]],
                               all: bool = False) -> None:
         """
         Method to save the data stored in the ROIHandler rois to the database
@@ -725,7 +730,7 @@ class NucDetect(QMainWindow):
         if not all:
             print("ROI saved to database")
 
-    def load_rois_from_database(self, md5: int) -> ROIHandler:
+    def load_rois_from_database(self, md5: str) -> ROIHandler:
         """
         Method to load all rois associated with this image
 
@@ -813,30 +818,128 @@ class NucDetect(QMainWindow):
         :param handler: The handler containing the rois
         :return: None
         """
-        tabdat = handler.get_data_as_dict()
         self.res_table_model.setRowCount(0)
-        self.res_table_model.setHorizontalHeaderLabels(tabdat["header"])
-        self.res_table_model.setColumnCount(len(tabdat["header"]))
-        normal = (0, 1, 3, 8, 9)
-        for x in range(len(tabdat["data"])):
-            row = []
-            for data_index in range(len(tabdat["data"][x])):
+        connection = sqlite3.connect(Paths.database)
+        cursor = connection.cursor()
+        # Check if the experiment for the image contains additional images
+        exp = cursor.execute("SELECT experiment FROM images WHERE md5=?", (handler.ident,)).fetchall()
+        # Get all available channels for the image
+        chans = cursor.execute("SELECT * FROM channels WHERE md5=?", (handler.ident, )).fetchall()
+        # Remove main channel and  from list
+        chans = [x[2] for x in chans if not bool(x[4]) and bool(x[3])]
+        # Sort channel list
+        chans = sorted(chans)
+        # Create header
+        header = ["Image Identifier", "Group", "ROI Identifier", "Center[(y, x)]", "Area [px]",
+                  "Ellipticity[%]", "Or. Angle [deg]", "Maj. Axis", "Min. Axis"]
+        if exp[0][0]:
+            # Load data for experiment
+            rows = self.get_table_data_from_database(exp[0][0], chans, cursor)
+            self.set_experiment_status_label_text(
+                f"Experiment: {exp[0][0]} Images: "
+            )
+            self.cur_exp = exp[0][0]
+            # Get channel names
+            channel_names = cursor.execute("SELECT DISTINCT name FROM channels WHERE md5"
+                                           " IN (SELECT md5 FROM images WHERE experiment=?) and main=?",
+                                           (exp[0][0], 0)).fetchall()
+            channel_names = sorted([x[0] for x in channel_names])
+            header.extend(channel_names)
+
+        else:
+            rows = self.get_table_data_for_image((handler.ident,), chans, cursor)
+            # Get channel names
+            channel_names = cursor.execute("SELECT name FROM channels WHERE md5=? AND main=?",
+                                           (handler.ident, 0)).fetchall()
+            channel_names = sorted([x[0] for x in channel_names])
+            header.remove("Group")
+            header.extend(channel_names)
+            self.set_experiment_status_label_text(
+                f"Experiment: None Images: 1"
+            )
+        # Set header of table
+        self.res_table_model.setHorizontalHeaderLabels(header)
+        # Iterate over created rows
+        for row in rows:
+            item_row = []
+            # Create an QStandardItem for each cell in the row
+            for cell in row:
                 item = QStandardItem()
-                dat = tabdat["data"][x][data_index]
-                if data_index in normal:
-                    show_text = str(dat)
-                elif data_index == 2:
-                    show_text = f"{int(dat[0]):#>5d} | {int(dat[1]):#<5d}"
-                elif data_index == 4:
-                    show_text = f"{dat * 100:.3f}"
-                elif 4 < data_index < 8:
-                    show_text = f"{dat:.2f}"
-                item.setText(show_text)
-                item.setData(dat)
+                item.setText(cell)
                 item.setTextAlignment(QtCore.Qt.AlignCenter)
                 item.setSelectable(False)
-                row.append(item)
-            self.res_table_model.appendRow(row)
+                item.setEditable(False)
+                item_row.append(item)
+            # Append the item row to the table model
+            self.res_table_model.appendRow(item_row)
+        header = [header]
+        header.extend(rows)
+        self.data = header
+
+    @staticmethod
+    def get_table_data_from_database(experiment: str, channel_names: List[str],
+                                     cursor: sqlite3.Cursor) -> List[List[str]]:
+        """
+        Method to load the data of an experiment from the database
+
+        :param experiment: The name of the experiment to get the data for
+        :param channel_names: Names of the active channels without the main channel
+        :param cursor: Cursor pointing to the database
+        :return: List of row to created for display
+        """
+        # Get images associated with experiment
+        imgs = cursor.execute("SELECT md5 FROM images WHERE experiment=?",
+                              (experiment,)).fetchall()
+        rows: List[List[str]] = []
+        # Iterate over all images
+        for img in imgs:
+            row = NucDetect.get_table_data_for_image(img[0], channel_names, cursor)
+            # Check if the image was assigned to a group
+            group = cursor.execute("SELECT name FROM groups WHERE image=?", img)
+            if group:
+                group = group[0][0]
+            else:
+                group = "No Group"
+            row.insert(1, group)
+            rows.extend(row)
+        return rows
+
+    @staticmethod
+    def get_table_data_for_image(img: Tuple[str], channel_names: List[str],
+                                 cursor: sqlite3.Cursor) -> List[List[str]]:
+        """
+        Method to get the table data for the specified image
+
+        :param img: The image to get the data for
+        :param channel_names: Names of the active channels without the main channel
+        :param cursor: Cursor pointing to the database
+        :return: List of rows created for display
+        """
+        rows: List[List[str]] = []
+        # Get all associated nuclei for the image
+        nucs = cursor.execute("SELECT hash FROM roi WHERE associated IS NULL AND image=?", img).fetchall()
+        # Get all information for each focus
+        for nuc in nucs:
+            # Get statistics of nucleus
+            stats = cursor.execute("SELECT * FROM statistics WHERE hash=?", nuc).fetchall()[0]
+            row = [img[0], str(nuc[0]), stats[10], str(stats[2]), f"{float(stats[16]) * 100:.2f}",
+                   f"{float(stats[13]):.2f}", f"{float(stats[11]):.2f}", f"{float(stats[12]):.2f}"]
+            # Count available foci
+            for channel in channel_names:
+                count = cursor.execute("SELECT COUNT(hash) FROM roi WHERE associated=? AND channel=?",
+                                       (nuc[0], channel)).fetchall()
+                row.append(str(count[0][0]))
+            rows.append(row)
+        return rows
+
+    def set_experiment_status_label_text(self, status: str) -> None:
+        """
+        Method to display information about experiment details on screen
+
+        :param status: The details to display
+        :return: None
+        """
+        self.ui.lbl_exp_details.setText(status)
 
     def enable_buttons(self, state: bool = True, ana_buttons: bool = True) -> None:
         """
@@ -922,8 +1025,14 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        self.roi_cache.export_data_as_csv(path=Paths.result_path, ident=self.cur_img["file_name"])
         self.prg_signal.emit("Saving Results", 50, 100, "")
+        # Create name for file
+        name = f"{self.cur_exp if self.cur_exp else self.roi_cache.ident}.csv"
+        with open(os.path.join(Paths.result_path, name), 'w', newline='') as file:
+            writer = csv.writer(file, delimiter=";",
+                                quotechar="|", quoting=csv.QUOTE_MINIMAL)
+            for row in self.data:
+                writer.writerow(row)
         self.prg_signal.emit("Results saved -- Program ready", 100, 100, "")
         self.unsaved_changes = False
 
@@ -948,6 +1057,17 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
+        # Check if experiments were defined
+        exps = self.cursor.execute("SELECT * FROM experiments").fetchall()
+        if not exps:
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Information)
+            msg.setWindowTitle("Warning")
+            msg.setText("No experiments were defined")
+            msg.setInformativeText("Statistics can only be displayed, if images are assigned to an experiment")
+            msg.setStandardButtons(QMessageBox.Ok)
+            msg.exec_()
+            return
         # Create dialog window
         stat_dialog = QDialog()
         stat_dialog.ui = uic.loadUi(Paths.ui_stat_dial, stat_dialog)
@@ -1045,9 +1165,9 @@ class NucDetect(QMainWindow):
         editor.setWindowTitle(f"Modification Dialog for {self.cur_img['file_name']}")
         editor.setWindowIcon(QtGui.QIcon("logo.png"))
         editor.setWindowFlags(editor.windowFlags() |
-                           QtCore.Qt.WindowSystemMenuHint |
-                           QtCore.Qt.WindowMinMaxButtonsHint |
-                           QtCore.Qt.Window)
+                              QtCore.Qt.WindowSystemMenuHint |
+                              QtCore.Qt.WindowMinMaxButtonsHint |
+                              QtCore.Qt.Window)
         code = editor.exec()
         if code == QDialog.Accepted:
             self.create_result_table_from_list(self.roi_cache)
