@@ -833,10 +833,12 @@ class NucDetect(QMainWindow):
         header = ["Image Identifier", "Group", "ROI Identifier", "Center[(y, x)]", "Area [px]",
                   "Ellipticity[%]", "Or. Angle [deg]", "Maj. Axis", "Min. Axis"]
         if exp[0][0]:
+            # Get all assigned images
+            num_imgs = cursor.execute("SELECT COUNT(md5) FROM images WHERE experiment=?", exp[0]).fetchall()[0][0]
             # Load data for experiment
             rows = self.get_table_data_from_database(exp[0][0], chans, cursor)
             self.set_experiment_status_label_text(
-                f"Experiment: {exp[0][0]} Images: "
+                f"Experiment: {exp[0][0]}\nImages: {num_imgs}"
             )
             self.cur_exp = exp[0][0]
             # Get channel names
@@ -855,7 +857,7 @@ class NucDetect(QMainWindow):
             header.remove("Group")
             header.extend(channel_names)
             self.set_experiment_status_label_text(
-                f"Experiment: None Images: 1"
+                f"Experiment: None\nImages: 1"
             )
         # Set header of table
         self.res_table_model.setHorizontalHeaderLabels(header)
@@ -895,12 +897,13 @@ class NucDetect(QMainWindow):
         for img in imgs:
             row = NucDetect.get_table_data_for_image(img[0], channel_names, cursor)
             # Check if the image was assigned to a group
-            group = cursor.execute("SELECT name FROM groups WHERE image=?", img)
+            group = cursor.execute("SELECT name FROM groups WHERE image=?", img).fetchall()
             if group:
                 group = group[0][0]
             else:
                 group = "No Group"
-            row.insert(1, group)
+            for row_ in row:
+                row_.insert(1, group)
             rows.extend(row)
         return rows
 
@@ -917,12 +920,12 @@ class NucDetect(QMainWindow):
         """
         rows: List[List[str]] = []
         # Get all associated nuclei for the image
-        nucs = cursor.execute("SELECT hash FROM roi WHERE associated IS NULL AND image=?", img).fetchall()
+        nucs = cursor.execute("SELECT hash FROM roi WHERE associated IS NULL AND image=?", (img,)).fetchall()
         # Get all information for each focus
         for nuc in nucs:
             # Get statistics of nucleus
             stats = cursor.execute("SELECT * FROM statistics WHERE hash=?", nuc).fetchall()[0]
-            row = [img[0], str(nuc[0]), stats[10], str(stats[2]), f"{float(stats[16]) * 100:.2f}",
+            row = [img, str(nuc[0]), stats[10], str(stats[2]), f"{float(stats[16]) * 100:.2f}",
                    f"{float(stats[13]):.2f}", f"{float(stats[11]):.2f}", f"{float(stats[12]):.2f}"]
             # Count available foci
             for channel in channel_names:

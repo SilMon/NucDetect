@@ -1868,8 +1868,6 @@ class Editor(QDialog):
         self.ui.btn_view.setIcon(Icon.get_icon("EYE"))
         self.ui.btn_add.setIcon(Icon.get_icon("PLUS_CIRCLE"))
         self.ui.btn_edit.setIcon(Icon.get_icon("EDIT"))
-        self.ui.btn_edit_nuclei.setIcon(Icon.get_icon("CIRCLE"))
-        self.ui.btn_edit_foci.setIcon(Icon.get_icon("DOT_CIRCLE"))
         self.ui.btn_show.setIcon(Icon.get_icon("CIRCLE"))
         self.ui.btn_coords.setIcon(Icon.get_icon("MOUSE"))
         self.ui.btn_preview.setIcon(Icon.get_icon("EYE"))

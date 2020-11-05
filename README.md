@@ -65,6 +65,9 @@ Following image formats are supported by NucDetect:
 * Grayscale images
 * Binary images
 
+### Wiki
+Detailed information about the program can be found on the ![wiki](https://github.com/SilMon/NucDetect/wiki)
+
 ### Supplementary Data
 https://github.com/SilMon/NucDetect_Additional_Data
 ___
