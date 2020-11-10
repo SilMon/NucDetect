@@ -59,7 +59,6 @@ class Detector:
         :return: The analysis results as dict
         """
         analysis_settings = settings["analysis_settings"]
-        print(analysis_settings)
         start = time.time()
         logging = analysis_settings["logging"]
         imgdat = Detector.get_image_data(path)
@@ -106,7 +105,6 @@ class Detector:
         handler = ROIHandler(ident=imgdat["id"])
         for roi in rois:
             handler.add_roi(roi)
-        print(analysis_settings["names"])
         handler.idents = analysis_settings["names"]
         imgdat["handler"] = handler
         imgdat["names"] = analysis_settings["names"]

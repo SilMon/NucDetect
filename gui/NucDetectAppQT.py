@@ -558,7 +558,7 @@ class NucDetect(QMainWindow):
         code = anal_sett_dial.exec()
         if code == QDialog.Accepted:
             settings = anal_sett_dial.get_data()
-            print(settings)
+            settings["analysis_settings"] = self.settings
         else:
             # If the dialog was rejected, abort analysis
             return
@@ -576,8 +576,11 @@ class NucDetect(QMainWindow):
         start_time = time.time()
         max_workers = 1 if settings["type"] else None
         with ProcessPoolExecutor(max_workers=max_workers) as e:
-            logstate = self.detector.logging
-            self.detector.logging = False
+            self.res_table_model.setRowCount(0)
+            self.res_table_model.setColumnCount(2)
+            self.res_table_model.setHorizontalHeaderLabels(["Image", "ROI"])
+            logstate = settings["analysis_settings"]["logging"]
+            settings["analysis_settings"]["logging"] = False
             self.prg_signal.emit("Starting multi image analysis", 0, 100, "")
             paths = []
             for ind in range(self.img_list_model.rowCount()):
@@ -591,6 +594,8 @@ class NucDetect(QMainWindow):
             start = batch_size + 1 if batch_size < len(paths) else len(paths) + 1
             stop = len(paths) + batch_size if len(paths) > batch_size else len(paths) + 2
             step = batch_size
+            # Clear results table
+
             # Iterate over all images in batches
             for b in range(start, stop, step):
                 s2 = time.time()
@@ -603,8 +608,13 @@ class NucDetect(QMainWindow):
                     self.prg_signal.emit(f"Analysed images: {ind}/{maxi}",
                                          ind, maxi, "")
                     self.save_rois_to_database(r, all=True)
+                    """
                     self.roi_cache = r["handler"]
                     self.create_result_table_from_list(r["handler"])
+                    """
+                    self.res_table_model.appendRow(
+                        [QStandardItem(r["handler"].ident), QStandardItem(str(len(r["handler"])))]
+                    )
                     ind += 1
                 print(f"Analysed batch {cur_batch} in {time.time() - s2:.3f} secs\t"
                       f"Total: {time.time() - start_time:.3f} secs")
@@ -612,7 +622,7 @@ class NucDetect(QMainWindow):
                 cur_batch += 1
             self.enable_buttons()
             self.ui.list_images.setEnabled(True)
-            self.detector.logging = logstate
+            settings["analysis_settings"]["logging"] = logstate
             self.prg_signal.emit("Analysis finished -- Program ready",
                                  100,
                                  100, "")
@@ -920,12 +930,12 @@ class NucDetect(QMainWindow):
         """
         rows: List[List[str]] = []
         # Get all associated nuclei for the image
-        nucs = cursor.execute("SELECT hash FROM roi WHERE associated IS NULL AND image=?", (img,)).fetchall()
+        nucs = cursor.execute("SELECT hash FROM roi WHERE associated IS NULL AND image=?", img).fetchall()
         # Get all information for each focus
         for nuc in nucs:
             # Get statistics of nucleus
             stats = cursor.execute("SELECT * FROM statistics WHERE hash=?", nuc).fetchall()[0]
-            row = [img, str(nuc[0]), stats[10], str(stats[2]), f"{float(stats[16]) * 100:.2f}",
+            row = [img[0], str(nuc[0]), stats[10], str(stats[2]), f"{float(stats[16]) * 100:.2f}",
                    f"{float(stats[13]):.2f}", f"{float(stats[11]):.2f}", f"{float(stats[12]):.2f}"]
             # Count available foci
             for channel in channel_names:
