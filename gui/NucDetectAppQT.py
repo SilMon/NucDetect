@@ -456,16 +456,9 @@ class NucDetect(QMainWindow):
         :return: None
         """
         cur_ind = self.ui.list_images.currentIndex()
-        # TODO Update because of change in reg_images
-        del self.reg_images[self.img_list_model.item(cur_ind.row()).tdata["key"]]
+        data = self.img_list_model.item(cur_ind.row()).data()
+        self.reg_images.remove((data["key"], data["path"]))
         self.img_list_model.removeRow(cur_ind.row())
-        if cur_ind.row() < self.img_list_model.rowCount():
-            self.ui.list_images.selectionModel().select(cur_ind, QItemSelectionModel.Select)
-            self.ui.list_images.setCurrentIndex(cur_ind)
-        else:
-            nex = self.img_list_model.index(cur_ind.row() - 1, 0)
-            self.ui.list_images.selectionModel().select(nex, QItemSelectionModel.Select)
-            self.ui.list_images.setCurrentIndex(nex)
 
     def clear_image_list(self) -> None:
         """

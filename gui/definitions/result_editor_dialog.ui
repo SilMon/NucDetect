@@ -101,23 +101,6 @@ QGraphicsView{
         </widget>
        </item>
        <item>
-        <widget class="Line" name="line_3">
-         <property name="orientation">
-          <enum>Qt::Vertical</enum>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QLabel" name="label_2">
-         <property name="text">
-          <string>Items</string>
-         </property>
-         <property name="alignment">
-          <set>Qt::AlignCenter</set>
-         </property>
-        </widget>
-       </item>
-       <item>
         <widget class="Line" name="line_4">
          <property name="orientation">
           <enum>Qt::Vertical</enum>
@@ -212,60 +195,6 @@ QGraphicsView{
        </item>
        <item>
         <widget class="Line" name="line_2">
-         <property name="orientation">
-          <enum>Qt::Vertical</enum>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="btn_edit_nuclei">
-         <property name="maximumSize">
-          <size>
-           <width>16777215</width>
-           <height>16777215</height>
-          </size>
-         </property>
-         <property name="toolTip">
-          <string>Enables Nuclei Add/Edit Mode. Hotkey: 4</string>
-         </property>
-         <property name="text">
-          <string>Nuclei</string>
-         </property>
-         <property name="checkable">
-          <bool>true</bool>
-         </property>
-         <attribute name="buttonGroup">
-          <string notr="true">btng_items</string>
-         </attribute>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="btn_edit_foci">
-         <property name="maximumSize">
-          <size>
-           <width>16777215</width>
-           <height>16777215</height>
-          </size>
-         </property>
-         <property name="toolTip">
-          <string>Enables Foci Add/Edit Mode. Hotkey: 5</string>
-         </property>
-         <property name="text">
-          <string>Foci</string>
-         </property>
-         <property name="checkable">
-          <bool>true</bool>
-         </property>
-         <property name="checked">
-          <bool>true</bool>
-         </property>
-         <attribute name="buttonGroup">
-          <string notr="true">btng_items</string>
-         </attribute>
-        </widget>
-       </item>
-       <item>
-        <widget class="Line" name="line">
          <property name="orientation">
           <enum>Qt::Vertical</enum>
          </property>

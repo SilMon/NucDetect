@@ -12,7 +12,6 @@ from skimage.transform import resize
 from concurrent.futures import ThreadPoolExecutor
 
 from core.Detector import Detector
-from core.roi.ROI import ROI
 from gui import Paths
 
 IMAGE_FORMATS = [
