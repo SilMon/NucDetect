@@ -9,6 +9,7 @@ include /demo.tif
 
 # Include UI files
 include gui/*.ui
+include gui/definitions/*.ui
 include gui/*.png
 include gui/settings/*.ui
 include gui/settings/settings.json
