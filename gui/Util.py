@@ -9,7 +9,7 @@ from PyQt5.QtGui import QStandardItem, QIcon
 from PyQt5.QtWidgets import QScrollArea, QVBoxLayout, QHBoxLayout, QWidget, QSizePolicy
 from skimage import io
 from skimage.transform import resize
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 
 from core.Detector import Detector
 from core.roi.ROI import ROI
@@ -50,7 +50,7 @@ def create_image_item_list_from(paths: List[str],
 
     :param paths: A list containing image paths
     :param indicate_progress: If true, loading progress will be printed to the console
-    :param sort_items: If true, items will be sorted by
+    :param sort_items: If true, items will be sorted
     :return: A list of the created items
     """
     items = []
@@ -59,11 +59,13 @@ def create_image_item_list_from(paths: List[str],
         ind = 1
     if sort_items:
         paths = sorted(paths, key=os.path.basename)
-    for path in paths:
-        items.append(create_list_item(path))
-        if indicate_progress:
-            print(f"Loading: {ind}/{len(paths)}")
-            ind += 1
+    with ThreadPoolExecutor(max_workers=None) as e:
+        res = e.map(create_list_item, paths)
+        for q in res:
+            items.append(q)
+            if indicate_progress:
+                print(f"Loading: {ind}/{len(paths)}")
+                ind += 1
     return items
 
 

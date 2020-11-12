@@ -421,7 +421,6 @@ class NucDetect(QMainWindow):
             for file in t[2]:
                 paths.append(os.path.join(t[0], file))
         items = Util.create_image_item_list_from(paths, indicate_progress=True)
-        print("Add items to list")
         for item in items:
             self.add_item_to_list(item)
         print(f"Finished: {time.time() - start: .2f} secs")
@@ -436,13 +435,13 @@ class NucDetect(QMainWindow):
         if item is not None:
             path = item.data()["path"]
             key = item.data()["key"]
-            d = Detector.get_image_data(path)
             self.img_list_model.appendRow(item)
             self.reg_images.append((key, path))
             if not self.cursor.execute(
                     "SELECT * FROM images WHERE md5 = ?",
                     (key,)
             ).fetchall():
+                d = Detector.get_image_data(path)
                 self.cursor.execute(
                     "INSERT OR IGNORE INTO images VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (key, d["datetime"], d["channels"], d["width"], d["height"],
@@ -608,10 +607,6 @@ class NucDetect(QMainWindow):
                     self.prg_signal.emit(f"Analysed images: {ind}/{maxi}",
                                          ind, maxi, "")
                     self.save_rois_to_database(r, all=True)
-                    """
-                    self.roi_cache = r["handler"]
-                    self.create_result_table_from_list(r["handler"])
-                    """
                     self.res_table_model.appendRow(
                         [QStandardItem(r["handler"].ident), QStandardItem(str(len(r["handler"])))]
                     )
