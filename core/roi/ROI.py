@@ -89,11 +89,11 @@ class ROI:
             return False
 
     def __len__(self):
-            if self.length == -1:
-                self.length = np.sum([x[2] for x in self.area])
-                return self.length
-            else:
-                return self.length
+        if self.length == -1:
+            self.length = np.sum([x[2] for x in self.area])
+            return self.length
+        else:
+            return self.length
 
     def __hash__(self):
         if self.id is None:
@@ -180,7 +180,7 @@ class ROI:
             self.ell_params["center"] = center
             self.ell_params["major_axis"] = r_maj
             self.ell_params["minor_axis"] = r_min
-            self.ell_params["angle"] = math.degrees(angle) - 45
+            self.ell_params["angle"] = - (math.degrees(angle) - 45)
             self.ell_params["orientation"] = or_vec
             self.ell_params["area"] = r_min * r_maj * math.pi
             self.ell_params["shape_match"] = self.ell_params["area"] / area

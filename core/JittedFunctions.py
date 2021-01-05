@@ -36,18 +36,6 @@ def get_region_outlines(binary_map: np.ndarray) -> np.ndarray:
 
 
 @njit(cache=True)
-def convert_to_map(area: Iterable[Tuple]) -> np.ndarray:
-    """
-    Converion of a run length encoded region to an array
-
-    :param area: The encoded area
-    :return: The created binary map
-    """
-    height, width = np.average([])
-    pass
-
-
-@njit(cache=True)
 def automatic_whitebalance(image: np.ndarray, cutoff: float = 0.05) -> np.ndarray:
     """
     Function to perform automatic white balance for an image
@@ -80,6 +68,7 @@ def automatic_whitebalance(image: np.ndarray, cutoff: float = 0.05) -> np.ndarra
         for x in it:
             x[...] = ratio * x
     return image
+
 
 @njit(cache=True)
 def eu_dist(p1: Tuple[int, int], p2: Tuple[int, int]) -> float:
@@ -206,4 +195,3 @@ def imprint_data_into_channel(channel: np.ndarray, data: np.ndarray, offset: Uni
         for ii in range(len(data[0])):
             if data[i][ii] != 0:
                 channel[i + offset[0]][ii + offset[1]] = data[i][ii]
-    return None

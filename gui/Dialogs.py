@@ -1,3 +1,4 @@
+import copy
 import json
 import math
 import sqlite3
@@ -32,10 +33,11 @@ pg.setConfigOptions(imageAxisOrder='row-major')
 
 class AnalysisSettingsDialog(QDialog):
 
-    def __init__(self, all_=False,  *args, **kwargs):
+    def __init__(self, all_=False, settings=None,  *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.ui = None
         self.all = all_
+        self.settings = settings
         self.initialize_ui()
 
     def get_data(self) -> Dict[str, Union[List, bool]]:
@@ -88,6 +90,33 @@ class AnalysisSettingsDialog(QDialog):
         self.ui.cbx_experiment.toggled.connect(self.ui.le_name.setEnabled)
         self.ui.cbx_experiment.toggled.connect(self.ui.pte_details.setEnabled)
         self.ui.cbx_experiment.toggled.connect(self.ui.pte_notes.setEnabled)
+        channels = [
+            self.ui.cbx_one,
+            self.ui.cbx_two,
+            self.ui.cbx_three,
+            self.ui.cbx_four,
+            self.ui.cbx_five
+        ]
+        channel_names = [
+            self.ui.le_one,
+            self.ui.le_two,
+            self.ui.le_three,
+            self.ui.le_four,
+            self.ui.le_five
+        ]
+        channel_main = [
+            self.ui.rbtn_one,
+            self.ui.rbtn_two,
+            self.ui.rbtn_three,
+            self.ui.rbtn_four,
+            self.ui.rbtn_five
+        ]
+        names = self.settings["names"].split(";")
+        for name in range(len(names)):
+            channels[name].setChecked(True)
+            channel_names[name].setEnabled(True)
+            channel_names[name].setText(names[name])
+        channel_main[self.settings["main_channel"]].setChecked(True)
         # Bind checkboxes for individual channels to the corresponding text edit
         self.ui.cbx_one.toggled.connect(self.ui.le_one.setEnabled)
         self.ui.cbx_one.toggled.connect(self.ui.rbtn_one.setEnabled)
@@ -1486,6 +1515,9 @@ class EditorView(pg.GraphicsView):
         :return: None
         """
         self.selected_item.update_data(rect, angle, preview)
+        # Mark Original ident as delete
+        if not preview:
+            self.delete.append(self.selected_item.roi_ident)
 
     def draw_additional_items(self, state: bool = True) -> None:
         """
@@ -1714,8 +1746,7 @@ class EditorView(pg.GraphicsView):
         stats = roi.calculate_statistics(image[..., item.channel_index])
         ellp = roi.calculate_ellipse_parameters()
         # Prepare data for SQL statement
-        rle = rle.copy()
-        [x.insert(0, hash(roi)) for x in rle]
+        rle = [(hash(roi), x[0], x[1], x[2]) for x in rle]
         # Write item to database
         curs.execute("INSERT INTO roi VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                      (hash(roi), image_id, False, roi.ident,
@@ -1799,7 +1830,7 @@ class EditorView(pg.GraphicsView):
 
     @staticmethod
     def encode_new_roi(rr: List[int], cc: List[int],
-                       map_: np.ndarray) -> List[List[int]]:
+                       map_: np.ndarray) -> List[Tuple[int, int, int]]:
         """
         Method to run length encode newly created roi
 
@@ -1822,7 +1853,7 @@ class EditorView(pg.GraphicsView):
                     rl += 1
                     if col == -1:
                         col = int(cc[index])
-            rle.append([int(row), col, rl])
+            rle.append((int(row), col, rl))
         return rle
 
 
@@ -1896,12 +1927,22 @@ class Editor(QDialog):
         sy, sx, _ = self.image.shape
         self.ui.spb_x.setMinimum(0)
         self.ui.spb_x.setMaximum(sx - 1)
+        self.ui.spb_x.valueChanged.connect(self.ui.btn_accept.setEnabled)
+        self.ui.spb_x.valueChanged.connect(self.ui.btn_preview.setEnabled)
         self.ui.spb_y.setMinimum(0)
         self.ui.spb_y.setMaximum(sy - 1)
+        self.ui.spb_y.valueChanged.connect(self.ui.btn_accept.setEnabled)
+        self.ui.spb_y.valueChanged.connect(self.ui.btn_preview.setEnabled)
         self.ui.spb_width.setMinimum(0)
         self.ui.spb_width.setMaximum(sx)
+        self.ui.spb_width.valueChanged.connect(self.ui.btn_accept.setEnabled)
+        self.ui.spb_width.valueChanged.connect(self.ui.btn_preview.setEnabled)
         self.ui.spb_height.setMinimum(0)
         self.ui.spb_height.setMaximum(sy)
+        self.ui.spb_height.valueChanged.connect(self.ui.btn_accept.setEnabled)
+        self.ui.spb_height.valueChanged.connect(self.ui.btn_preview.setEnabled)
+        self.ui.spb_angle.valueChanged.connect(self.ui.btn_accept.setEnabled)
+        self.ui.spb_angle.valueChanged.connect(self.ui.btn_preview.setEnabled)
         self.ui.btn_preview.clicked.connect(self.set_changes)
         self.ui.btn_accept.clicked.connect(self.set_changes)
 
@@ -1944,6 +1985,8 @@ class Editor(QDialog):
         self.ui.spb_width.setValue(item.width)
         self.ui.spb_height.setValue(item.height)
         self.ui.spb_angle.setValue(item.angle)
+        self.ui.btn_preview.setEnabled(False)
+        self.ui.btn_accept.setEnabled(False)
         self.enable_editing_widgets(True)
 
     def enable_editing_widgets(self, enable: bool = True) -> None:
@@ -1953,14 +1996,14 @@ class Editor(QDialog):
         :param enable: Boolean decider
         :return: None
         """
-        self.ui.btn_preview.setEnabled(enable)
-        self.ui.btn_accept.setEnabled(enable)
         self.ui.spb_x.setEnabled(enable)
         self.ui.spb_y.setEnabled(enable)
         self.ui.spb_width.setEnabled(enable)
         self.ui.spb_height.setEnabled(enable)
         self.ui.spb_angle.setEnabled(enable)
         if not enable:
+            self.ui.btn_preview.setEnabled(enable)
+            self.ui.btn_accept.setEnabled(enable)
             self.ui.spb_x.setValue(0)
             self.ui.spb_y.setValue(0)
             self.ui.spb_width.setValue(0)
@@ -2039,6 +2082,7 @@ class EditingRectangle(QGraphicsRectItem):
         self.width = width
         self.height = height
         self.center = cx, cy
+        self.ipen = None
         self.pen = None
         self.color = None
         self.initialize()
@@ -2092,7 +2136,7 @@ class NucleusItem(QGraphicsEllipseItem):
         self.changed = False
         self.x = x
         self.y = y
-        self.angle = -angle
+        self.angle = angle
         self.width = width
         self.height = height
         self.center = center_x, center_y

@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="UTF-8") as fh:
 
 setuptools.setup(
     name="NucDetect",
-    version="0.13.37",
+    version="0.13.44",
     description=("Module to identify intranuclear proteins on basis of "
                  "fluorescence images."),
     author="Romano Weiss",
@@ -31,6 +31,6 @@ setuptools.setup(
         "pillow>7.0.0",
         "qtawesome>0.6.1",
         "piexif>=1.1.3",
-        "pyqtgraph"
+        "pyqtgraph>=0.11.1"
     ]
 )

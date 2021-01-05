@@ -561,7 +561,6 @@ class Detector:
         # Normalize edm
         xmax, xmin = edm.max(), edm.min()
         x = (edm - xmin) / (xmax - xmin)
-        # TODO convert to uint8
         # Determine maxima of EDM
         maxi = maximum(x, selem=selem)
         # Iteratively determine maximum
@@ -584,17 +583,14 @@ class Detector:
                     nucs[pix] = [[], []]
                 nucs[pix][0].append(y)
                 nucs[pix][1].append(x)
-
         # Remove background
         del nucs[0]
         centers = [(np.average(x[0]), np.average(x[1])) for x in nucs]
-
         cmask = np.zeros(shape=orig.shape)
         ind = 1
         for c in centers:
             cmask[int(c[0])][int(c[1])] = ind
             ind += 1
-
         # Create watershed segmentation based on centers
         ws = watershed(-edm, cmask, mask=ch_main_bin, watershed_line=True)
         # Check number of unique watershed labels

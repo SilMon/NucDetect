@@ -384,7 +384,7 @@ class NucDetect(QMainWindow):
         exp_dialog = ExperimentDialog(data={
             "keys": [x[0] for x in self.reg_images],
             "paths": [x[1] for x in self.reg_images]
-        })
+        }, settings=self.settings)
         code = exp_dialog.exec()
         if code == QDialog.Accepted:
             exp_dialog.accepted()
@@ -476,9 +476,9 @@ class NucDetect(QMainWindow):
         :return: None
         """
         if not self.cur_img:
-            self.ui.list_images.select(self.img_list_model.index(0, 0))
+            self.selec_signal.emit(True)
         # Get settings for this analysis
-        anal_sett_dial = AnalysisSettingsDialog()
+        anal_sett_dial = AnalysisSettingsDialog(settings=self.settings)
         code = anal_sett_dial.exec()
         if code == QDialog.Accepted:
             settings = anal_sett_dial.get_data()
@@ -532,6 +532,7 @@ class NucDetect(QMainWindow):
         print(f"Writing to database: {time.time() - s1:.4f} secs")
         self.prg_signal.emit(message.format(f"{time.time() - start:.2f} secs"),
                              percent, maxi, "")
+        self.create_result_table_from_list(self.roi_cache)
         self.enable_buttons()
         #self.ui.btn_analyse.setEnabled(False)
         self.ui.list_images.setEnabled(True)
@@ -546,7 +547,7 @@ class NucDetect(QMainWindow):
         self.ui.list_images.setEnabled(False)
         self.unsaved_changes = True
         # Get settings for this analysis
-        anal_sett_dial = AnalysisSettingsDialog(all_=True)
+        anal_sett_dial = AnalysisSettingsDialog(all_=True, settings=self.settings)
         code = anal_sett_dial.exec()
         if code == QDialog.Accepted:
             settings = anal_sett_dial.get_data()
@@ -816,6 +817,8 @@ class NucDetect(QMainWindow):
         :param handler: The handler containing the rois
         :return: None
         """
+        self.prg_signal.emit(f"Create Result Table",
+                             0, 100, "")
         self.res_table_model.setRowCount(0)
         connection = sqlite3.connect(Paths.database)
         cursor = connection.cursor()
@@ -905,8 +908,7 @@ class NucDetect(QMainWindow):
             rows.extend(row)
         return rows
 
-    @staticmethod
-    def get_table_data_for_image(img: Tuple[str], channel_names: List[str],
+    def get_table_data_for_image(self, img: Tuple[str], channel_names: List[str],
                                  cursor: sqlite3.Cursor) -> List[List[str]]:
         """
         Method to get the table data for the specified image
@@ -919,8 +921,12 @@ class NucDetect(QMainWindow):
         rows: List[List[str]] = []
         # Get all associated nuclei for the image
         nucs = cursor.execute("SELECT hash FROM roi WHERE associated IS NULL AND image=?", img).fetchall()
+        nuclen = len(nucs)
+        ind = 1
         # Get all information for each focus
         for nuc in nucs:
+            self.prg_signal.emit(f"Creating table for image {img[0]}: {ind}/{nuclen}",
+                                 (ind/nuclen) * 100, 100, "")
             # Get statistics of nucleus
             stats = cursor.execute("SELECT * FROM statistics WHERE hash=?", nuc).fetchall()[0]
             row = [img[0], str(nuc[0]), stats[10], str(stats[2]), f"{float(stats[16]) * 100:.2f}",
@@ -931,6 +937,7 @@ class NucDetect(QMainWindow):
                                        (nuc[0], channel)).fetchall()
                 row.append(str(count[0][0]))
             rows.append(row)
+            ind += 1
         return rows
 
     def set_experiment_status_label_text(self, status: str) -> None:
@@ -1146,14 +1153,6 @@ class NucDetect(QMainWindow):
             if sett.changed:
                 for key, value in sett.changed.items():
                     self.detector.settings[key] = value
-                    print("Key: {} Value: {}".format(key, value))
-                    # TODO
-                    """
-                    self.cursor.execute(
-                        "INSERT INTO settings VALUES(?, ?)",
-                        (key, str(value))
-                    )
-                    """
             sett.save_menu_settings()
 
     def show_modification_window(self) -> None:

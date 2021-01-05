@@ -240,5 +240,6 @@ class ROIHandler:
         for roi in self.rois:
             # Get channel index of ROI
             if roi.ident not in ignore:
+                print(roi.area)
                 AreaAnalysis.imprint_area_into_array(roi.area, maps[self.idents.index(roi.ident)], hash(roi))
         return maps
