@@ -308,12 +308,18 @@ QGraphicsView{
          <property name="enabled">
           <bool>false</bool>
          </property>
+         <property name="toolTip">
+          <string>X coordinate of the ellipse center</string>
+         </property>
         </widget>
        </item>
        <item row="1" column="1">
         <widget class="QSpinBox" name="spb_y">
          <property name="enabled">
           <bool>false</bool>
+         </property>
+         <property name="toolTip">
+          <string>Y coordinate of the ellipse center</string>
          </property>
         </widget>
        </item>
@@ -346,6 +352,9 @@ QGraphicsView{
          <property name="enabled">
           <bool>false</bool>
          </property>
+         <property name="toolTip">
+          <string>Length of the major axis in pixel</string>
+         </property>
         </widget>
        </item>
        <item row="1" column="1">
@@ -353,12 +362,15 @@ QGraphicsView{
          <property name="enabled">
           <bool>false</bool>
          </property>
+         <property name="toolTip">
+          <string>Length of the minor axis in pixel</string>
+         </property>
         </widget>
        </item>
        <item row="2" column="0">
         <widget class="QLabel" name="label_8">
          <property name="text">
-          <string>Angle</string>
+          <string>Angle:</string>
          </property>
         </widget>
        </item>
@@ -366,6 +378,9 @@ QGraphicsView{
         <widget class="QDoubleSpinBox" name="spb_angle">
          <property name="enabled">
           <bool>false</bool>
+         </property>
+         <property name="toolTip">
+          <string>Clockwise angle of the major axis. </string>
          </property>
          <property name="minimum">
           <double>-360.000000000000000</double>
@@ -390,6 +405,9 @@ QGraphicsView{
            <height>16777215</height>
           </size>
          </property>
+         <property name="toolTip">
+          <string>Button to preview changes</string>
+         </property>
          <property name="text">
           <string>Preview</string>
          </property>
@@ -405,6 +423,9 @@ QGraphicsView{
            <width>200</width>
            <height>16777215</height>
           </size>
+         </property>
+         <property name="toolTip">
+          <string>Button to accept the performed changes</string>
          </property>
          <property name="text">
           <string>Accept</string>
@@ -464,6 +485,5 @@ QGraphicsView{
  </connections>
  <buttongroups>
   <buttongroup name="btng_mode"/>
-  <buttongroup name="btng_items"/>
  </buttongroups>
 </ui>
