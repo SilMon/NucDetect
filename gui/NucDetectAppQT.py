@@ -62,7 +62,6 @@ class NucDetect(QMainWindow):
         self.create_tables(self.cursor)
         # Load the settings from database
         self.settings = self.load_settings()
-        print(self.settings)
         # Create detector for analysis
         self.detector = Detector()
         # Initialize needed variables

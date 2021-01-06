@@ -1699,7 +1699,7 @@ class EditorView(pg.GraphicsView):
                         unassociated.append(item.roi_ident)
                 # Get coordinates corresponding to the item
                 rr, cc = ellipse(item.center[1], item.center[0], item.height / 2, item.width / 2,
-                                 self.image.shape, np.deg2rad(item.angle))
+                                 self.image.shape, np.deg2rad(-item.angle))
                 # Get encoded area for item
                 rle = self.encode_new_roi(rr, cc, maps[item.channel_index])
                 # Create new ROI instance
@@ -1817,7 +1817,7 @@ class EditorView(pg.GraphicsView):
         Method to replace a placeholder in the given map
 
         :param map_: The map
-        :param roihash: The hash to replaxce the placeholder with
+        :param roihash: The hash to replace the placeholder with
         :param placeholder: The placeholder to replace
         :return: None
         """
