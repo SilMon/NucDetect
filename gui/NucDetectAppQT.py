@@ -68,9 +68,14 @@ class NucDetect(QMainWindow):
         self.reg_images = []
         # Contains the displayed table data
         self.data = None
+        # Contains data for the associated experiment
         self.cur_exp = None
+        # Contains data of the loaded image
         self.cur_img = None
+        # Contains the associated roi for the loaded image
         self.roi_cache = None
+        # A list of all loaded image files -> Used for reloading
+        self.loaded_files = []
         self.unsaved_changes = False
         # Setup UI
         self._setup_ui()
@@ -188,8 +193,6 @@ class NucDetect(QMainWindow):
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("logging", 1, "bool");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("ml_analysis", 0, "bool");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_check", 1, "bool");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_min_main_area", 1200, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_min_foc_area", 5, "int");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("blob_min_sigma", 1, "float");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("blob_max_sigma", 5, "float");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("blob_num_sigma", 10, "int");
@@ -202,10 +205,15 @@ class NucDetect(QMainWindow):
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("canny_sigma", 1, "float");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("canny_low_thresh", 0.1, "float");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("canny_up_thresh", 0.2, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_nuclei_certainty", 0.95, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_foci", 0.99, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_nuclei", 0.95, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_foci", 0.80, "float");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("show_ellipsis", 1, "bool");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("track_mouse", 1, "bool");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_min_nuc_size", 1000, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_min_foc_size", 8, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_max_nuc_size", 45000, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_max_foc_size", 280, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_max_foc_overlap", 0.75, "float");
             COMMIT;
             '''
         )
@@ -341,12 +349,34 @@ class NucDetect(QMainWindow):
         for index in self.ui.list_images.selectionModel().selectedIndexes():
             self.cur_img = self.img_list_model.item(index.row()).data()
         if self.cur_img:
-            # TODO Settings mit einbeziehen
             ana = self.cur_img["analysed"]
             if ana:
+                exp = self.cursor.execute("SELECT experiment FROM images WHERE md5=?",
+                                          (self.cur_img["key"],)).fetchall()
+                experiment = None
+                # Check if image is part of an experiment
+                if exp[0][0]:
+                    # Get number of attached images
+                    num_imgs = self.cursor.execute("SELECT COUNT(md5) FROM images WHERE experiment=?",
+                                                   exp[0]).fetchall()[0][0]
+                    msg = QMessageBox()
+                    msg.setStyleSheet(open("messagebox.css", "r").read())
+                    msg.setWindowIcon(QtGui.QIcon('logo.png'))
+                    msg.setIcon(QMessageBox.Information)
+                    msg.setWindowTitle("Experiment attached!")
+                    msg.setText("")
+                    msg.setInformativeText(f"The selected image is assigned to the experiment {exp[0][0]}, "
+                                           f"with {num_imgs} attached images. Loading it can take up"
+                                           f" to approx. {num_imgs * 5 / 60:.2f} min ({num_imgs * 5} secs). ")
+                    msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+                    msg.button(QMessageBox.Ok).setText("Load Experiment")
+                    msg.button(QMessageBox.Cancel).setText("Load Image Data")
+                    ok = msg.exec_()
+                    if ok == QMessageBox.Ok:
+                        experiment = exp[0][0]
                 self.prg_signal.emit(f"Loading data from database for {self.cur_img['file_name']}",
                                      0, 100, "")
-                thread = Thread(target=self.load_saved_data)
+                thread = Thread(target=self.load_saved_data, args=(experiment, ))
                 thread.start()
             else:
                 self.ui.lbl_status.setText("Program ready")
@@ -355,10 +385,11 @@ class NucDetect(QMainWindow):
         else:
             self.ui.btn_analyse.setEnabled(False)
 
-    def load_saved_data(self) -> None:
+    def load_saved_data(self, experiment: str = None) -> None:
         """
         Method to load saved data from the database
 
+        :param experiment: Name of the experimental data to load. None if only image data should be loaded
         :return: None
         """
         # Disable Buttons and list during loading
@@ -367,7 +398,7 @@ class NucDetect(QMainWindow):
         # Load saved data from databank
         self.roi_cache = self.load_rois_from_database(self.cur_img["key"])
         # Create the result table from loaded data
-        self.create_result_table_from_list(self.roi_cache)
+        self.create_result_table_from_list(self.roi_cache, experiment)
         # Re-enable buttons and list
         self.ui.list_images.setEnabled(True)
         self.enable_buttons()
@@ -383,7 +414,7 @@ class NucDetect(QMainWindow):
         exp_dialog = ExperimentDialog(data={
             "keys": [x[0] for x in self.reg_images],
             "paths": [x[1] for x in self.reg_images]
-        }, settings=self.settings)
+        })
         code = exp_dialog.exec()
         if code == QDialog.Accepted:
             exp_dialog.accepted()
@@ -417,8 +448,9 @@ class NucDetect(QMainWindow):
         start = time.time()
         paths = []
         for t in os.walk(url):
-            for file in t[2]:
-                paths.append(os.path.join(t[0], file))
+            paths = [os.path.join(t[0], x) for x in t[2]]
+            paths = [x for x in paths if x not in self.loaded_files]
+        self.loaded_files.extend(paths)
         items = Util.create_image_item_list_from(paths, indicate_progress=True)
         for item in items:
             self.add_item_to_list(item)
@@ -533,7 +565,6 @@ class NucDetect(QMainWindow):
                              percent, maxi, "")
         self.create_result_table_from_list(self.roi_cache)
         self.enable_buttons()
-        #self.ui.btn_analyse.setEnabled(False)
         self.ui.list_images.setEnabled(True)
 
     def analyze_all(self) -> None:
@@ -599,7 +630,7 @@ class NucDetect(QMainWindow):
                 for r in res:
                     self.prg_signal.emit(f"Analysed images: {ind}/{maxi}",
                                          ind, maxi, "")
-                    self.save_rois_to_database(r, all=True)
+                    self.save_rois_to_database(r, all_=True)
                     self.res_table_model.appendRow(
                         [QStandardItem(r["handler"].ident), QStandardItem(str(len(r["handler"])))]
                     )
@@ -625,12 +656,12 @@ class NucDetect(QMainWindow):
 
     @staticmethod
     def save_rois_to_database(data: Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]],
-                              all: bool = False) -> None:
+                              all_: bool = False) -> None:
         """
         Method to save the data stored in the ROIHandler rois to the database
 
         :param data: The data dict returned by the Detector class
-        :param all: Deactivates printing to console
+        :param all_: Deactivates printing to console
         :return: None
         """
         con = sqlite3.connect(Paths.database)
@@ -725,7 +756,7 @@ class NucDetect(QMainWindow):
         )
         con.commit()
         con.close()
-        if not all:
+        if not all_:
             print("ROI saved to database")
 
     def load_rois_from_database(self, md5: str) -> ROIHandler:
@@ -809,11 +840,12 @@ class NucDetect(QMainWindow):
         print("Loaded roi from database")
         return rois
 
-    def create_result_table_from_list(self, handler: ROIHandler) -> None:
+    def create_result_table_from_list(self, handler: ROIHandler, experiment: str = None) -> None:
         """
         Method to create the result table from a list of rois
 
         :param handler: The handler containing the rois
+        :param experiment: The experiment to load
         :return: None
         """
         self.prg_signal.emit(f"Create Result Table",
@@ -821,8 +853,6 @@ class NucDetect(QMainWindow):
         self.res_table_model.setRowCount(0)
         connection = sqlite3.connect(Paths.database)
         cursor = connection.cursor()
-        # Check if the experiment for the image contains additional images
-        exp = cursor.execute("SELECT experiment FROM images WHERE md5=?", (handler.ident,)).fetchall()
         # Get all available channels for the image
         chans = cursor.execute("SELECT * FROM channels WHERE md5=?", (handler.ident, )).fetchall()
         # Remove main channel and  from list
@@ -832,22 +862,22 @@ class NucDetect(QMainWindow):
         # Create header
         header = ["Image Identifier", "Group", "ROI Identifier", "Center[(y, x)]", "Area [px]",
                   "Ellipticity[%]", "Or. Angle [deg]", "Maj. Axis", "Min. Axis"]
-        if exp[0][0]:
+        if experiment:
             # Get all assigned images
-            num_imgs = cursor.execute("SELECT COUNT(md5) FROM images WHERE experiment=?", exp[0]).fetchall()[0][0]
+            num_imgs = cursor.execute("SELECT COUNT(md5) FROM images WHERE experiment=?",
+                                      (experiment, )).fetchall()[0][0]
             # Load data for experiment
-            rows = self.get_table_data_from_database(exp[0][0], chans, cursor)
+            rows = self.get_table_data_from_database(experiment, chans, cursor)
             self.set_experiment_status_label_text(
-                f"Experiment: {exp[0][0]}\nImages: {num_imgs}"
+                f"Experiment: {experiment}\nImages: {num_imgs}"
             )
-            self.cur_exp = exp[0][0]
+            self.cur_exp = experiment
             # Get channel names
             channel_names = cursor.execute("SELECT DISTINCT name FROM channels WHERE md5"
                                            " IN (SELECT md5 FROM images WHERE experiment=?) and main=?",
-                                           (exp[0][0], 0)).fetchall()
+                                           (experiment, 0)).fetchall()
             channel_names = sorted([x[0] for x in channel_names])
             header.extend(channel_names)
-
         else:
             rows = self.get_table_data_for_image((handler.ident,), chans, cursor)
             # Get channel names
@@ -878,8 +908,7 @@ class NucDetect(QMainWindow):
         header.extend(rows)
         self.data = header
 
-    @staticmethod
-    def get_table_data_from_database(experiment: str, channel_names: List[str],
+    def get_table_data_from_database(self, experiment: str, channel_names: List[str],
                                      cursor: sqlite3.Cursor) -> List[List[str]]:
         """
         Method to load the data of an experiment from the database
@@ -895,7 +924,7 @@ class NucDetect(QMainWindow):
         rows: List[List[str]] = []
         # Iterate over all images
         for img in imgs:
-            row = NucDetect.get_table_data_for_image(img[0], channel_names, cursor)
+            row = self.get_table_data_for_image(img, channel_names, cursor)
             # Check if the image was assigned to a group
             group = cursor.execute("SELECT name FROM groups WHERE image=?", img).fetchall()
             if group:
@@ -1069,6 +1098,7 @@ class NucDetect(QMainWindow):
         if not exps:
             msg = QMessageBox()
             msg.setIcon(QMessageBox.Information)
+            msg.setStyleSheet(open("messagebox.css", "r").read())
             msg.setWindowTitle("Warning")
             msg.setText("No experiments were defined")
             msg.setInformativeText("Statistics can only be displayed, if images are assigned to an experiment")
@@ -1141,7 +1171,6 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        # TODO
         sett = SettingsDialog()
         sett.initialize_from_file(os.path.join(os.getcwd(), "settings/settings.json"))
         sett.setWindowTitle("Settings")
@@ -1215,6 +1244,8 @@ def exception_hook(exc_type, exc_value, traceback_obj) -> None:
     print(text)
     msg = QMessageBox()
     msg.setIcon(QMessageBox.Critical)
+    msg.setWindowIcon(QtGui.QIcon('logo.png'))
+    msg.setStyleSheet(open("messagebox.css", "r").read())
     msg.setText(text)
     msg.setInformativeText(info)
     msg.setWindowTitle(title)

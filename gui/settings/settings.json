@@ -64,32 +64,6 @@
       }
     },
     {
-      "id": "quality_min_main_area",
-      "title": "Quality: Minimal Nucleus Area",
-      "desc": "Detected Nuclei with a size below this threshold will be removed",
-      "type": "slider",
-      "value": 1200,
-      "values": {
-        "min": 200,
-        "max": 200000,
-        "step": 200,
-        "unit": "pix"
-      }
-    },
-    {
-      "id": "quality_min_foc_area",
-      "title": "Quality: Minimal Focus Area",
-      "desc": "Detected foci with a size below this threshold will be removed",
-      "type": "slider",
-      "value": 5,
-      "values": {
-        "min": 5,
-        "max": 500,
-        "step": 5,
-        "unit": "pix"
-      }
-    },
-    {
       "id": "blob_min_sigma",
       "title": "Blob Detection - Minimum standard deviation",
       "desc": "The minimum standard deviation for Gaussian kernel. Lower values will help to detect smaller foci",
@@ -298,7 +272,7 @@
       "title": "Detection Certainty",
       "desc": "Minimum required detection certainty in percent for nucleus detection",
       "type": "decspin",
-      "value": 0.99,
+      "value": 0.80,
       "values": {
         "min": 0.01,
         "max": 1,
@@ -328,6 +302,75 @@
       "value": 1,
       "values": {
         "tristate": 0
+      }
+    }
+  ],
+  "Analysis - Quality Check": [
+    {
+      "id": "quality_min_nuc_size",
+      "title": "Minimal Nucleus Size",
+      "desc": "Minimal size a detected nucleus can have",
+      "type": "slider",
+      "value": 1000,
+      "values": {
+        "min": 1000,
+        "max": 60000,
+        "step": 1000,
+        "unit": "pix"
+      }
+    },
+    {
+      "id": "quality_max_nuc_size",
+      "title": "Maximal Nucleus Size",
+      "desc": "Maximal size a detected nucleus can have",
+      "type": "slider",
+      "value": 45000,
+      "values": {
+        "min": 1000,
+        "max": 60000,
+        "step": 1000,
+        "unit": "pix"
+      }
+    },
+    {
+      "id": "quality_min_foc_size",
+      "title": "Minimal Focus Size",
+      "desc": "Minimal size a detected focus can have",
+      "type": "slider",
+      "value": 8,
+      "values": {
+        "min": 4,
+        "max": 280,
+        "step": 2,
+        "unit": "pix"
+      }
+    },
+    {
+      "id": "quality_max_foc_size",
+      "title": "Maximal Focus Size",
+      "desc": "Maximal size a detected focus can have",
+      "type": "slider",
+      "value": 280,
+      "values": {
+        "min": 4,
+        "max": 270,
+        "step": 2,
+        "unit": "pix"
+      }
+    },
+    {
+      "id": "quality_max_foc_overlap",
+      "title": "Focus Overlap",
+      "desc": "Maximum allowed overlap for two detected foci",
+      "type": "decspin",
+      "value": 0.75,
+      "values": {
+        "min": 0.01,
+        "max": 1,
+        "step": 0.01,
+        "decimals": 2,
+        "prefix": "",
+        "suffix": ""
       }
     }
   ]

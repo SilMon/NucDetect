@@ -1,6 +1,7 @@
 import time
 
 import tensorflow as tf
+import matplotlib.pyplot as plt
 from numba import jit
 from skimage import io
 from tensorflow.keras import models

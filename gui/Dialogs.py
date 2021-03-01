@@ -193,6 +193,7 @@ class ExperimentDialog(QDialog):
         :return: None
         """
         dial = QInputDialog()
+        dial.setStyleSheet(open("inputbox.css", "r").read())
         name, ok = QInputDialog.getText(dial, "Experiment Dialog", "Enter experiment name: ")
         if ok:
             add_item = QStandardItem()
@@ -305,7 +306,7 @@ class ExperimentDialog(QDialog):
         # Clear image model
         self.img_model.clear()
 
-    def open_image_selection_dialog(self) -> Tuple[List[str]]:
+    def open_image_selection_dialog(self) -> Tuple[List[str], List[str]]:
         """
         Method to open the image selection dialog
 
@@ -729,6 +730,7 @@ class GroupDialog(QDialog):
         :return: None
         """
         dial = QInputDialog()
+        dial.setStyleSheet(open("inputbox.css", "r").read())
         name, ok = QInputDialog.getText(dial, "Group Dialog", "Enter the new group: ")
         if ok:
             # Create item to add to group list
@@ -1141,7 +1143,7 @@ class ImgDialog(QDialog):
                 ellipse.setData(1, roi.main)
                 # Rotate the ellipse according to the angle
                 ellipse.setTransformOriginPoint(ellipse.sceneBoundingRect().center())
-                ellipse.setRotation(-angle)
+                ellipse.setRotation(angle)
                 ellipse.setPos(cx - d2, cy - d1)
                 # Draw main axis
                 main_axis = QGraphicsLineItem(cx - ovx * 25, cy - ovy * 25,
@@ -1151,13 +1153,13 @@ class ImgDialog(QDialog):
                 major_axis = QGraphicsLineItem(-d2, 0, d2, 0)
                 major_axis.setData(0, self.nuc_pen)
                 major_axis.setPos(cx, cy)
-                major_axis.setRotation(-angle)
+                major_axis.setRotation(angle)
                 self.items[ind].append(major_axis)
                 # Draw minor axis
                 minor_axis = QGraphicsLineItem(-d1, 0, d1, 0)
                 minor_axis.setData(0, self.nuc_pen)
                 minor_axis.setPos(cx, cy)
-                minor_axis.setRotation(-angle + 90)
+                minor_axis.setRotation(angle + 90)
                 self.items[ind].append(major_axis)
                 self.items[ind].append(main_axis)
                 self.items[ind].append(minor_axis)

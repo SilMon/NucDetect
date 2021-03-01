@@ -1,0 +1,30 @@
+QInputDialog {
+    background-color: rgb(0, 51, 102);
+}
+
+QInputDialog QLabel{
+    color: white;
+}
+
+QInputDialog QPushbutton{
+    color: White;
+	background-color: rgba(22, 42, 75 , 255);
+	border: none;
+	font-size: 14px;
+ 	text-align: center;
+    display: inline-block;
+	min-height: 25;
+	min-width: 40;
+}
+
+QInputDialog QPushButton:hover{
+	background-color:  rgba(15, 35, 68 , 255);
+}
+
+QInputDialog QPushButton:pressed{
+	background-color:  rgba(8, 28, 61 , 255);
+}
+
+QInputDialog QPushButton:disabled{
+	background-color:  rgba(40, 60, 100 , 255);
+}

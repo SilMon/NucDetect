@@ -7,6 +7,7 @@ import datetime
 import hashlib
 import os
 import time
+from copy import deepcopy
 import matplotlib.pyplot as plt
 from typing import Union, Dict, List, Tuple, Any, Iterable
 
@@ -17,7 +18,7 @@ from scipy.ndimage import binary_fill_holes, label
 from skimage import io
 from skimage.draw import circle
 from skimage.feature import canny, blob_log
-from skimage.filters import threshold_local
+from skimage.filters import threshold_local, gaussian
 from skimage.filters.rank import maximum
 from skimage.segmentation import watershed
 from skimage.morphology import dilation
@@ -58,7 +59,7 @@ class Detector:
         :param ml_analysis: Enable image analysis via U-Net
         :return: The analysis results as dict
         """
-        analysis_settings = settings["analysis_settings"]
+        analysis_settings = deepcopy(settings["analysis_settings"])
         start = time.time()
         logging = analysis_settings["logging"]
         imgdat = Detector.get_image_data(path)
@@ -89,9 +90,10 @@ class Detector:
             nuclei = self.analyser.predict_image(path, self.analyser.NUCLEI, channels=(main_channel,),
                                                  threshold=analysis_settings["fcn_certainty_nuclei"],
                                                  logging=logging)[0]
+            # Get indices of foci channels
+            indices = [names.index(x) for x in analysis_settings["names"] if names.index(x) != main_channel]
             foci = self.analyser.predict_image(path, self.analyser.FOCI,
-                                               channels=[x for x in range(len(names)) if x is not main_channel],
-                                               logging=logging,
+                                               channels=indices, logging=logging,
                                                threshold=analysis_settings["fcn_certainty_foci"])
             if main_channel > len(foci):
                 foci.append(nuclei)
@@ -161,6 +163,7 @@ class Detector:
             )
         )
         # Remove unassociated foci
+        # TODO check if functional
         rois = [x for x in rois if x.associated is not None]
         Detector.log(f"Finished focus extraction {time.time() - s1:.4f}", logging)
         rois.extend(main)
@@ -255,7 +258,6 @@ class Detector:
         # Get RLE for map
         areas = Detector.encode_areas(main_markers)
         for _, rl in areas.items():
-
             roi = ROI(channel=names[main_map], main=True)
             roi.set_area(rl)
             main.append(roi)
@@ -326,12 +328,14 @@ class Detector:
 
     @staticmethod
     def perform_roi_quality_check(rois: List[ROI], channels: Iterable[np.ndarray], channel_names: Iterable[str],
-                                  max_focus_overlapp: float = .75, min_main_area: int = 400, min_foc_area: int = 5,
+                                  max_focus_overlapp: float = .75, min_main_area: int = 1000,
+                                  max_main_area: int = 30000, min_foc_area: int = 5, max_foc_area: int = 270,
                                   logging: bool = True, analysis_settings: Dict = None) -> None:
         """
         Method to check detected rois for their quality. Changes ROI in place.
 
         :param min_foc_area: The minimal area of a focus
+        :param max_foc_area: The maximal area of a focus
         :param rois: A list of detected rois
         :param channels: List of channels the roi are derived from
         :param channel_names: Identifier for each channel as list
@@ -347,9 +351,11 @@ class Detector:
         :return: None
         """
         if analysis_settings:
-            max_focus_overlapp = analysis_settings.get("blob_overlap", max_focus_overlapp)
-            min_main_area = analysis_settings.get("quality_min_main_area", min_main_area)
-            min_foc_area = analysis_settings.get("quality_min_foc_area", min_foc_area)
+            max_focus_overlapp = analysis_settings.get("quality_max_foc_overlap", max_focus_overlapp)
+            min_main_area = analysis_settings.get("quality_min_nuc_size", min_main_area)
+            max_main_area = analysis_settings.get("quality_max_nuc_size", max_main_area)
+            min_foc_area = analysis_settings.get("quality_min_foc_size", min_foc_area)
+            max_foc_area = analysis_settings.get("quality_max_foc_size", max_foc_area)
             logging = analysis_settings.get("logging", logging)
         rem_list = []
         temp = []
@@ -364,15 +370,16 @@ class Detector:
                 foci.append(roi)
         Detector.log(f"Detected nuclei:{len(main)}\nDetected foci: {len(foci)}", logging)
         # Remove very small or extremly large main ROI
-        #main = [x for x in main if 1000 < len(x) < 15000]
+        main = [x for x in main if min_main_area < len(x) < max_main_area]
+        # Remove all foci whose main roi was removed
+        foci = [x for x in foci if x.associated in main]
         Detector.log(f"Checking for very small nuclei: {time.time() - s0: .4f} secs\nRemove not associated foci",
                      logging)
         s1 = time.time()
         # Remove foci that are either unassociated or whose nucleus was deleted
-        maincop = main.copy()
-        maincop.extend(foci)
-        ass = {key: value for key, value in Detector.create_association_map(maincop).items() if
-              len(key) > min_main_area}
+        association_roi = deepcopy(main)
+        association_roi.extend(foci)
+        ass = {key: value for key, value in Detector.create_association_map(association_roi).items()}
         mainlen = len(main)
         main = [x for x, _ in ass.items()]
         Detector.log(f"Removed nuclei: {mainlen - len(main)}", logging)
@@ -380,14 +387,13 @@ class Detector:
         foci = [x for _, focs in ass.items() for x in focs if x.associated is not None]
         Detector.log(f"Removed unassociated foci: {foclen - len(foci)}", logging)
         # Remove very small foci
-        foci = [x for x in foci if len(x) > min_foc_area]
-        Detector.log(f"Total Removed foci: {foclen - len(foci)}\nTime: {time.time() - s1: .4f} secs",
+        foci = [x for x in foci if len(x) > min_foc_area < len(x) < max_foc_area]
+        Detector.log(f"Removed foci: {foclen - len(foci)}\nTime: {time.time() - s1: .4f} secs",
                      logging)
         # Focus quality check
         s2 = time.time()
         for ind in range(len(foci)):
             focus = foci[ind]
-            # TODO add channel
             focint = focus.calculate_statistics(channels[channel_names.index(focus.ident)])["intensity average"]
             if focint < 20:
                 focus.marked = True
@@ -547,7 +553,6 @@ class Detector:
             percent_hmax = analysis_settings.get("thresh_percent_hmax", percent_hmax)
             local_threshold_multiplier = analysis_settings.get("thresh_local_thresh_mult", local_threshold_multiplier)
             maximum_size_multiplier = analysis_settings.get("thresh_max_mult", maximum_size_multiplier)
-        start = time.time()
         thresh: List[Union[None, np.ndarray]] = [None] * len(channels)
         selem = create_circular_mask(mask_size, mask_size)
         # Load image
@@ -719,7 +724,6 @@ class Detector:
                 "unit": tags["0th"].get(piexif.ImageIFD.ResolutionUnit, 2)
             }
         else:
-            # TODO Dialog for resolution, number of channels and unit
             image_data = {
                 "datetime": datetime.datetime.fromtimestamp(os.path.getctime(path)),
                 "height": img.shape[0],
