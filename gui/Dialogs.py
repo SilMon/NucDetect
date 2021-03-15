@@ -10,12 +10,12 @@ import pyqtgraph as pg
 from PIL import Image
 from PIL.ImageQt import ImageQt
 from PyQt5 import QtGui, QtCore, uic
-from PyQt5.QtCore import QItemSelection, QItemSelectionModel, QSize, Qt, QRectF
+from PyQt5.QtCore import QItemSelection, QItemSelectionModel, QSize, Qt, QRectF, QTimer
 from PyQt5.QtGui import QStandardItem, QStandardItemModel, QIcon, QPixmap, QColor, QResizeEvent, QKeyEvent, QMouseEvent, \
     QBrush, QPen, QPainter, QWheelEvent
 from PyQt5.QtWidgets import QDialog, QMessageBox, QInputDialog, QCheckBox, QVBoxLayout, QFrame, QScrollArea, QWidget, \
     QLabel, QHBoxLayout, QSizePolicy, QGraphicsView, QGraphicsEllipseItem, QGraphicsPixmapItem, QGraphicsLineItem, \
-    QStyleOptionGraphicsItem, QGraphicsItem, QGraphicsScene, QGraphicsRectItem, QGraphicsSceneHoverEvent
+    QStyleOptionGraphicsItem, QGraphicsItem, QGraphicsScene, QGraphicsRectItem, QGraphicsSceneHoverEvent, QProgressBar
 from skimage.draw import ellipse
 
 from core.Detector import Detector
@@ -25,6 +25,7 @@ from core.roi.ROIHandler import ROIHandler
 from gui import Paths, Util
 from gui.Definitions import Icon
 from gui.Plots import BoxPlotWidget, PoissonPlotWidget
+from gui.loader import ImageLoader
 from gui.settings.Settings import SettingsShowWidget, SettingsSlider, SettingsDial, SettingsSpinner, \
     SettingsDecimalSpinner, SettingsText, SettingsComboBox, SettingsCheckBox
 
@@ -144,6 +145,8 @@ class ExperimentDialog(QDialog):
         self.img_model = None
         self.exp_model = None
         self.ui = None
+        # Image Loader for lazy loading
+        self.update_timer = None
         self.initialize_ui()
         # Create connection to database
         self.connection = sqlite3.connect(Paths.database)
@@ -428,25 +431,53 @@ class ExperimentDialog(QDialog):
             self.ui.le_name.setText(data["name"])
             self.ui.te_details.setPlainText(data["details"])
             self.ui.te_notes.setPlainText(data["notes"])
+            # Enable text inputs for change
+            self.ui.le_name.setEnabled(True)
+            self.ui.te_details.setEnabled(True)
+            self.ui.te_notes.setEnabled(True)
             groups_str = ""
             for name, keys in data["groups"].items():
                 groups_str += f"{name} ({len(keys)})"
             self.ui.le_groups.setText(groups_str)
-            # Add the saved image items to img_model
-            items = Util.create_image_item_list_from(data["image_paths"])
-            for item in items:
-                self.img_model.appendRow(item)
-            self.ui.btn_images_add.setEnabled(True)
-            self.ui.btn_remove.setEnabled(True)
+            if data["image_paths"] > 25:
+                self.update_timer = ImageLoader(data["image_paths"], feedback=self.add_image_items)
+            else:
+                # Add the saved image items to img_model
+                items = Util.create_image_item_list_from(data["image_paths"])
+                for item in items:
+                    self.img_model.appendRow(item)
+                # Enable buttons for input
+                self.ui.btn_images_add.setEnabled(True)
+                self.ui.btn_remove.setEnabled(True)
         else:
             # Clear everything if selection was cleared
             self.ui.le_name.clear()
             self.ui.te_details.clear()
             self.ui.te_notes.clear()
             self.ui.le_groups.clear()
+            # Disable text inputs until an experiment was selected
+            self.ui.le_name.setEnabled(False)
+            self.ui.te_details.setEnabled(False)
+            self.ui.te_notes.setEnabled(False)
+            # Disable buttons to prevent unnecessary input
             self.ui.btn_add_images.setEnabled(False)
             self.ui.btn_remove_image.setEnabled(False)
             self.ui.btn_images_clear.setEnabled(False)
+            self.ui.btn_remove.setEnabled(True)
+
+    def add_image_items(self, items: List[QStandardItem]) -> None:
+        """
+        Method to add items to the image list
+
+        :param items: The items to add
+        :return: None
+        """
+        for item in items:
+            self.img_model.appendRow(item)
+        self.ui.prg_images.setValue(self.update_timer.percentage * 100)
+        if not items:
+            # Enable buttons for input
+            self.ui.btn_images_add.setEnabled(True)
             self.ui.btn_remove.setEnabled(True)
 
     def open_group_dialog(self):
@@ -490,6 +521,11 @@ class ImageSelectionDialog(QDialog):
         self.selected_images = selected_images
         self.img_model = None
         self.ui = None
+        self.prg_bar = None
+        # Define timer for lazy image loading
+        self.update_timer = None
+        # Create index number for loading
+        self.loading_index = 0
         self.initialize_ui()
 
     def initialize_ui(self) -> None:
@@ -499,9 +535,17 @@ class ImageSelectionDialog(QDialog):
         :return: None
         """
         self.ui = uic.loadUi(Paths.ui_img_sel_dial, self)
+        self.prg_bar: QProgressBar = self.ui.prg_bar
         self.img_model = QStandardItemModel()
         self.ui.lv_images.setModel(self.img_model)
         self.ui.lv_images.setIconSize(Icon.get_icon_size("LIST_ITEM"))
+        self.update_timer = ImageLoader(self.images, feedback=self.load_images)
+        self.prg_bar.setValue(0)
+        self.prg_bar.setMaximum(100)
+        self.ui.lv_images.setEnabled(False)
+        self.ui.buttonBox.setEnabled(False)
+        # TODO
+        """
         # Convert image paths to QStandardItems
         items = Util.create_image_item_list_from(self.images, indicate_progress=False)
         for img in items:
@@ -515,11 +559,36 @@ class ImageSelectionDialog(QDialog):
                 index = self.img_model.createIndex(row, 0)
                 # Select image
                 self.ui.lv_images.selectionModel().select(index, QItemSelectionModel.Select)
+        """
         self.setWindowIcon(Icon.get_icon("LOGO"))
         self.setWindowTitle("Image Selection Dialog")
         self.setWindowFlags(self.windowFlags() |
                             QtCore.Qt.WindowSystemMenuHint |
                             QtCore.Qt.WindowMinMaxButtonsHint)
+
+    def load_images(self, items: List[QStandardItem]) -> None:
+        """
+        Method to load the images given by the list paths
+
+        :param items: QStandardItems to add to the images list
+        :return: None
+        """
+        for img in items:
+            self.img_model.appendRow(img)
+        self.prg_bar.setValue(self.update_timer.percentage * 100)
+        if not items:
+            # Enable image list
+            self.ui.lv_images.setEnabled(True)
+            self.ui.buttonBox.setEnabled(True)
+            # Select images that are marked as selected
+            for row in range(self.img_model.rowCount()):
+                item = self.img_model.item(row)
+                # Select marked images
+                if item.data()["key"] in self.selected_images:
+                    # Create index
+                    index = self.img_model.createIndex(row, 0)
+                    # Select image
+                    self.ui.lv_images.selectionModel().select(index, QItemSelectionModel.Select)
 
     def get_selected_images(self) -> Tuple[List[str], List[str]]:
         """
@@ -546,6 +615,7 @@ class GroupDialog(QDialog):
         self.ui = None
         self.img_model = None
         self.group_model = None
+        self.update_timer = None
         self.initialize_ui()
         self.load_groups()
 
@@ -558,6 +628,7 @@ class GroupDialog(QDialog):
         self.ui = uic.loadUi(Paths.ui_exp_dial_group_dial, self)
         self.img_model = QStandardItemModel(self.ui.lv_images)
         self.group_model = QStandardItemModel(self.ui.lv_groups)
+        self.prg_bar = self.ui.prg_images
         self.ui.lv_images.setModel(self.img_model)
         self.ui.lv_groups.setModel(self.group_model)
         self.ui.lv_images.setIconSize(Icon.get_icon_size("LIST_ITEM"))
@@ -611,10 +682,27 @@ class GroupDialog(QDialog):
                 f"{data['name']}:\nImages: {len(keys)}"
             )
             self.img_model.clear()
-            # Create image items
-            items = Util.create_image_item_list_from(paths, indicate_progress=False)
-            for item in items:
-                self.img_model.appendRow(item)
+            if len(paths) > 25:
+                self.update_timer = ImageLoader(paths, feedback=self.add_image_items)
+                self.setEnabled(False)
+            else:
+                # Create image items
+                items = Util.create_image_item_list_from(paths, indicate_progress=False)
+                for item in items:
+                    self.img_model.appendRow(item)
+
+    def add_image_items(self, items: List[QStandardItem]) -> None:
+        """
+        Method to load the images given by the list paths
+
+        :param items: QStandardItems to add to the images list
+        :return: None
+        """
+        for img in items:
+            self.img_model.appendRow(img)
+        self.prg_bar.setValue(self.update_timer.percentage * 100)
+        if not items:
+            self.setEnabled(True)
 
     def open_image_selection_dialog(self) -> Tuple[List[str], List[str]]:
         """

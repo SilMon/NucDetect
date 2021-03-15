@@ -20,7 +20,7 @@ import pyqtgraph as pg
 from PyQt5 import QtCore, QtWidgets
 from PyQt5 import QtGui
 from PyQt5 import uic
-from PyQt5.QtCore import QSize, pyqtSignal, QItemSelectionModel, QSortFilterProxyModel
+from PyQt5.QtCore import QSize, pyqtSignal, QItemSelectionModel, QSortFilterProxyModel, QTimer
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QPixmap
 from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, QMessageBox
 
@@ -31,6 +31,7 @@ from gui import Paths, Util
 from gui.Definitions import Icon
 from gui.Dialogs import ExperimentDialog, ExperimentSelectionDialog, StatisticsDialog, ImgDialog, SettingsDialog, \
                         AnalysisSettingsDialog, Editor
+from gui.loader import ImageLoader
 
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, False)
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, False)
@@ -42,7 +43,7 @@ class NucDetect(QMainWindow):
     Created on 11.02.2019
     @author: Romano Weiss
     """
-    prg_signal = pyqtSignal(str, int, int, str)
+    prg_signal = pyqtSignal(str, float, float, str)
     selec_signal = pyqtSignal(bool)
     add_signal = pyqtSignal(str)
     aa_signal = pyqtSignal(int, int)
@@ -76,6 +77,8 @@ class NucDetect(QMainWindow):
         self.roi_cache = None
         # A list of all loaded image files -> Used for reloading
         self.loaded_files = []
+        # Timer responsible for lazy loading
+        self.update_timer = None
         self.unsaved_changes = False
         # Setup UI
         self._setup_ui()
@@ -338,7 +341,7 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        self.add_images_from_folder(Paths.images_path)
+        self.add_images_from_folder(Paths.images_path, reload=True)
 
     def on_image_selection_change(self) -> None:
         """
@@ -438,23 +441,50 @@ class NucDetect(QMainWindow):
                 Util.create_list_item(file_name)
             )
 
-    def add_images_from_folder(self, url: str) -> None:
+    def add_images_from_folder(self, url: str, reload: bool = False) -> None:
         """
         Method to load a whole folder of images
 
         :param url: The path of the folder
+        :param reload: Indicator if a reload occurs
         :return: None
         """
         start = time.time()
         paths = []
         for t in os.walk(url):
-            paths = [os.path.join(t[0], x) for x in t[2]]
-            paths = [x for x in paths if x not in self.loaded_files]
+            tpaths = [os.path.join(t[0], x) for x in t[2]]
+            paths.extend([x for x in tpaths if x not in self.loaded_files])
         self.loaded_files.extend(paths)
-        items = Util.create_image_item_list_from(paths, indicate_progress=True)
+        # Check if the list of available files is larger than 25
+        if len(self.loaded_files) > 25 and not reload:
+            self.setEnabled(False)
+            self.update_timer = ImageLoader(self.loaded_files, feedback=self.add_image_items)
+        elif len(self.loaded_files) > 25:
+            self.setEnabled(False)
+            self.update_timer = ImageLoader(paths, feedback=self.add_image_items)
+        else:
+            self.enable_buttons(True)
+            items = Util.create_image_item_list_from(paths, indicate_progress=True)
+            for item in items:
+                self.add_item_to_list(item)
+            print(f"Finished: {time.time() - start: .2f} secs")
+
+    def add_image_items(self, items: List[QStandardItem]) -> None:
+        """
+        Method to add loaded image items to
+
+        :param items: The items to add
+        :return: None
+        """
+        # Indicate update in console
+        print(f"{self.update_timer.percentage * 100:.2f}% of images added to image list")
+        # Indicate update in progress bar
+        self.prg_signal.emit(f"{self.update_timer.items_loaded} images added to image list",
+                             self.update_timer.percentage * 100, 100, "")
         for item in items:
             self.add_item_to_list(item)
-        print(f"Finished: {time.time() - start: .2f} secs")
+        if not items:
+            self.setEnabled(True)
 
     def add_item_to_list(self, item: QStandardItem) -> None:
         """

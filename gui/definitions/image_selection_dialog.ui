@@ -79,8 +79,24 @@ QDialog{
      </item>
      <item>
       <widget class="QListView" name="lv_images">
+       <property name="toolTip">
+        <string>Available images</string>
+       </property>
        <property name="selectionMode">
         <enum>QAbstractItemView::MultiSelection</enum>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QProgressBar" name="prg_bar">
+       <property name="toolTip">
+        <string>Percentage of loaded images</string>
+       </property>
+       <property name="value">
+        <number>0</number>
+       </property>
+       <property name="alignment">
+        <set>Qt::AlignCenter</set>
        </property>
       </widget>
      </item>
@@ -88,6 +104,9 @@ QDialog{
    </item>
    <item>
     <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="toolTip">
+      <string/>
+     </property>
      <property name="orientation">
       <enum>Qt::Vertical</enum>
      </property>

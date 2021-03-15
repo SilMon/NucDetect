@@ -123,6 +123,9 @@ QDialog{
        </item>
        <item row="1" column="2">
         <widget class="QTextEdit" name="te_details">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
          <property name="minimumSize">
           <size>
            <width>500</width>
@@ -143,6 +146,9 @@ QDialog{
        </item>
        <item row="2" column="2">
         <widget class="QTextEdit" name="te_notes">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
          <property name="minimumSize">
           <size>
            <width>500</width>
@@ -170,6 +176,9 @@ QDialog{
        </item>
        <item row="0" column="2">
         <widget class="QLineEdit" name="le_name">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
          <property name="minimumSize">
           <size>
            <width>500</width>
@@ -235,6 +244,16 @@ QDialog{
          </property>
          <property name="layoutMode">
           <enum>QListView::Batched</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QProgressBar" name="prg_images">
+         <property name="value">
+          <number>0</number>
+         </property>
+         <property name="alignment">
+          <set>Qt::AlignCenter</set>
          </property>
         </widget>
        </item>

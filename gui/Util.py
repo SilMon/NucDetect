@@ -7,7 +7,7 @@ from typing import List, Tuple, Union
 from PyQt5 import QtCore
 from PyQt5.QtGui import QStandardItem, QIcon
 from PyQt5.QtWidgets import QScrollArea, QVBoxLayout, QHBoxLayout, QWidget, QSizePolicy
-from skimage import io
+from skimage import io, img_as_ubyte
 from skimage.transform import resize
 from concurrent.futures import ThreadPoolExecutor
 
@@ -39,6 +39,24 @@ def create_scroll_area(layout_type: bool = False,
     sa.setWidget(central_widget)
     sa.setWidgetResizable(widget_resizable)
     return sa, layout
+
+
+def create_partial_image_item_list(paths: List[str],
+                                   start_index: int,
+                                   number: int) -> List[QStandardItem]:
+    """
+    Function to partially load a list of images. Images between start_index and start_index+number will be loaded.
+
+    :param paths: The paths of the images
+    :param start_index: The start index
+    :param number: The number of images to load
+    :return: The loaded images as QStandardItems
+    """
+    # Get the max available index
+    max_ind = min(start_index + number, len(paths))
+    # Extract list of paths to load
+    part_paths = paths[start_index:max_ind]
+    return create_image_item_list_from(part_paths, indicate_progress=False, sort_items=False)
 
 
 def create_image_item_list_from(paths: List[str],
@@ -136,7 +154,7 @@ def create_thumbnail(image_path: str, size: Tuple = (75, 75)) -> str:
     # Scale image
     img = resize(img, new_shape)
     # Save the image
-    io.imsave(thumb_path, img)
+    io.imsave(thumb_path, img_as_ubyte(img))
     return thumb_path
 
 
