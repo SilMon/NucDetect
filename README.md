@@ -8,10 +8,6 @@ pure Python 3.7, obeys the PEP 8 style guidelines and includes PEP 484 type hint
 
 ![Result](https://github.com/SilMon/NucDetect_Additional_Data/blob/main/WIKI/result.png)
 
-### Note
-
-The current release is a very early alpha version. Please report report any detected bugs and/or improvement suggestions.
-
 Requirements
 ============
 
