@@ -437,6 +437,16 @@ QGraphicsView{
     </layout>
    </item>
    <item>
+    <widget class="QProgressBar" name="prg_loading">
+     <property name="value">
+      <number>0</number>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignCenter</set>
+     </property>
+    </widget>
+   </item>
+   <item>
     <widget class="QDialogButtonBox" name="buttonBox">
      <property name="orientation">
       <enum>Qt::Horizontal</enum>

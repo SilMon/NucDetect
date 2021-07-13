@@ -2,11 +2,11 @@ import datetime
 import os
 import sqlite3
 from os.path import isfile
-from typing import List, Tuple, Union
+from typing import List, Tuple, Union, Iterable
 
 from PyQt5 import QtCore
 from PyQt5.QtGui import QStandardItem, QIcon
-from PyQt5.QtWidgets import QScrollArea, QVBoxLayout, QHBoxLayout, QWidget, QSizePolicy
+from PyQt5.QtWidgets import QScrollArea, QVBoxLayout, QHBoxLayout, QWidget
 from skimage import io, img_as_ubyte
 from skimage.transform import resize
 from concurrent.futures import ThreadPoolExecutor
@@ -52,10 +52,7 @@ def create_partial_image_item_list(paths: List[str],
     :param number: The number of images to load
     :return: The loaded images as QStandardItems
     """
-    # Get the max available index
-    max_ind = min(start_index + number, len(paths))
-    # Extract list of paths to load
-    part_paths = paths[start_index:max_ind]
+    part_paths = create_partial_list(paths, start_index, number)
     return create_image_item_list_from(part_paths, indicate_progress=False, sort_items=False)
 
 
@@ -84,6 +81,24 @@ def create_image_item_list_from(paths: List[str],
                 print(f"Loading: {ind}/{len(paths)}")
                 ind += 1
     return items
+
+
+def create_partial_list(items: Iterable,
+                        start_index: int,
+                        number: int) -> Iterable:
+    """
+    Method to create a partial item list
+
+    :param items: The item list
+    :param start_index:  The start index
+    :param number: The length of the partial list
+    :return: The partial list
+    """
+    # Get the max available index
+    max_ind = min(start_index + number, len(items))
+    # Extract list of paths to load
+    part_items = items[start_index:max_ind]
+    return part_items
 
 
 def create_list_item(path: str) -> QStandardItem:
@@ -175,5 +190,4 @@ def check_if_image_was_analysed(md5: str) -> bool:
         return analysed[0][0]
     else:
         return False
-
 
