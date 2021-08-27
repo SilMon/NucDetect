@@ -8,6 +8,7 @@ import csv
 import datetime
 import os
 from typing import Union, Dict, List, Tuple, Iterable
+from numba.typed import List as numList
 
 import numpy as np
 
@@ -230,15 +231,23 @@ class ROIHandler:
         Method to create arrays with labelling hashes for each saved ROI
 
         :param shape: The shape of the original image
-        :param ignore: List of changed
+        :param ignore: List of changed roi
         :return: The created maps
         """
+        print(ignore)
+        print([x.id for x in self if x.main])
+        print([x.id for x in self if x.id in ignore])
         maps = []
         # Create empty maps
         for _ in range(len(self.idents)):
             maps.append(np.zeros(shape, dtype="int64"))
-        for roi in self.rois:
+        for roi in self:
             # Get channel index of ROI
-            if roi.ident not in ignore:
-                AreaAnalysis.imprint_area_into_array(roi.area, maps[self.idents.index(roi.ident)], hash(roi))
+            if roi.id not in ignore:
+                num_area = numList()
+                [num_area.append(x) for x in roi.area]
+                AreaAnalysis.imprint_area_into_array(num_area, maps[self.idents.index(roi.ident)], hash(roi))
+        for map in maps:
+            plt.imshow(map, cmap="gray")
+            plt.show()
         return maps

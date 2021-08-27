@@ -64,14 +64,14 @@ def convert_area_to_array(area: Iterable[Tuple[int, int, int]], channel: np.ndar
     # Get normalization factors
     minrow, mincol, rows, cols = get_bounding_box(area)
     # Create empty image
-    carea = np.zeros(shape=(rows, cols))
+    carea = np.zeros(shape=(rows, cols), dtype="uint8")
     # Iterate over area
     for ar in area:
-        carea[ar[0] - minrow, ar[1] - mincol: ar[1] - mincol + ar[2]] = \
-            channel[ar[0] - minrow, ar[1] - mincol: ar[1] - mincol + ar[2]]
+        carea[ar[0] - minrow, ar[1] - mincol: ar[1] - mincol + ar[2]] = channel[ar[0], ar[1]: ar[1] + ar[2]]
     return carea
 
 
+@njit(cache=True)
 def imprint_area_into_array(area: Iterable[Tuple[int, int, int]], array: np.ndarray, ident: int) -> None:
     """
     Method to imprint the specified area into the specified area
@@ -167,7 +167,7 @@ def get_central_moment(area: Iterable[Tuple[int, int, int]], p: int, q: int) -> 
     m10, m01 = get_center(area)
     mom = 0.0
     for rl in area:
-        for x in range(rl[1], rl[1] + rl[2] -1, 1):
+        for x in range(rl[1], rl[1] + rl[2] - 1, 1):
             mom += ((rl[0] - m10) ** q) * ((x - m01) ** p)
     return mom
 

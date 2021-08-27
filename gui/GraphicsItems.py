@@ -1,21 +1,18 @@
 import sqlite3
-import time
-from typing import List, Iterable, Dict, Tuple, Callable
+from typing import List, Iterable, Dict, Tuple
 
 import numpy as np
 import pyqtgraph as pg
 from PyQt5 import QtCore
 from PyQt5.QtCore import QRectF, Qt
 from PyQt5.QtGui import QColor, QKeyEvent, QMouseEvent
-from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem, \
-    QGraphicsView
+from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem
 from skimage.draw import ellipse
 
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 from gui import Paths
-from gui.Util import create_partial_list
-from gui.loader import Loader
+from gui.loader import ROIDrawerTimer
 
 
 class EditorView(pg.GraphicsView):
@@ -32,8 +29,8 @@ class EditorView(pg.GraphicsView):
         self.parent = parent
         self.mode = -1
         self.image = image
-        self.active_channel = None
-        self.roi = roi
+        self.active_channel: int = None
+        self.roi: ROIHandler = roi
         self.main_channel = roi.idents.index(roi.main)
         self.plot_item = pg.PlotItem()
         self.view = self.plot_item.getViewBox()
@@ -45,23 +42,23 @@ class EditorView(pg.GraphicsView):
         self.plot_vb = self.plot_item.vb
         # Set proxy to detect mouse movement
         self.proxy = pg.SignalProxy(self.scene().sigMouseMoved, rateLimit=45, slot=self.mouse_moved)
-        self.mpos = None
+        self.mpos: Tuple = None
         # Activate mouse tracking for widget
         self.setMouseTracking(True)
         self.setCentralWidget(self.plot_item)
         self.draw_additional = True
         # List of existing items
-        self.loading_timer = None
+        self.loading_timer: ROIDrawerTimer = None
         self.items = []
         self.draw_roi()
         # List for newly created items
         self.temp_items = []
         # List for items that should be removed
-        self.delete = []
+        self.delete: List[int] = []
         self.item_changes = {}
-        self.selected_item = None
+        self.selected_item: ROIItem = None
         self.shift_down = False
-        self.saved_values = None
+        self.saved_values: Dict = None
         self.show_channel(3)
 
     def set_changes(self, rect: QRectF, angle: float, preview: bool = True) -> None:
@@ -77,7 +74,7 @@ class EditorView(pg.GraphicsView):
         self.selected_item.update_data(rect, angle, preview)
         # Mark Original ident as delete
         if not preview:
-            self.delete.append(self.selected_item.roi_ident)
+            self.delete.append(self.selected_item.roi_id)
 
     def draw_additional_items(self, state: bool = True) -> None:
         """
@@ -134,7 +131,9 @@ class EditorView(pg.GraphicsView):
 
         :return: None
         """
-        self.loading_timer = ROIDrawerTimer(self.roi, self.plot_item, feedback=self.update_loading)
+        self.loading_timer = ROIDrawerTimer(self.roi, self.plot_item,
+                                            feedback=self.update_loading,
+                                            processing=ROIDrawer.draw_roi)
 
     def update_loading(self, items: List[QGraphicsItem]) -> None:
         """
@@ -163,7 +162,7 @@ class EditorView(pg.GraphicsView):
             # Remove item from scene
             item.remove_from_view(self)
             # Add item to deletion list to remove it from the database
-            self.delete.append(item.roi_ident)
+            self.delete.append(item.roi_id)
         elif event.key() == Qt.Key_1:
             self.change_mode(-1)
         elif event.key() == Qt.Key_2:
@@ -172,6 +171,7 @@ class EditorView(pg.GraphicsView):
             self.change_mode(1)
 
     def keyReleaseEvent(self, event: QKeyEvent) -> None:
+        super().keyReleaseEvent(event)
         if event.key() == Qt.Key_Shift:
             self.shift_down = False
 
@@ -222,6 +222,8 @@ class EditorView(pg.GraphicsView):
             if self.plot_item.sceneBoundingRect().contains(pos):
                 coord = self.plot_vb.mapSceneToView(pos)
                 self.mpos = coord
+                if self.selected_item and self.selected_item.preview:
+                    self.selected_item.reset_item()
                 self.parent.set_status(f"X: {coord.x():.2f} Y: {coord.y():.2f}")
 
     def apply_all_changes(self) -> None:
@@ -230,42 +232,46 @@ class EditorView(pg.GraphicsView):
 
         :return: None
         """
-        # Create list of changed items to ignore during map creation
-        ignore = [x.roi_ident for x in self.items if x.changed]
-        ignore.extend(self.delete)
-        # Create a hash asso map
-        maps = self.roi.create_hash_association_maps((self.image.shape[0], self.image.shape[1]), ignore)
         # Create connection to database
         conn = sqlite3.connect(Paths.database)
         # Create cursor to do stuff
         curs = conn.cursor()
+        # Remove deleted roi from item list
+        self.items = [x for x in self.items if x.roi_id not in self.delete]
         # Create list of tuples for sqlite3
-        self.delete = [(x, ) for x in self.delete]
+        sql_delete = [(x,) for x in self.delete]
+        # Delete items marked for it
+        self.delete_unassociated_roi(curs, sql_delete)
+        # Create list of changed items to ignore during map creation
+        ignore = [x.roi_id for x in self.items if x.changed]
+        # Also ignore roi that were deleted
+        ignore.extend(self.delete)
+        # Create a hash association maps for each channel
+        maps = self.roi.create_hash_association_maps((self.image.shape[0], self.image.shape[1]), ignore)
         # Create list for items which will be unassociated due to data changes
         unassociated = []
-        # Delete items marked for it
-        self.delete_unassociated_roi(curs, self.delete)
-        # Get all associated roi
-        for roi in self.delete:
+        # Get all associated foci and add them to list of unassociated foci
+        for roi in sql_delete:
             roi_hash = curs.execute("SELECT hash FROM roi WHERE associated=?", roi).fetchall()
             if roi_hash:
                 unassociated.extend([x[0] for x in roi_hash])
-        curs.executemany("UPDATE OR IGNORE roi SET associated=NULL WHERE associated=?", self.delete)
+        # Change the rows of fetched foci
+        curs.executemany("UPDATE OR IGNORE roi SET associated=NULL WHERE associated=?", sql_delete)
         for item in self.items:
             if item.changed:
                 # Check if item was added
-                if item.roi_ident != -1:
+                if item.roi_id != -1:
                     # Delete item from database
-                    self.delete_item_from_database(curs, item.roi_ident)
+                    self.delete_item_from_database(curs, item.roi_id)
                     if isinstance(item, NucleusItem):
                         # Get hash list of associated foci
                         hashes = [x[0] for x in curs.execute("SELECT hash FROM roi WHERE associated=?",
-                                                             (item.roi_ident,)).fetchall()]
+                                                             (item.roi_id,)).fetchall()]
                         unassociated.extend(hashes)
                         curs.execute("UPDATE roi SET associated=? WHERE associated=?",
-                                     (None, item.roi_ident))
+                                     (None, item.roi_id))
                     else:
-                        unassociated.append(item.roi_ident)
+                        unassociated.append(item.roi_id)
                 # Get coordinates corresponding to the item
                 rr, cc = ellipse(item.center[1], item.center[0], item.height / 2, item.width / 2,
                                  self.image.shape, np.deg2rad(-item.angle))
@@ -292,8 +298,12 @@ class EditorView(pg.GraphicsView):
             curs.execute("UPDATE roi SET associated=? WHERE hash=?",
                          (int(nucleus), int(focus)))
         # Delete erased and unassociated ROI from ROIHandler
-        self.delete.extend(unassociated)
-        self.roi.rois = [x for x in self.roi.rois if hash(x) not in self.delete]
+        self.delete.extend([x[0] for x in unassociated])
+        self.roi.rois = [x for x in self.roi if x.id not in self.delete]
+        # Change image entry to indicate that the image was manually modified
+        curs.execute("UPDATE images SET modified=? WHERE md5=?",
+                     (1, self.roi.ident)
+                     )
         conn.commit()
 
     @staticmethod
@@ -595,47 +605,48 @@ class EditingRectangle(QGraphicsRectItem):
             self.setPen(self.ipen)
 
 
-class NucleusItem(QGraphicsEllipseItem):
-
+class ROIItem(QGraphicsEllipseItem):
     __slots__ = [
+        "preview"
         "changed",
+        "rect",
         "x",
         "y",
         "width",
         "height",
         "angle",
         "channel_index",
-        "roi_ident",
+        "roi_id",
         "orientation",
         "pen",
         "center",
-        "indicators"
+        "indicators",
         "pen",
         "iapen",
         "ipen"
     ]
 
-    def __init__(self, x: int, y: int, width: int, height: int, center_x: int, center_y: int,
-                 angle: float, orientation: Tuple[float, float], index: int, roi_ident: int):
+    def __init__(self, x: int, y: int, width: int, height: float, index: int, roi_ident: int):
         super().__init__(x, y, width, height)
+        self.preview = False
         self.changed = False
+        self.rect = QRectF(x, y, width, height)
         self.x = x
         self.y = y
-        self.angle = angle
         self.width = width
         self.height = height
-        self.center = center_x, center_y
-        self.orientation = orientation
+        self.center = int(self.x + self.width / 2), int(self.y + self.height / 2)
+        self.angle = 0
         self.channel_index = index
-        self.roi_ident = roi_ident
-        self.indicators = []
-        self.edit = False
-        self.edit_rect: EditingRectangle = None
+        self.roi_id = roi_ident
         self.pen: pg.mkPen = None
         self.ipen: pg.mkPen = None
-        self.iapen: pg.mkPen = None
+        self.main_color = None
+        self.hover_color = None
+        self.sel_color = None
         self.view: EditorView = None
-        self.initialize()
+        self.edit_rect = None
+        self.setEnabled(False)
 
     def update_data(self, rect: QRectF, angle: float, keep_original: bool = True) -> None:
         """
@@ -648,28 +659,34 @@ class NucleusItem(QGraphicsEllipseItem):
         :return: None
         """
         if not keep_original:
+            self.rect = rect
             self.x = rect.x()
             self.y = rect.y()
             self.width = rect.width()
             self.height = rect.height()
             self.center = rect.center().x(), rect.center().y()
             self.angle = angle
+            self.preview = False
             self.changed = True
+        else:
+            self.preview = True
         self.setRotation(0)
         self.setRect(rect)
-        # Update indicators to represent new params
-        r1 = rect.height() / 2
-        r2 = rect.width() / 2
-        self.indicators[0].setLine(-r2, 0, r2, 0)
-        self.indicators[1].setLine(-r1, 0, r1, 0)
         self.setTransformOriginPoint(rect.center())
         self.setRotation(angle)
         self.edit_rect.setRotation(0)
         self.edit_rect.setRect(rect)
         self.edit_rect.setTransformOriginPoint(rect.center())
         self.edit_rect.setRotation(angle)
-        for indicator in self.indicators:
-            indicator.setPos(self.boundingRect().center())
+
+    def reset_item(self) -> None:
+        """
+        Method to reset the item if the preview was not applied
+
+        :return: None
+        """
+        self.update_data(self.rect, self.angle)
+        self.preview = False
 
     def remove_from_view(self, view: EditorView) -> None:
         """
@@ -680,6 +697,95 @@ class NucleusItem(QGraphicsEllipseItem):
         """
         view.scene().removeItem(self.edit_rect)
         view.scene().removeItem(self)
+
+    def is_active(self, active: bool = True) -> None:
+        """
+        Method to set the activity of this item
+
+        :param active: Bool
+        :return: None
+        """
+        self.setPen(self.pen if active else self.ipen)
+
+    def update_indicators(self, draw: bool = True) -> None:
+        """
+        Dummy Method to be compatible with NucleusItem
+        """
+        pass
+
+    def set_pen(self, pen: pg.mkPen, inactive_pen: pg.mkPen):
+        self.pen = pen
+        self.ipen = inactive_pen
+        # Define needed colors
+        self.main_color = pen.color()
+        self.hover_color = self.main_color.lighter(100)
+        self.sel_color = self.main_color.lighter(150)
+        self.setPen(pen)
+
+    def add_to_view(self, view: EditorView) -> None:
+        """
+        Method to add this item and all associated items to the given view
+
+        :param view: View to add to
+        :return: None
+        """
+        self.view = view
+        view.addItem(self)
+        rect = EditingRectangle(self.x, self.y, self.center[0], self.center[1], self.width, self.height)
+        rect.activate(False)
+        self.edit_rect = rect
+
+    def enable_editing(self, enable: bool = True) -> None:
+        """
+        Method to enable the editing of this item
+
+        :param enable: Bool
+        :return: None
+        """
+        if enable:
+            self.setEnabled(enable)
+            self.view.addItem(self.edit_rect)
+            self.edit_rect.activate(enable)
+        else:
+            self.setEnabled(enable)
+            self.view.removeItem(self.edit_rect)
+            self.edit_rect.activate(enable)
+
+
+class NucleusItem(ROIItem):
+
+    def __init__(self, x: int, y: int, width: int, height: int, center_x: int, center_y: int,
+                 angle: float, orientation: Tuple[float, float], index: int, roi_ident: int):
+        super().__init__(x, y, width, height, index, roi_ident)
+        self.changed = False
+        self.rect = None
+        self.angle = angle
+        self.center = center_x, center_y
+        self.orientation = orientation
+        self.indicators = []
+        self.edit = False
+        self.edit_rect: EditingRectangle = None
+        self.iapen: pg.mkPen = None
+        self.initialize()
+
+    def update_data(self, rect: QRectF, angle: float, keep_original: bool = True) -> None:
+        """
+        Method to update position and angle of this item
+
+        :param rect: The new bounding rect of this item
+        :param angle: The new angle of this item
+        :param keep_original: If true, the position and angle before the change will be stored.
+        Used for preview purposes
+        :return: None
+        """
+        super().update_data(rect, angle, keep_original)
+        # Update indicators to represent new params
+        r1 = rect.height() / 2
+        r2 = rect.width() / 2
+        self.indicators[0].setLine(-r2, 0, r2, 0)
+        self.indicators[1].setLine(-r1, 0, r1, 0)
+        for indicator in self.indicators:
+            indicator.setPos(self.boundingRect().center())
 
     def is_active(self, active: bool = True) -> None:
         """
@@ -747,6 +853,7 @@ class NucleusItem(QGraphicsEllipseItem):
             minor_axis,
         ])
         self.edit_rect = rect
+        self.rect = self.boundingRect()
         self.edit_rect.activate(False)
         self.setEnabled(False)
 
@@ -760,199 +867,11 @@ class NucleusItem(QGraphicsEllipseItem):
         self.view = view
         view.addItem(self)
 
-    def enable_editing(self, enable: bool = True) -> None:
-        """
-        Method to enable the editing of this item
-
-        :param enable: Bool
-        :return: None
-        """
-        if enable:
-            self.setEnabled(enable)
-            self.view.addItem(self.edit_rect)
-            self.edit_rect.activate(enable)
-        else:
-            self.setEnabled(enable)
-            self.view.removeItem(self.edit_rect)
-            self.edit_rect.activate(enable)
-
     def __str__(self):
         return f"NucleusItem X:{self.x} Y:{self.y} W:{self.width} H:{self.height} C:{self.center}"
 
 
-class FocusItem(QGraphicsEllipseItem):
-
-    __slots__ = [
-        "changed",
-        "x",
-        "y",
-        "width",
-        "height",
-        "center",
-        "angle"
-        "edit_rect",
-        "channel_index",
-        "roi_ident",
-        "pen",
-        "ipen"
-        "hover_color",
-        "main_color",
-        "sel_color"
-    ]
-
-    def __init__(self, x: int, y: int, width: int, height: float, index: int, roi_ident: int):
-        super().__init__(x, y, width, height)
-        self.changed = False
-        self.x = x
-        self.y = y
-        self.width = width
-        self.height = height
-        self.center = int(self.x + self.width / 2), int(self.y + self.height / 2)
-        self.angle = 0
-        self.channel_index = index
-        self.roi_ident = roi_ident
-        self.pen: pg.mkPen = None
-        self.ipen: pg.mkPen = None
-        self.main_color = None
-        self.hover_color = None
-        self.sel_color = None
-        self.view = None
-        self.edit_rect = None
-        self.setEnabled(False)
-
-    def update_data(self, rect: QRectF, angle: float, keep_original: bool = True) -> None:
-        """
-        Method to update position and angle of this item
-
-        :param rect: The new bounding rect of this item
-        :param angle: The new angle of this item
-        :param keep_original: If true, the position and angle before the change will be stored.
-        Used for preview purposes
-        :return: None
-        """
-        if not keep_original:
-            self.x = rect.x()
-            self.y = rect.y()
-            self.width = rect.width()
-            self.height = rect.height()
-            self.center = rect.center().x(), rect.center().y()
-            self.angle = angle
-            self.changed = True
-            print(f"Changed: {self}")
-        self.setRotation(0)
-        self.setRect(rect)
-        self.setTransformOriginPoint(rect.center())
-        self.setRotation(angle)
-        self.edit_rect.setRotation(0)
-        self.edit_rect.setRect(rect)
-        self.edit_rect.setTransformOriginPoint(rect.center())
-        self.edit_rect.setRotation(angle)
-
-    def remove_from_view(self, view: EditorView) -> None:
-        """
-        Method to remove this item from the given view
-
-        :param view: The view to remove the item from
-        :return: None
-        """
-        view.scene().removeItem(self.edit_rect)
-        view.scene().removeItem(self)
-
-    def is_active(self, active: bool = True) -> None:
-        """
-        Method to set the activity of this item
-
-        :param active: Bool
-        :return: None
-        """
-        self.setPen(self.pen if active else self.ipen)
-
-    def update_indicators(self, draw: bool = True) -> None:
-        """
-        Dummy Method to be compatible with NucleusItem
-        """
-        pass
-
-    def set_pen(self, pen: pg.mkPen, inactive_pen: pg.mkPen):
-        self.pen = pen
-        self.ipen = inactive_pen
-        # Define needed colors
-        self.main_color = pen.color()
-        self.hover_color = self.main_color.lighter(100)
-        self.sel_color = self.main_color.lighter(150)
-        self.setPen(pen)
-
-    def add_to_view(self, view: EditorView) -> None:
-        """
-        Method to add this item and all associated items to the given view
-
-        :param view: View to add to
-        :return: None
-        """
-        self.view = view
-        view.addItem(self)
-        rect = EditingRectangle(self.x, self.y, self.center[0], self.center[1], self.width, self.height)
-        rect.activate(False)
-        self.edit_rect = rect
-
-    def enable_editing(self, enable: bool = True) -> None:
-        """
-        Method to enable the editing of this item
-
-        :param enable: Bool
-        :return: None
-        """
-        if enable:
-            self.setEnabled(enable)
-            self.view.addItem(self.edit_rect)
-            self.edit_rect.activate(enable)
-        else:
-            self.setEnabled(enable)
-            self.view.removeItem(self.edit_rect)
-            self.edit_rect.activate(enable)
+class FocusItem(ROIItem):
 
     def __str__(self):
         return f"FocusItem X:{self.x} Y:{self.y} W:{self.width} H:{self.height} C:{self.center}"
-
-
-class ROIDrawerTimer(Loader):
-
-    def __init__(self, items: ROIHandler, view: QGraphicsView,
-                 batch_size: int = 25, batch_time: int = 250, feedback: Callable = None):
-        """
-        Class to implement lazy roi drawing.
-
-        :param items: The items to draw
-        :param view: Graphicsview to draw the ROI on
-        :param batch_size: The number of images to load per batch
-        :param batch_time: The time between consecutive loading approaches in milliseconds
-        :param feedback: The function to call after loading. Has to accept a list of QStandardItems
-        """
-        super().__init__(items, batch_size, batch_time, feedback)
-        self.view = view
-
-    def load_next_batch(self) -> None:
-        """
-        Function to load the next batch. After loading, the feedback function will be called (will pass an empty list
-        to the feedback function to indicate finished loading)
-
-        :return: None
-        """
-        # Load the next batch of ROIs
-        item_list = create_partial_list(self.items, self.last_index, self.batch_size)
-        # Draw items
-        items = ROIDrawer.draw_roi(self.view, item_list, self.items.idents)
-        self.items_loaded += len(items)
-        # Check if all items were loaded
-        if not items:
-            print(f"Timer stop after loading {self.items_loaded} items")
-            print(f"Total loading time: {time.time() - self.start_time:.2f}")
-            self.stop()
-        # Update the last index
-        self.last_index += self.batch_size
-        # Update the loading percentage
-        self.percentage = self.items_loaded / (len(self.items))
-        # Check if a feedback function was given
-        if self.feedback:
-            # Call the feedback function
-            self.feedback(items)

@@ -5,6 +5,8 @@ from PyQt5.QtGui import QIcon, QColor
 
 
 class Color:
+    ITEM_ANALYSED = QColor("#5A597387")
+    ITEM_MODIFIED = QColor("#5A8c9ea3")
     BRIGHT_RED = QColor(222, 23, 56)
     LIGHT_BLUE = QColor(47, 167, 212)
 

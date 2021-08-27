@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import datetime
+import csv
 import os
 import re
 import shutil
@@ -9,18 +9,17 @@ import sys
 import time
 import traceback
 import warnings
-import numpy as np
-import csv
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from threading import Thread
 from typing import Union, Dict, Iterable, List, Tuple
 
 import PyQt5
+import numpy as np
 import pyqtgraph as pg
 from PyQt5 import QtCore, QtWidgets
 from PyQt5 import QtGui
 from PyQt5 import uic
-from PyQt5.QtCore import QSize, pyqtSignal, QItemSelectionModel, QSortFilterProxyModel, QTimer
+from PyQt5.QtCore import QSize, pyqtSignal, QItemSelectionModel, QSortFilterProxyModel
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QPixmap
 from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, QMessageBox
 
@@ -30,8 +29,9 @@ from core.roi.ROIHandler import ROIHandler
 from gui import Paths, Util
 from gui.Definitions import Icon
 from gui.Dialogs import ExperimentDialog, ExperimentSelectionDialog, StatisticsDialog, ImgDialog, SettingsDialog, \
-                        AnalysisSettingsDialog, Editor
-from gui.loader import ImageLoader
+    AnalysisSettingsDialog, Editor
+from gui.Util import create_image_item_list_from
+from gui.loader import Loader
 
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, False)
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, False)
@@ -77,6 +77,8 @@ class NucDetect(QMainWindow):
         self.roi_cache = None
         # A list of all loaded image files -> Used for reloading
         self.loaded_files = []
+        # Dict to convert md5 image hashes to file names
+        self.hash_to_name = {}
         # Timer responsible for lazy loading
         self.update_timer = None
         self.unsaved_changes = False
@@ -136,6 +138,7 @@ class NucDetect(QMainWindow):
                             "analysed"	INTEGER NOT NULL,
                             "settings"	TEXT,
                             "experiment"	TEXT,
+                            "modified" INTEGER NOT NULL,
                             PRIMARY KEY("md5")
             ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS "points" (
@@ -458,16 +461,17 @@ class NucDetect(QMainWindow):
         # Check if the list of available files is larger than 25
         if len(self.loaded_files) > 25 and not reload:
             self.setEnabled(False)
-            self.update_timer = ImageLoader(self.loaded_files, feedback=self.add_image_items)
+            self.update_timer = Loader(self.loaded_files, feedback=self.add_image_items,
+                                       processing=create_image_item_list_from)
         elif len(self.loaded_files) > 25:
             self.setEnabled(False)
-            self.update_timer = ImageLoader(paths, feedback=self.add_image_items)
+            self.update_timer = Loader(paths, feedback=self.add_image_items, processing=create_image_item_list_from)
         else:
             self.enable_buttons(True)
             items = Util.create_image_item_list_from(paths, indicate_progress=True)
             for item in items:
                 self.add_item_to_list(item)
-            print(f"Finished: {time.time() - start: .2f} secs")
+            print(f"Finished loading: {time.time() - start: .2f} secs\n")
 
     def add_image_items(self, items: List[QStandardItem]) -> None:
         """
@@ -496,6 +500,8 @@ class NucDetect(QMainWindow):
         if item is not None:
             path = item.data()["path"]
             key = item.data()["key"]
+            name = item.data()["file_name"]
+            self.hash_to_name[key] = name
             self.img_list_model.appendRow(item)
             self.reg_images.append((key, path))
             if not self.cursor.execute(
@@ -504,9 +510,9 @@ class NucDetect(QMainWindow):
             ).fetchall():
                 d = Detector.get_image_data(path)
                 self.cursor.execute(
-                    "INSERT OR IGNORE INTO images VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO images VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (key, d["datetime"], d["channels"], d["width"], d["height"],
-                     str(d["x_res"]), str(d["y_res"]), d["unit"], 0, -1, None)
+                     str(d["x_res"]), str(d["y_res"]), d["unit"], 0, -1, None, 0)
                 )
             self.connection.commit()
 
@@ -631,7 +637,7 @@ class NucDetect(QMainWindow):
         with ProcessPoolExecutor(max_workers=max_workers) as e:
             self.res_table_model.setRowCount(0)
             self.res_table_model.setColumnCount(2)
-            self.res_table_model.setHorizontalHeaderLabels(["Image", "ROI"])
+            self.res_table_model.setHorizontalHeaderLabels(["Image Name", "Image Hash", "Number of ROI"])
             logstate = settings["analysis_settings"]["logging"]
             settings["analysis_settings"]["logging"] = False
             self.prg_signal.emit("Starting multi image analysis", 0, 100, "")
@@ -662,7 +668,9 @@ class NucDetect(QMainWindow):
                                          ind, maxi, "")
                     self.save_rois_to_database(r, all_=True)
                     self.res_table_model.appendRow(
-                        [QStandardItem(r["handler"].ident), QStandardItem(str(len(r["handler"])))]
+                        [QStandardItem(self.hash_to_name[r["handler"].ident]),
+                        QStandardItem(r["handler"].ident),
+                         QStandardItem(str(len(r["handler"])))]
                     )
                     ind += 1
                 print(f"Analysed batch {cur_batch} in {time.time() - s2:.3f} secs\t"
@@ -824,7 +832,6 @@ class NucDetect(QMainWindow):
             self.prg_signal.emit(f"Loading ROI:  {ind}/{max}",
                                  ind, max, "")
             temproi = ROI(channel=entry[3], main=entry[7] is None, associated=entry[7])
-            temproi.id = entry[0]
             stats = crs.execute(
                 "SELECT * FROM statistics WHERE hash = ?",
                 (entry[0],)
@@ -861,13 +868,14 @@ class NucDetect(QMainWindow):
                 ellip = None
             ellp = (center, major, minor, angle, ov, area, ellip)
             temproi.ell_params = dict(zip(ellkeys, ellp))
+            temproi.id = entry[0]
             rois.add_roi(temproi)
             ind += 1
         for m in main_:
             for s in sec:
                 if s.associated == hash(m):
                     s.associated = m
-        print("Loaded roi from database")
+        print(f"Loaded {len(rois)} roi from database")
         return rois
 
     def create_result_table_from_list(self, handler: ROIHandler, experiment: str = None) -> None:
@@ -890,7 +898,7 @@ class NucDetect(QMainWindow):
         # Sort channel list
         chans = sorted(chans)
         # Create header
-        header = ["Image Identifier", "Group", "ROI Identifier", "Center[(y, x)]", "Area [px]",
+        header = ["Image Name", "Image Identifier", "Group", "ROI Identifier", "Center[(y, x)]", "Area [px]",
                   "Ellipticity[%]", "Or. Angle [deg]", "Maj. Axis", "Min. Axis"]
         if experiment:
             # Get all assigned images
@@ -898,6 +906,8 @@ class NucDetect(QMainWindow):
                                       (experiment, )).fetchall()[0][0]
             # Load data for experiment
             rows = self.get_table_data_from_database(experiment, chans, cursor)
+            # Sort rows according to group
+            rows = sorted(rows, key=lambda x: x[1])
             self.set_experiment_status_label_text(
                 f"Experiment: {experiment}\nImages: {num_imgs}"
             )
@@ -919,24 +929,50 @@ class NucDetect(QMainWindow):
             self.set_experiment_status_label_text(
                 f"Experiment: None\nImages: 1"
             )
+        self.create_table_rows(rows)
         # Set header of table
         self.res_table_model.setHorizontalHeaderLabels(header)
-        # Iterate over created rows
-        for row in rows:
-            item_row = []
-            # Create an QStandardItem for each cell in the row
-            for cell in row:
-                item = QStandardItem()
-                item.setText(cell)
-                item.setTextAlignment(QtCore.Qt.AlignCenter)
-                item.setSelectable(False)
-                item.setEditable(False)
-                item_row.append(item)
-            # Append the item row to the table model
-            self.res_table_model.appendRow(item_row)
         header = [header]
         header.extend(rows)
         self.data = header
+
+    def create_table_rows(self, rows: List[List[str]], append: bool = True) -> Union[None, List[List[QStandardItem]]]:
+        """
+        Method to create multiple table rows
+
+        :param rows: The rows to create
+        :param append: If true, the row will be directly appended to the results table
+        :return: None if append, else the created row
+        """
+        item_rows = []
+        for row in rows:
+            item_rows.append(self.create_table_row(row, append))
+        if not append:
+            return item_rows
+
+    def create_table_row(self, cells: List[str], append: bool = True) -> Union[None, List[QStandardItem]]:
+        """
+        Method to create a table row
+
+        :param cells: The text each cell of the row should contain
+        :param append: If true, the row will be directly appended to the results table
+        :return: None if append, else the created row
+        """
+        # Iterate over created rows
+        item_row = []
+        # Create an QStandardItem for each cell in the row
+        for cell in cells:
+            item = QStandardItem()
+            item.setText(cell)
+            item.setTextAlignment(QtCore.Qt.AlignCenter)
+            item.setSelectable(False)
+            item.setEditable(False)
+            item_row.append(item)
+        if append:
+            # Append the item row to the table model
+            self.res_table_model.appendRow(item_row)
+            return
+        return item_row
 
     def get_table_data_from_database(self, experiment: str, channel_names: List[str],
                                      cursor: sqlite3.Cursor) -> List[List[str]]:
@@ -962,7 +998,7 @@ class NucDetect(QMainWindow):
             else:
                 group = "No Group"
             for row_ in row:
-                row_.insert(1, group)
+                row_.insert(2, group)
             rows.extend(row)
         return rows
 
@@ -981,13 +1017,15 @@ class NucDetect(QMainWindow):
         nucs = cursor.execute("SELECT hash FROM roi WHERE associated IS NULL AND image=?", img).fetchall()
         nuclen = len(nucs)
         ind = 1
+        # Convert key to file name
+        name = self.hash_to_name[img[0]]
         # Get all information for each focus
         for nuc in nucs:
             self.prg_signal.emit(f"Creating table for image {img[0]}: {ind}/{nuclen}",
                                  (ind/nuclen) * 100, 100, "")
             # Get statistics of nucleus
             stats = cursor.execute("SELECT * FROM statistics WHERE hash=?", nuc).fetchall()[0]
-            row = [img[0], str(nuc[0]), stats[10], str(stats[2]), f"{float(stats[16]) * 100:.2f}",
+            row = [name, img[0], str(nuc[0]), stats[10], str(stats[2]), f"{float(stats[16]) * 100:.2f}",
                    f"{float(stats[13]):.2f}", f"{float(stats[11]):.2f}", f"{float(stats[12]):.2f}"]
             # Count available foci
             for channel in channel_names:
@@ -1123,6 +1161,7 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
+        return # TODO
         # Check if experiments were defined
         exps = self.cursor.execute("SELECT * FROM experiments").fetchall()
         if not exps:

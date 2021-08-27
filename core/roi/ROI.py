@@ -96,7 +96,7 @@ class ROI:
             return self.length
 
     def __hash__(self):
-        if self.id is None:
+        if not self.id:
             md5 = hashlib.md5()
             ident = f"{self.ident}{self.area}".encode()
             md5.update(ident)
@@ -153,7 +153,7 @@ class ROI:
         :param rle: RL encoded area to add to this ROI
         :return: None
         """
-        [self.area.append(x) for x in rle]
+        self.area.extend(rle)
         self.reset_stored_values()
 
     def calculate_ellipse_parameters(self) -> Union[Dict[str, Union[int, float, Tuple, None]]]:
@@ -225,6 +225,22 @@ class ROI:
                 raise Exception(f"ROI {self.id} does not contain any points!")
         return self.dims
 
+    def extract_area_intensity(self, channel: np.ndarray) -> List[Union[int, float]]:
+        """
+        Method to extract the intensity values of this roi from the given channel
+
+        :param channel: The channel to extract the values from
+        :return: The extracted values as list
+        """
+        vals = []
+        for row in self.area:
+            # Iterate over saved points
+            for x in range(row[2]):
+                vals.append(
+                    channel[row[0]][row[1] + x]
+                )
+        return vals
+
     def calculate_statistics(self, channel: np.ndarray) -> Dict[str, Union[int, float]]:
         """
         Method to calculate statistics for this roi
@@ -234,13 +250,7 @@ class ROI:
         """
         if not self.stats:
             # Extract values from channel
-            vals = []
-            for row in self.area:
-                # Iterate over saved points
-                for x in range(row[2]):
-                    vals.append(
-                        channel[row[0]][row[1] + x]
-                    )
+            vals = self.extract_area_intensity(channel)
             self.stats = {
                 "area": int(np.sum([x[2] for x in self.area])),
                 "intensity average": float(np.average(vals)),
@@ -250,3 +260,6 @@ class ROI:
                 "intensity std": float(np.std(vals))
             }
         return self.stats
+
+    def __str__(self):
+        return f"ROI {self.id} - Channel: {self.ident} - Main: {self.main}"

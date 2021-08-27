@@ -5,6 +5,7 @@ Created 09.04.2019
 from __future__ import annotations
 import datetime
 import hashlib
+import math
 import os
 import time
 from copy import deepcopy
@@ -25,6 +26,7 @@ from skimage.morphology import dilation
 from skimage.morphology.binary import binary_opening, binary_erosion
 
 from core.JittedFunctions import eu_dist, create_circular_mask, relabel_array, imprint_data_into_channel
+from core.roi.AreaAnalysis import convert_area_to_array
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 from fcn.FCN import FCN
@@ -359,8 +361,8 @@ class Detector:
             logging = analysis_settings.get("logging", logging)
         rem_list = []
         temp = []
-        main = []
-        foci = []
+        main: List[ROI] = []
+        foci: List[ROI] = []
         s0 = time.time()
         for roi in rois:
             if roi.main:
@@ -371,6 +373,20 @@ class Detector:
         Detector.log(f"Detected nuclei:{len(main)}\nDetected foci: {len(foci)}", logging)
         # Remove very small or extremly large main ROI
         main = [x for x in main if min_main_area < len(x) < max_main_area]
+        chan_del = []
+        # Check if channel for nucleus can be analysed
+        for nuc in main:
+            for channel in channel_names:
+                i = channel_names.index(channel)
+                c = channels[i]
+                if channel != nuc.ident:
+                    # Get all intensity values for area
+                    int_area = nuc.extract_area_intensity(c)
+                    # Get AVG and std
+                    avg, std = np.average(int_area), np.std(int_area)
+                    # Check if std for average is smaller than cutting function
+                    if math.exp(avg * 0.08) - 5 > std:
+                        chan_del.append((channel, nuc))
         # Remove all foci whose main roi was removed
         foci = [x for x in foci if x.associated in main]
         Detector.log(f"Checking for very small nuclei: {time.time() - s0: .4f} secs\nRemove not associated foci",
@@ -379,7 +395,17 @@ class Detector:
         # Remove foci that are either unassociated or whose nucleus was deleted
         association_roi = deepcopy(main)
         association_roi.extend(foci)
-        ass = {key: value for key, value in Detector.create_association_map(association_roi).items()}
+        ass = Detector.create_association_map(association_roi)
+        marked_foci = 0
+        # Remove foci whose channel was declared invalidated
+        for foc_rem in chan_del:
+            # Get list of associated foci
+            foci = ass[foc_rem[1]]
+            for focus in foci:
+                if focus.ident is foc_rem[0]:
+                    marked_foci += 1
+                    focus.marked = True
+        Detector.log(f"Number of marked foci: {marked_foci}", logging)
         mainlen = len(main)
         main = [x for x, _ in ass.items()]
         Detector.log(f"Removed nuclei: {mainlen - len(main)}", logging)

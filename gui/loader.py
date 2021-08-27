@@ -2,14 +2,18 @@ import os
 from typing import List, Callable, Iterable
 
 from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import QGraphicsView
 
-from gui.Util import create_partial_image_item_list
+from core.roi.ROIHandler import ROIHandler
+from gui.Util import create_partial_image_item_list, create_partial_list
 import time
 
 
 class Loader(QTimer):
 
-    def __init__(self, items: Iterable, batch_size: int, batch_time: int, feedback: Callable):
+    def __init__(self, items: Iterable, batch_size: int = 25,
+                 batch_time: int = 250, feedback: Callable = None,
+                 processing: Callable = None):
         """
         Base class to implement lazy loading
 
@@ -17,12 +21,14 @@ class Loader(QTimer):
         :param batch_size: The number of images to load per batch
         :param batch_time: The time between consecutive loading approaches in milliseconds
         :param feedback: The function to call after loading. Has to accept a list of QStandardItems
+        :param processing: The function to process the individual items. Needs to return the items after processing
         """
         super().__init__()
         self.items = items
         self.batch_size = batch_size
         self.batch_time = batch_time
         self.feedback = feedback
+        self.processing = processing
         # Connect timeout to batch loading method
         self.timeout.connect(self.load_next_batch)
         self.last_index = 0
@@ -40,32 +46,11 @@ class Loader(QTimer):
 
         :return: None
         """
-        return
-
-
-class ImageLoader(Loader):
-
-    def __init__(self, paths: List[str], batch_size: int = 25,
-                 batch_time: int = 1000, feedback: Callable = None):
-        """
-        Class to implement lazy image loading.
-
-        :param paths: The paths to load
-        :param batch_size: The number of images to load per batch
-        :param batch_time: The time between consecutive loading approaches in milliseconds
-        :param feedback: The function to call after loading. Has to accept a list of QStandardItems
-        """
-        super().__init__(sorted(paths, key=os.path.basename), batch_size, batch_time, feedback)
-
-    def load_next_batch(self) -> None:
-        """
-        Function to load the next batch. After loading, the feedback function will be called (will pass an empty list
-        to the feedback function to indicate finished loading)
-
-        :return: None
-        """
-        # Load the next batch of images
-        items = create_partial_image_item_list(self.items, self.last_index, self.batch_size)
+        # Get the next batch of items
+        items = create_partial_list(self.items, self.last_index, self.batch_size)
+        # Process items, if a processing function was passed
+        if self.processing:
+            items = self.process_items(items)
         self.items_loaded += len(items)
         # Check if all items were loaded
         if not items:
@@ -81,4 +66,39 @@ class ImageLoader(Loader):
             # Call the feedback function
             self.feedback(items)
 
+    def process_items(self, items: Iterable):
+        """
+        Function to process items via the specified processing function
 
+        Can be overwritten to account for additional parameters
+        :return: None
+        """
+        return self.processing(items)
+
+
+class ROIDrawerTimer(Loader):
+
+    def __init__(self, items: ROIHandler, view: QGraphicsView,
+                 batch_size: int = 25, batch_time: int = 250,
+                 feedback: Callable = None, processing: Callable = None):
+        """
+        Class to implement lazy roi drawing.
+
+        :param items: The items to draw
+        :param view: Graphicsview to draw the ROI on
+        :param batch_size: The number of images to load per batch
+        :param batch_time: The time between consecutive loading approaches in milliseconds
+        :param feedback: The function to call after loading. Has to accept a list of QStandardItems
+        :param processing: The function to process the individual items. Needs to return the items after processing
+        """
+        super().__init__(items, batch_size, batch_time, feedback, processing)
+        self.view = view
+
+    def process_items(self, items: ROIHandler):
+        """
+        Expects self.processing to be ROIDrawer.draw_roi
+
+        :param items: The items to process
+        :return: The processed items
+        """
+        return self.processing(self.view, items, self.items.idents)

@@ -95,11 +95,11 @@ def create_circular_mask(h: Union[int, float], w: Union[int, float],
     :return: The created mask as numpy array
     """
     if center is None:
-        center = [int(w/2), int(h/2)]
+        center = [int(w / 2), int(h / 2)]
     if radius is None:
-        radius = min(center[0], center[1], w-center[0], h-center[1])
-    Y, X = np.ogrid[:h, :w]
-    dist_from_center = np.sqrt((X - center[0])**2 + (Y-center[1])**2)
+        radius = min(center[0], center[1], w - center[0], h - center[1])
+    y, x = np.ogrid[:h, :w]
+    dist_from_center = np.sqrt((x - center[0]) ** 2 + (y - center[1]) ** 2)
     mask = dist_from_center <= radius
     return mask
 

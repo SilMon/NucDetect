@@ -16,8 +16,9 @@ from core.roi.ROIHandler import ROIHandler
 from gui import Paths, Util
 from gui.Definitions import Icon
 from gui.GraphicsItems import EditorView
-from gui.Plots import BoxPlotWidget, PoissonPlotWidget
-from gui.loader import ImageLoader
+from gui.Plots import PoissonPlotWidget
+from gui.Util import create_image_item_list_from
+from gui.loader import Loader
 from gui.settings.Settings import SettingsShowWidget, SettingsSlider, SettingsDial, SettingsSpinner, \
     SettingsDecimalSpinner, SettingsText, SettingsComboBox, SettingsCheckBox
 
@@ -188,6 +189,8 @@ class ExperimentDialog(QDialog):
         :return: None
         """
         dial = QInputDialog()
+        dial.setWindowTitle("Add new Experiment...")
+        dial.setWindowIcon(Icon.get_icon("LOGO"))
         dial.setStyleSheet(open("inputbox.css", "r").read())
         name, ok = QInputDialog.getText(dial, "Experiment Dialog", "Enter experiment name: ")
         if ok:
@@ -207,25 +210,32 @@ class ExperimentDialog(QDialog):
 
     def add_images_to_experiment(self) -> None:
         """
-        Methpd to add the selected images to the selected experiment
+        Method to add the selected images to the selected experiment
 
         :return: None
         """
         # Get selected images
         keys, paths = self.open_image_selection_dialog()
-        if keys is not None and paths is not None:
+        if keys and paths:
             # Get selected experiment
             selected_exp = self.exp_model.item(self.ui.lv_experiments.selectionModel().selectedIndexes()[0].row())
             data = selected_exp.data()
             # Clear img_model
             self.img_model.clear()
-            # Get items
-            items = Util.create_image_item_list_from(paths)
-            for item in items:
-                self.img_model.appendRow(item)
             data["keys"] = keys
             data["image_paths"] = paths
             selected_exp.setData(data)
+            self.enable_experiment_buttons(False)
+            if len(keys) > 25:
+                self.update_timer = Loader(paths,
+                                           feedback=self.add_image_items,
+                                           processing=create_image_item_list_from)
+            else:
+                # Get items
+                items = create_image_item_list_from(paths)
+                for item in items:
+                    self.img_model.appendRow(item)
+                self.enable_experiment_buttons()
 
     def accepted(self):
         # Change the information for the last selected experiment
@@ -373,6 +383,20 @@ class ExperimentDialog(QDialog):
                 add_item.setIcon(Icon.get_icon("CLIPBOARD"))
                 self.exp_model.appendRow(add_item)
 
+    def enable_experiment_buttons(self, enable: bool = True) -> None:
+        """
+        Method to enable the buttons relevant for experiment changes
+
+        :param enable: The bool to pass to the setEnabled function of the buttons
+        :return: None
+        """
+        self.ui.lv_experiments.setEnabled(enable)
+        self.ui.btn_add.setEnabled(enable)
+        self.ui.btn_remove.setEnabled(enable)
+        self.ui.btn_images_add.setEnabled(enable)
+        self.ui.btn_images_clear.setEnabled(enable)
+        self.ui.btn_add_group.setEnabled(enable)
+
     def on_exp_selection_change(self, selected: QItemSelection, deselected: QItemSelection) -> None:
         """
         Function to react to changed experiment selection
@@ -384,6 +408,7 @@ class ExperimentDialog(QDialog):
         # Get selected experiment
         selected = selected.indexes()
         deselected = deselected.indexes()
+        self.enable_experiment_buttons(False)
         # Store the current data to the deselected item
         if deselected:
             item = self.exp_model.item(deselected[0].row())
@@ -432,7 +457,9 @@ class ExperimentDialog(QDialog):
                 groups_str += f"{name} ({len(keys)})"
             self.ui.le_groups.setText(groups_str)
             if len(data["image_paths"]) > 25:
-                self.update_timer = ImageLoader(data["image_paths"], feedback=self.add_image_items)
+                self.update_timer = Loader(data["image_paths"],
+                                           feedback=self.add_image_items,
+                                           processing=create_image_item_list_from)
             else:
                 # Add the saved image items to img_model
                 items = Util.create_image_item_list_from(data["image_paths"])
@@ -456,6 +483,7 @@ class ExperimentDialog(QDialog):
             self.ui.btn_remove_image.setEnabled(False)
             self.ui.btn_images_clear.setEnabled(False)
             self.ui.btn_remove.setEnabled(True)
+        self.enable_experiment_buttons(True)
 
     def add_image_items(self, items: List[QStandardItem]) -> None:
         """
@@ -469,8 +497,7 @@ class ExperimentDialog(QDialog):
         self.ui.prg_images.setValue(self.update_timer.percentage * 100)
         if not items:
             # Enable buttons for input
-            self.ui.btn_images_add.setEnabled(True)
-            self.ui.btn_remove.setEnabled(True)
+            self.enable_experiment_buttons()
 
     def open_group_dialog(self):
         # Get the selected experiment
@@ -509,7 +536,7 @@ class ImageSelectionDialog(QDialog):
         :param kwargs: Keyword arguments
         """
         super().__init__(*args, **kwargs)
-        self.images: List[str] = images
+        self.images: List[str] = sorted(images)
         self.selected_images = selected_images
         self.img_model = None
         self.ui = None
@@ -531,7 +558,7 @@ class ImageSelectionDialog(QDialog):
         self.img_model = QStandardItemModel()
         self.ui.lv_images.setModel(self.img_model)
         self.ui.lv_images.setIconSize(Icon.get_icon_size("LIST_ITEM"))
-        self.update_timer = ImageLoader(self.images, feedback=self.load_images)
+        self.update_timer = Loader(self.images, feedback=self.load_images, processing=create_image_item_list_from)
         self.prg_bar.setValue(0)
         self.prg_bar.setMaximum(100)
         self.ui.lv_images.setEnabled(False)
@@ -675,7 +702,8 @@ class GroupDialog(QDialog):
             )
             self.img_model.clear()
             if len(paths) > 25:
-                self.update_timer = ImageLoader(paths, feedback=self.add_image_items)
+                self.update_timer = Loader(paths, feedback=self.add_image_items,
+                                           processing=create_image_item_list_from)
                 self.setEnabled(False)
             else:
                 # Create image items
@@ -798,7 +826,7 @@ class GroupDialog(QDialog):
             self.ui.btn_remove.setEnabled(True)
         else:
             self.ui.btn_add_images.setEnabled(False)
-            self.ui.btn_images_clear.setEnabled(False)
+            self.ui.btn_clear_images.setEnabled(False)
             self.ui.btn_remove_image.setEnabled(False)
             self.ui.btn_remove.setEnabled(False)
         self.ui.lv_images.setEnabled(True)
@@ -811,6 +839,7 @@ class GroupDialog(QDialog):
         """
         dial = QInputDialog()
         dial.setStyleSheet(open("inputbox.css", "r").read())
+        dial.setWindowIcon(Icon.get_icon("LOGO"))
         name, ok = QInputDialog.getText(dial, "Group Dialog", "Enter the new group: ")
         if ok:
             # Create item to add to group list
@@ -965,9 +994,15 @@ class StatisticsDialog(QDialog):
         self.ui = None
         self.experiment = experiment
         self.active_channels = active_channels
-        self.connection = sqlite3.connect(Paths.database)
-        self.cursor = self.connection.cursor()
+        self.connection: sqlite3.Connection = sqlite3.connect(Paths.database)
+        self.cursor: sqlite3.Cursor = self.connection.cursor()
+        self.current_channel = None
+        self.current_group = None
+        self.channels: List = []
+        self.group_data: Dict = {}
+        self.group_keys: Dict = {}
         self.initialize_ui()
+        self.get_raw_data()
         self.create_plots()
 
     def initialize_ui(self) -> None:
@@ -977,13 +1012,14 @@ class StatisticsDialog(QDialog):
         :return: None
         """
         self.ui = uic.loadUi(Paths.ui_stat_dial, self)
+        self.ui.cbx_dist.addItems(["Poisson"])
         self.setWindowTitle(f"Statistics for {self.experiment}")
         self.setWindowIcon(QtGui.QIcon('logo.png'))
         self.setWindowFlags(self.windowFlags() |
                             QtCore.Qt.WindowSystemMenuHint |
                             QtCore.Qt.WindowMinMaxButtonsHint)
 
-    def get_group_data(self) -> Tuple[List, Dict]:
+    def get_raw_data(self) -> Tuple[List, Dict]:
         """
         Method to retrieve the data about groups from the database
 
@@ -994,17 +1030,13 @@ class StatisticsDialog(QDialog):
             "SELECT * FROM groups WHERE experiment=?",
             (self.experiment,)
         )
-        # Get the individual groups and corresponding images
-        groups = {}
         for raw in groups_raw:
             img = raw[0]
             name = raw[2]
-            if name in groups:
-                groups[name].append(img)
+            if name in self.group_keys:
+                self.group_keys[name].append(img)
             else:
-                groups[name] = [img]
-        # Get number of Nuclei per group
-        group_data = {}
+                self.group_keys[name] = [img]
         # Get the channels of the image
         channels = self.cursor.execute(
             "SELECT DISTINCT name, index_ FROM channels WHERE md5 IN (SELECT image FROM groups WHERE experiment=?)",
@@ -1021,7 +1053,21 @@ class StatisticsDialog(QDialog):
             return
         main = main[0][0]
         # Clean up channels
-        channels = [x[0] for x in channels if x[0] != main]
+        self.channels = [x[0] for x in channels if x[0] != main]
+        self.ui.cbx_channel.addItems(channels)
+        # Select first channel as standard
+        self.ui.cbx_group.addItems(self.group_keys.keys())
+        # Select first group as standard
+        self.ui.cbx_channel.setCurrentIndex(0)
+        self.ui.cbx_group.setCurrentIndex(0)
+        self.current_channel = self.channels[0]
+        self.current_group = self.group_keys.keys()[0]
+
+
+
+        # Create empty data lists
+        for _ in self.channels:
+            self.group_data.append([])
         # Get channel indices
         for group, imgs in groups.items():
             foci_per_nucleus = [[] for _ in range(len(channels))]
@@ -1045,72 +1091,38 @@ class StatisticsDialog(QDialog):
             group_data[group] = foci_per_nucleus
         return channels, group_data
 
-    def create_value_plots(self, channels: List[str], group_data: Dict[str, List]) -> QScrollArea:
+    def get_data_for_group(self) -> Tuple[str, list]:
         """
-        Method to create plots for the value tab
+        Method to get the data for a specific group and channel
 
-        :param channels: A list of available channels
-        :param group_data: The data to plot
-        :return: The create plots inside a QScollArea
+        :return: A tuple containing the channel name and the data
         """
-        # Define scroll area for val tab
-        sa, layout = Util.create_scroll_area()
-        # Create plots
-        for i in range(len(channels)):
-            if not self.active_channels[channels[i]]:
-                continue
-            # Get the data for this channel
-            data = {key: value[i] for key, value in group_data.items()}
-            # Create PlotWidget for channel
-            d = list(data.values())
-            g = list(data.keys())
-            # Create layout to add plot and labels
-            plot_layout = QHBoxLayout()
-            label_layout = QHBoxLayout()
+        # Get keys corresponding to currently
+        keys = self.group_keys.get(self.current_group, [])
+        # Get channel index
+        index = self.channels.index(self.current_channel)
 
-            pw = BoxPlotWidget(data=d, groups=g)
-            pw.setTitle(f"{channels[i]} Analysis")
-            pw.laxis.setLabel("Foci/Nucleus")
-            plot_layout.addWidget(pw)
-            # Create
-            # Create the line to add
-            line = QFrame()
-            line.setFrameShape(QFrame.HLine)
-            line.setFrameShadow(QFrame.Sunken)
-            # Get plotting data of BoxPlot
-            p_data = pw.p_data
+        # Iterate over all images of the group
+        for key in keys:
+            # Get all nuclei for this image
+            nuclei = self.cursor.execute(
+                "SELECT hash FROM roi WHERE image=? AND associated IS NULL",
+                (key,)
+            ).fetchall()
+            # Get the foci per individual nucleus
+            for nuc in nuclei:
+                # Get channel of respective of the
+                self.group_data[index].append(
+                    self.cursor.execute(
+                        "SELECT COUNT(*) FROM roi WHERE associated=? AND channel=?",
+                        (nuc[0], self.current_channel)
+                        ).fetchall()[0][0]
+                    )
+        group_data[group] = foci_per_nucleus
 
-            # Iterate over groups
-            for j in range(len(g)):
-                group_layout = QVBoxLayout()
-                group_layout.addWidget(QLabel(
-                    f"<strong>Group: {g[j]}</strong>"
-                ))
-                group_layout.addWidget(QLabel(
-                    f"Values (w/o Outliers): {p_data[j]['number']}"
-                ))
-                group_layout.addWidget(QLabel(
-                    f"Average: {p_data[j]['average']:.2f}"
-                ))
-                group_layout.addWidget(QLabel(
-                    f"Median: {p_data[j]['median']}"
-                ))
-                group_layout.addWidget(QLabel(
-                    f"IQR: {p_data[j]['iqr']}"
-                ))
-                group_layout.addWidget(QLabel(
-                    f"Outliers: {len(p_data[j]['outliers'])}"
-                ))
-                group_layout.addStretch(1)
-                label_layout.addLayout(group_layout)
-            plot_layout.addLayout(label_layout)
-            layout.addLayout(plot_layout)
-            # layout_main_val.addWidget(sa)
-            if i < len(channels) - 1:
-                layout.addWidget(line)
-        return sa
 
-    def create_poisson_plots(self, channels: List[str], group_data: Dict[str, List]) -> QScrollArea:
+
+    def create_poisson_plots(self) -> QScrollArea:
         """
         Method to create plots for the value tab
 
@@ -1128,8 +1140,8 @@ class StatisticsDialog(QDialog):
                 # Create Poisson Plot for channel
                 for group, values in data.items():
                     # Create layout to add plot and labels
-                    plot_layout = QHBoxLayout()
-                    label_layout = QVBoxLayout()
+                    plot_layout = self.ui.vl_data
+                    label_layout = self.ui.vl_text
                     poiss = PoissonPlotWidget(data=values, label=group)
                     poiss.setTitle(f"{group} - Comparison to Poisson Distribution")
                     # Create the line to add
@@ -1159,9 +1171,8 @@ class StatisticsDialog(QDialog):
 
         :return: None
         """
-        channels, group_data = self.get_group_data()
-        self.ui.vl_poisson.addWidget(self.create_poisson_plots(channels, group_data))
-        self.ui.vl_values.addWidget(self.create_value_plots(channels, group_data))
+        channels, group_data = self.get_data_for_group()
+        self.ui.vl_poisson.addWidget(self.create_poisson_plots())
 
 
 class ImgDialog(QDialog):

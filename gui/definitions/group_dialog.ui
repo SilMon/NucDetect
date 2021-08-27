@@ -147,7 +147,7 @@ QDialog{
           </widget>
          </item>
          <item>
-          <widget class="QPushButton" name="button_clear_images">
+          <widget class="QPushButton" name="btn_clear_images">
            <property name="enabled">
             <bool>false</bool>
            </property>

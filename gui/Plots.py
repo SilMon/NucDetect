@@ -1,4 +1,4 @@
-from typing import List, Dict, Union
+from typing import List, Dict, Union, Iterable
 
 from PyQt5 import QtGui
 from PyQt5.QtCore import QRectF, QLine, QPointF
@@ -213,6 +213,20 @@ class PoissonPlotWidget(pg.PlotWidget):
         self.poisson_graph = None
         self.prepare_plot()
 
+    def set_data(self, data: Iterable[float], name: str) -> None:
+        """
+        Method to change the displayed data
+
+        :param data: The data to display as list of floats
+        :param name: The name of the group
+        :return: None
+        """
+        self.removeItem(self.data_graph)
+        self.removeItem(self.poisson_graph)
+        self.data = data
+        self.data_name = name
+        self.prepare_plot()
+
     def prepare_plot(self) -> None:
         """
         Method to prepare the plot
@@ -248,7 +262,7 @@ class PoissonPlotWidget(pg.PlotWidget):
         legend.addItem(self.poisson_graph, f"<font size='4' color=#96961e>▮</font>{'Poisson':>10}")
         """
 
-    def poisson(self, lam: float, test: Union[list, np.ndarray, ]):
+    def poisson(self, lam: float, test: Union[list, np.ndarray]):
         """
         Recursive method to calculate the probability of elements to occur according to the poisson distrubution
 

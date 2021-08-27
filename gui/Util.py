@@ -7,6 +7,7 @@ from typing import List, Tuple, Union, Iterable
 from PyQt5 import QtCore
 from PyQt5.QtGui import QStandardItem, QIcon
 from PyQt5.QtWidgets import QScrollArea, QVBoxLayout, QHBoxLayout, QWidget
+from Definitions import Color
 from skimage import io, img_as_ubyte
 from skimage.transform import resize
 from concurrent.futures import ThreadPoolExecutor
@@ -130,10 +131,17 @@ def create_list_item(path: str) -> QStandardItem:
             create_thumbnail(path)
         )
         item.setIcon(icon)
+        analysed, modified = check_if_image_was_analysed_and_modified(key)
+        if analysed:
+            if modified:
+                item.setBackground(Color.ITEM_MODIFIED)
+            else:
+                item.setBackground(Color.ITEM_ANALYSED)
         item.setData({
             "key": key,
             "path": path,
-            "analysed": check_if_image_was_analysed(key),
+            "analysed": analysed,
+            "modified": modified,
             "file_name": file,
             "folder": folder,
             "date": t[0],
@@ -173,7 +181,7 @@ def create_thumbnail(image_path: str, size: Tuple = (75, 75)) -> str:
     return thumb_path
 
 
-def check_if_image_was_analysed(md5: str) -> bool:
+def check_if_image_was_analysed_and_modified(md5: str) -> Tuple[bool, bool]:
     """
     Function to check if an image was already analysed
 
@@ -186,8 +194,17 @@ def check_if_image_was_analysed(md5: str) -> bool:
         "SELECT analysed FROM images WHERE md5=?",
         (md5, )
     ).fetchall()
+    modified = cursor.execute(
+        "SELECT modified FROM images WHERE md5=?",
+        (md5, )
+    ).fetchall()
     if analysed:
-        return analysed[0][0]
+        analysed = analysed[0][0]
     else:
-        return False
+        analysed = False
+    if modified:
+        modified = modified[0][0]
+    else:
+        modified = False
+    return analysed, modified
 
