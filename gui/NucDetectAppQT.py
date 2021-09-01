@@ -1161,7 +1161,6 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        return # TODO
         # Check if experiments were defined
         exps = self.cursor.execute("SELECT * FROM experiments").fetchall()
         if not exps:

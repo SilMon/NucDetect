@@ -1,6 +1,7 @@
 import sqlite3
 from typing import List, Iterable, Dict, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pyqtgraph as pg
 from PyQt5 import QtCore
@@ -72,9 +73,6 @@ class EditorView(pg.GraphicsView):
         :return: None
         """
         self.selected_item.update_data(rect, angle, preview)
-        # Mark Original ident as delete
-        if not preview:
-            self.delete.append(self.selected_item.roi_id)
 
     def draw_additional_items(self, state: bool = True) -> None:
         """
@@ -246,8 +244,10 @@ class EditorView(pg.GraphicsView):
         ignore = [x.roi_id for x in self.items if x.changed]
         # Also ignore roi that were deleted
         ignore.extend(self.delete)
+        # Delete all items that can be ignored from ROIHandler
+        self.roi.delete_rois(ignore)
         # Create a hash association maps for each channel
-        maps = self.roi.create_hash_association_maps((self.image.shape[0], self.image.shape[1]), ignore)
+        maps = self.roi.create_hash_association_maps((self.image.shape[0], self.image.shape[1]))
         # Create list for items which will be unassociated due to data changes
         unassociated = []
         # Get all associated foci and add them to list of unassociated foci
@@ -308,8 +308,8 @@ class EditorView(pg.GraphicsView):
 
     @staticmethod
     def write_item_to_database(curs: sqlite3.Cursor, item, roi: ROI,
-                               rle: List[List[int]], image: np.ndarray,
-                               image_id: int) -> None:
+                               rle: List[Tuple[int, int, int]], image: np.ndarray,
+                               image_id: str) -> None:
         """
         Method to write the specified item to the database
 
@@ -354,7 +354,7 @@ class EditorView(pg.GraphicsView):
         curs.execute("DELETE FROM statistics WHERE hash=?", (roihash,))
 
     @staticmethod
-    def create_associations(main: int, maps: List[np.ndarray],
+    def create_associations(main: int, maps: Iterable[np.ndarray],
                             unassociated: Iterable[int]) -> Dict:
         """
         Method to create associations dictionary to associate nuclei with foci
@@ -370,7 +370,7 @@ class EditorView(pg.GraphicsView):
             if c != main:
                 for y in range(maps[0].shape[0]):
                     for x in range(maps[0].shape[1]):
-                        if maps[c][y][x] and maps[main][y][x] and maps[c][y][x] in unassociated:
+                        if maps[c][y][x] and maps[main][y][x] and (maps[c][y][x] in unassociated):
                             associations[maps[c][y][x]] = maps[main][y][x]
         return associations
 

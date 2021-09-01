@@ -226,28 +226,33 @@ class ROIHandler:
                 writer.writerow(data)
         return True
 
-    def create_hash_association_maps(self, shape: Tuple[int, int], ignore: Iterable[ROI]) -> Iterable[np.ndarray]:
+    def create_hash_association_maps(self, shape: Tuple[int, int]) -> Iterable[np.ndarray]:
         """
         Method to create arrays with labelling hashes for each saved ROI
 
         :param shape: The shape of the original image
-        :param ignore: List of changed roi
         :return: The created maps
         """
-        print(ignore)
-        print([x.id for x in self if x.main])
-        print([x.id for x in self if x.id in ignore])
         maps = []
         # Create empty maps
         for _ in range(len(self.idents)):
             maps.append(np.zeros(shape, dtype="int64"))
         for roi in self:
-            # Get channel index of ROI
-            if roi.id not in ignore:
-                num_area = numList()
-                [num_area.append(x) for x in roi.area]
-                AreaAnalysis.imprint_area_into_array(num_area, maps[self.idents.index(roi.ident)], hash(roi))
-        for map in maps:
-            plt.imshow(map, cmap="gray")
-            plt.show()
+            # Create numba list
+            num_area = numList()
+            [num_area.append(x) for x in roi.area]
+            # Create the channel maps using numba
+            AreaAnalysis.imprint_area_into_array(num_area, maps[self.idents.index(roi.ident)], hash(roi))
         return maps
+
+    def delete_rois(self, hashes: List[str]) -> None:
+        """
+        Method to delete roi from this handler based on their hashes
+
+        :param hashes: The hashes of roi to delete
+        :return: None
+        """
+        self.rois = [x for x in self if x.id not in hashes]
+        # Reset statistics
+        self.stats.clear()
+
