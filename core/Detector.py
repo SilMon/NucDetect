@@ -374,6 +374,7 @@ class Detector:
         # Remove very small or extremly large main ROI
         main = [x for x in main if min_main_area < len(x) < max_main_area]
         chan_del = []
+        # TODO implement menu item for cut-off factor
         # Check if channel for nucleus can be analysed
         for nuc in main:
             for channel in channel_names:
@@ -385,7 +386,7 @@ class Detector:
                     # Get AVG and std
                     avg, std = np.average(int_area), np.std(int_area)
                     # Check if std for average is smaller than cutting function
-                    if math.exp(avg * 0.08) - 5 > std:
+                    if math.exp(avg * 0.03) - 5 > std:
                         chan_del.append((channel, nuc))
         # Remove all foci whose main roi was removed
         foci = [x for x in foci if x.associated in main]

@@ -8,7 +8,7 @@ from PyQt5 import QtGui, QtCore, uic
 from PyQt5.QtCore import QItemSelection, QItemSelectionModel, Qt, QRectF
 from PyQt5.QtGui import QStandardItem, QStandardItemModel, QResizeEvent, QKeyEvent
 from PyQt5.QtWidgets import QDialog, QMessageBox, QInputDialog, QCheckBox, QVBoxLayout, QFrame, QScrollArea, QWidget, \
-    QLabel, QHBoxLayout, QSizePolicy, QGraphicsEllipseItem, QGraphicsLineItem, \
+    QLabel, QVBoxLayout, QSizePolicy, QGraphicsEllipseItem, QGraphicsLineItem, \
     QGraphicsItem, QProgressBar
 
 from core.Detector import Detector
@@ -1062,9 +1062,7 @@ class StatisticsDialog(QDialog):
         self.ui.cbx_group.setCurrentIndex(0)
         self.current_channel = self.channels[0]
         self.current_group = self.group_keys.keys()[0]
-
-
-
+        # Get data for every group
         # Create empty data lists
         for _ in self.channels:
             self.group_data.append([])
@@ -1400,7 +1398,7 @@ class SettingsDialog(QDialog):
         for ind in range(self.ui.settings.count()):
             if self.ui.settings.tabText(ind) == section:
                 tab = self.ui.settings.widget(ind)
-                base = tab.findChildren(QtGui.QVBoxLayout, "base")
+                base = tab.findChildren(QVBoxLayout, "base")
                 for mp in menupoint:
                     t = mp["type"].lower()
                     p = None
@@ -1506,6 +1504,7 @@ class SettingsDialog(QDialog):
         :param value: The value of the widget. Types depends on widget type
         :return: None
         """
+        print(f"ID: {_id} Value: {value}")
         self.changed[_id] = value
         self.data[_id] = value
 
@@ -1560,10 +1559,11 @@ class Editor(QDialog):
         "editor",
         "image",
         "roi",
+        "size_factor",
         "temp_items"
     ]
 
-    def __init__(self, image: np.ndarray, roi: ROIHandler):
+    def __init__(self, image: np.ndarray, roi: ROIHandler, size_factor: float = 1):
         """
         Constructor
 
@@ -1575,6 +1575,8 @@ class Editor(QDialog):
         self.editor = None
         self.image = image
         self.roi = roi
+        self.size_factor = size_factor
+        print("Editor Size Factor")
         self.temp_items = []
         self.initialize_ui()
 
@@ -1589,7 +1591,7 @@ class Editor(QDialog):
         :return: None
         """
         self.ui = uic.loadUi(Paths.ui_editor_dial, self)
-        self.editor = EditorView(self.image, self.roi, self)
+        self.editor = EditorView(self.image, self.roi, self, self.size_factor)
         self.ui.view.addWidget(self.editor)
         # Add icons to buttons
         self.ui.btn_view.setIcon(Icon.get_icon("EYE"))
@@ -1619,6 +1621,11 @@ class Editor(QDialog):
             lambda: self.editor.draw_additional_items(self.ui.btn_show.isChecked())
         )
         self.ui.btng_mode.idToggled.connect(self.change_mode)
+        # React to changes of the used size factor
+        self.ui.spb_sizeFactor.setValue(self.size_factor)
+        self.ui.spb_sizeFactor.valueChanged.connect(
+            lambda: self.change_size_factor(self.ui.spb_sizeFactor.value())
+        )
         # Setup editing boxes
         sy, sx, _ = self.image.shape
         self.ui.spb_x.setMinimum(0)
@@ -1642,14 +1649,28 @@ class Editor(QDialog):
         self.ui.btn_preview.clicked.connect(self.set_changes)
         self.ui.btn_accept.clicked.connect(self.set_changes)
 
-    def set_changes(self) -> None:
+    def change_size_factor(self, new_value: float) -> None:
+        """
+        Method to change the used size factor for ROI
+
+        :param new_value: The new size factor to use
+        :return: None
+        """
+        self.size_factor = new_value
+        self.editor.size_factor = new_value
+
+    def set_changes(self, override: bool = False) -> None:
         """
         Method to make changes to existing item
 
+        :param override: Forces method to apply the made changes
         :return: None
         """
-        # Get the info if this should be a preview or permanent
-        preview = self.sender() == self.ui.btn_preview
+        if not override:
+            # Get the info if this should be a preview or permanent
+            preview = self.sender() == self.ui.btn_preview
+        else:
+            preview = False
         # Define QRect to adjust position of item
         x, y = self.ui.spb_x.value(), self.ui.spb_y.value(),
         width, height = self.ui.spb_width.value(), self.ui.spb_height.value()
@@ -1715,13 +1736,14 @@ class Editor(QDialog):
         elif event.key() == Qt.Key_3:
             self.set_mode(2)
         elif event.key() == Qt.Key_4:
-            self.ui.btn_edit_nuclei.setChecked(True)
-        elif event.key() == Qt.Key_5:
-            self.ui.btn_edit_foci.setChecked(True)
-        elif event.key() == Qt.Key_6:
             self.ui.btn_coords.setChecked(not self.ui.btn_coords.isChecked())
-        elif event.key() == Qt.Key_7:
+        elif event.key() == Qt.Key_5:
             self.ui.btn_show.setChecked(not self.ui.btn_show.isChecked())
+        elif event.key() == Qt.Key_P:
+            print("Preview Button")
+            self.preview_changes()
+        elif event.key() == Qt.Key_A:
+            self.set_changes(override=True)
 
     def set_mode(self, mode: int) -> None:
         """

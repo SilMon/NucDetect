@@ -253,7 +253,7 @@
   ],
   "Analysis - Machine Learning": [
     {
-      "id":"fcn_certainty_nuclei",
+      "id": "fcn_certainty_nuclei",
       "title": "Detection Certainty",
       "desc": "Minimum required detection certainty in percent for nucleus detection",
       "type": "decspin",
@@ -268,11 +268,11 @@
       }
     },
     {
-      "id":"fcn_certainty_foci",
+      "id": "fcn_certainty_foci",
       "title": "Detection Certainty",
       "desc": "Minimum required detection certainty in percent for nucleus detection",
       "type": "decspin",
-      "value": 0.80,
+      "value": 0.8,
       "values": {
         "min": 0.01,
         "max": 1,
@@ -302,6 +302,21 @@
       "value": 1,
       "values": {
         "tristate": 0
+      }
+    },
+    {
+      "id": "size_factor",
+      "title": "Size factor for modification window",
+      "desc": "Size factor to determine the default size of added nuclei and foci",
+      "type": "decspin",
+      "value": 0.97,
+      "values": {
+        "min": 0,
+        "max": 5,
+        "step": 0.01,
+        "decimals": 2,
+        "prefix": "",
+        "suffix": ""
       }
     }
   ],

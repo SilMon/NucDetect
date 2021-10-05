@@ -25,9 +25,10 @@ class EditorView(pg.GraphicsView):
         QColor(0, 255, 255),  # Cyan
     ]
 
-    def __init__(self, image: np.ndarray, roi: ROIHandler, parent: QDialog):
+    def __init__(self, image: np.ndarray, roi: ROIHandler, parent: QDialog, size_factor: float = 1):
         super(EditorView, self).__init__()
         self.parent = parent
+        self.size_factor = size_factor
         self.mode = -1
         self.image = image
         self.active_channel: int = None
@@ -72,7 +73,8 @@ class EditorView(pg.GraphicsView):
 
         :return: None
         """
-        self.selected_item.update_data(rect, angle, preview)
+        if self.selected_item:
+            self.selected_item.update_data(rect, angle, preview)
 
     def draw_additional_items(self, state: bool = True) -> None:
         """
@@ -156,11 +158,11 @@ class EditorView(pg.GraphicsView):
         if event.key() == Qt.Key_Shift:
             self.shift_down = True
         if event.key() == Qt.Key_Delete:
-            item = self.selected_item
-            # Remove item from scene
-            item.remove_from_view(self)
-            # Add item to deletion list to remove it from the database
-            self.delete.append(item.roi_id)
+            if self.selected_item:
+                # Remove item from scene
+                self.selected_item.remove_from_view(self)
+                # Add item to deletion list to remove it from the database
+                self.delete.append(self.selected_item.roi_id)
         elif event.key() == Qt.Key_1:
             self.change_mode(-1)
         elif event.key() == Qt.Key_2:
@@ -179,7 +181,9 @@ class EditorView(pg.GraphicsView):
             # Get click position
             pos = self.mpos
             if self.active_channel == self.main_channel:
-                item = NucleusItem(round(pos.x()) - 75, round(pos.y()) - 38, 150, 76, round(pos.x()), round(pos.y()),
+                item = NucleusItem(round(pos.x() - 75 * self.size_factor), round(pos.y() - 38 * self.size_factor),
+                                   round(150 * self.size_factor), round(76 * self.size_factor),
+                                   round(pos.x()), round(pos.y()),
                                    0, (0, 0), self.main_channel, -1)
                 item.set_pens(
                     pg.mkPen(color="FFD700", width=3, style=QtCore.Qt.DashLine),
@@ -193,7 +197,8 @@ class EditorView(pg.GraphicsView):
                 item.enable_editing(True)
                 self.parent.setup_editing(item)
             else:
-                item = FocusItem(round(pos.x() - 3.5), round(pos.y() - 3.5), 7, 7, self.active_channel, -1)
+                item = FocusItem(round(pos.x() - 3.5 * self.size_factor), round(pos.y() - 3.5 * self.size_factor),
+                                 round(7 * self.size_factor), round(7 * self.size_factor), self.active_channel, -1)
                 item.set_pen(
                     ROIDrawer.MARKERS[self.active_channel],
                     ROIDrawer.MARKERS[-1]
@@ -327,13 +332,13 @@ class EditorView(pg.GraphicsView):
         # Prepare data for SQL statement
         rle = [(hash(roi), x[0], x[1], x[2]) for x in rle]
         # Write item to database
-        curs.execute("INSERT INTO roi VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        curs.execute("INSERT OR IGNORE INTO roi VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                      (hash(roi), image_id, False, roi.ident,
                       f"({item.center[1]:.0f}, {item.center[0]:.0f})", item.edit_rect.width,
                       item.edit_rect.height, None))
-        curs.executemany("INSERT INTO points VALUES (?, ?, ?, ?)",
+        curs.executemany("INSERT OR IGNORE INTO points VALUES (?, ?, ?, ?)",
                          rle)
-        curs.execute("INSERT INTO statistics VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        curs.execute("INSERT OR IGNORE INTO statistics VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                      (hash(roi), image_id, stats["area"], stats["intensity average"],
                       stats["intensity median"], stats["intensity maximum"], stats["intensity minimum"],
                       stats["intensity std"], ellp["eccentricity"], ellp["roundness"],

@@ -220,6 +220,7 @@ class NucDetect(QMainWindow):
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_max_nuc_size", 45000, "int");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_max_foc_size", 280, "int");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_max_foc_overlap", 0.75, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("size_factor", 1, "float");
             COMMIT;
             '''
         )
@@ -1248,7 +1249,11 @@ class NucDetect(QMainWindow):
         if code == QDialog.Accepted:
             if sett.changed:
                 for key, value in sett.changed.items():
-                    self.detector.settings[key] = value
+                    self.settings[key] = value[0]
+                    self.cursor.execute(
+                        "UPDATE OR IGNORE settings SET value = ? WHERE key_ = ?",
+                        (key, value[0])
+                    )
             sett.save_menu_settings()
 
     def show_modification_window(self) -> None:
@@ -1257,7 +1262,9 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        editor = Editor(image=Detector.load_image(self.cur_img["path"]), roi=self.roi_cache)
+        print(self.settings["size_factor"])
+        editor = Editor(image=Detector.load_image(self.cur_img["path"]),
+                        roi=self.roi_cache, size_factor=self.settings["size_factor"])
         editor.setWindowTitle(f"Modification Dialog for {self.cur_img['file_name']}")
         editor.setWindowIcon(QtGui.QIcon("logo.png"))
         editor.setWindowFlags(editor.windowFlags() |
