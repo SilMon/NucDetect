@@ -999,7 +999,9 @@ class StatisticsDialog(QDialog):
         self.current_channel = None
         self.current_group = None
         self.channels: List = []
+        # Associated data for each group
         self.group_data: Dict = {}
+        # Image keys for each respective group
         self.group_keys: Dict = {}
         self.initialize_ui()
         self.get_raw_data()
@@ -1062,10 +1064,13 @@ class StatisticsDialog(QDialog):
         self.ui.cbx_group.setCurrentIndex(0)
         self.current_channel = self.channels[0]
         self.current_group = self.group_keys.keys()[0]
+        for key_ in self.group_keys.keys():
+            # Create empty data lists
+            if key_ not in self.group_data:
+                self.group_data[key_] = [[] for _ in self.channels]
         # Get data for every group
-        # Create empty data lists
-        for _ in self.channels:
-            self.group_data.append([])
+        self.get_data_for_groups()
+        """
         # Get channel indices
         for group, imgs in groups.items():
             foci_per_nucleus = [[] for _ in range(len(channels))]
@@ -1087,11 +1092,22 @@ class StatisticsDialog(QDialog):
                             ).fetchall()[0][0]
                         )
             group_data[group] = foci_per_nucleus
+        """
         return channels, group_data
 
-    def get_data_for_group(self) -> Tuple[str, list]:
+    def get_data_for_groups(self) -> None:
+        """
+        Method to gather the data for every specified group
+
+        :return: None
+        """
+        for group in self.group_keys:
+            self.get_data_for_group(group)
+
+    def get_data_for_group(self, group: str) -> Tuple[str, list]:
         """
         Method to get the data for a specific group and channel
+
 
         :return: A tuple containing the channel name and the data
         """
@@ -1099,7 +1115,6 @@ class StatisticsDialog(QDialog):
         keys = self.group_keys.get(self.current_group, [])
         # Get channel index
         index = self.channels.index(self.current_channel)
-
         # Iterate over all images of the group
         for key in keys:
             # Get all nuclei for this image
@@ -1109,14 +1124,14 @@ class StatisticsDialog(QDialog):
             ).fetchall()
             # Get the foci per individual nucleus
             for nuc in nuclei:
-                # Get channel of respective of the
-                self.group_data[index].append(
+                # Append data for group and channel
+                self.group_data[group][index].append(
                     self.cursor.execute(
                         "SELECT COUNT(*) FROM roi WHERE associated=? AND channel=?",
                         (nuc[0], self.current_channel)
                         ).fetchall()[0][0]
                     )
-        group_data[group] = foci_per_nucleus
+        self.group_data[group] = foci_per_nucleus
 
 
 

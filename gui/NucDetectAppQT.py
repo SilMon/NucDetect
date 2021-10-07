@@ -221,6 +221,7 @@ class NucDetect(QMainWindow):
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_max_foc_size", 280, "int");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_max_foc_overlap", 0.75, "float");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("size_factor", 1, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("cutoff", 0.03, "float");
             COMMIT;
             '''
         )
@@ -1166,6 +1167,7 @@ class NucDetect(QMainWindow):
         exps = self.cursor.execute("SELECT * FROM experiments").fetchall()
         if not exps:
             msg = QMessageBox()
+            msg.setWindowIcon(Icon.get_icon("LOGO"))
             msg.setIcon(QMessageBox.Information)
             msg.setStyleSheet(open("messagebox.css", "r").read())
             msg.setWindowTitle("Warning")

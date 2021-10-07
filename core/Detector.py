@@ -332,7 +332,7 @@ class Detector:
     def perform_roi_quality_check(rois: List[ROI], channels: Iterable[np.ndarray], channel_names: Iterable[str],
                                   max_focus_overlapp: float = .75, min_main_area: int = 1000,
                                   max_main_area: int = 30000, min_foc_area: int = 5, max_foc_area: int = 270,
-                                  logging: bool = True, analysis_settings: Dict = None) -> None:
+                                  cutoff: float = 0.03, logging: bool = True, analysis_settings: Dict = None) -> None:
         """
         Method to check detected rois for their quality. Changes ROI in place.
 
@@ -348,6 +348,7 @@ class Detector:
         :param min_main_area: The mininmal area of a nucleus
         :param max_main_area: The maximal area of a nucleus
         :param ws_line: Should the separation line for ws separated nuclei be drawn?
+        :param cutoff: Factor to determine the focus cut-off
         :param logging: Enables logging
         :param analysis_settings: Settings to use for the quality check
         :return: None
@@ -358,6 +359,7 @@ class Detector:
             max_main_area = analysis_settings.get("quality_max_nuc_size", max_main_area)
             min_foc_area = analysis_settings.get("quality_min_foc_size", min_foc_area)
             max_foc_area = analysis_settings.get("quality_max_foc_size", max_foc_area)
+            cutoff = analysis_settings.get("cutoff", cutoff)
             logging = analysis_settings.get("logging", logging)
         rem_list = []
         temp = []
@@ -374,7 +376,6 @@ class Detector:
         # Remove very small or extremly large main ROI
         main = [x for x in main if min_main_area < len(x) < max_main_area]
         chan_del = []
-        # TODO implement menu item for cut-off factor
         # Check if channel for nucleus can be analysed
         for nuc in main:
             for channel in channel_names:
@@ -386,7 +387,7 @@ class Detector:
                     # Get AVG and std
                     avg, std = np.average(int_area), np.std(int_area)
                     # Check if std for average is smaller than cutting function
-                    if math.exp(avg * 0.03) - 5 > std:
+                    if math.exp(avg * cutoff) - 5 > std:
                         chan_del.append((channel, nuc))
         # Remove all foci whose main roi was removed
         foci = [x for x in foci if x.associated in main]
