@@ -999,9 +999,7 @@ class StatisticsDialog(QDialog):
         self.current_channel = None
         self.current_group = None
         self.channels: List = []
-        # Associated data for each group
         self.group_data: Dict = {}
-        # Image keys for each respective group
         self.group_keys: Dict = {}
         self.initialize_ui()
         self.get_raw_data()
@@ -1021,7 +1019,7 @@ class StatisticsDialog(QDialog):
                             QtCore.Qt.WindowSystemMenuHint |
                             QtCore.Qt.WindowMinMaxButtonsHint)
 
-    def get_raw_data(self) -> Tuple[List, Dict]:
+    def get_raw_data(self) -> None:
         """
         Method to retrieve the data about groups from the database
 
@@ -1064,18 +1062,24 @@ class StatisticsDialog(QDialog):
         self.ui.cbx_group.setCurrentIndex(0)
         self.current_channel = self.channels[0]
         self.current_group = self.group_keys.keys()[0]
-        for key_ in self.group_keys.keys():
-            # Create empty data lists
-            if key_ not in self.group_data:
-                self.group_data[key_] = [[] for _ in self.channels]
+        # Create empty data lists
+        for group in self.group_keys.keys():
+            # TODO check if functional
+            self.group_data[group] = [[] for _ in self.channels]
         # Get data for every group
         self.get_data_for_groups()
+
+    def get_data_for_groups(self) -> None:
         """
-        # Get channel indices
-        for group, imgs in groups.items():
-            foci_per_nucleus = [[] for _ in range(len(channels))]
-            # Iterate over the images of the group
-            for key in imgs:
+        Get the data for all defined groups
+
+        :return: None
+        """
+        for group in self.group_keys.keys():
+            # Get keys corresponding to currently
+            keys = self.group_keys.get(group, [])
+            # Iterate over all images of the group
+            for key in keys:
                 # Get all nuclei for this image
                 nuclei = self.cursor.execute(
                     "SELECT hash FROM roi WHERE image=? AND associated IS NULL",
@@ -1083,59 +1087,18 @@ class StatisticsDialog(QDialog):
                 ).fetchall()
                 # Get the foci per individual nucleus
                 for nuc in nuclei:
-                    for channel in channels:
-                        # Get channel of respective of the
-                        foci_per_nucleus[channels.index(channel)].append(
+                    # Check all available channels
+                    for channel in self.channels:
+                        index = self.channels.index(channel)
+                        # Get the data for this nucleus from database
+                        self.group_data[key][index].append(
                             self.cursor.execute(
                                 "SELECT COUNT(*) FROM roi WHERE associated=? AND channel=?",
                                 (nuc[0], channel)
                             ).fetchall()[0][0]
                         )
-            group_data[group] = foci_per_nucleus
-        """
-        return channels, group_data
 
-    def get_data_for_groups(self) -> None:
-        """
-        Method to gather the data for every specified group
-
-        :return: None
-        """
-        for group in self.group_keys:
-            self.get_data_for_group(group)
-
-    def get_data_for_group(self, group: str) -> Tuple[str, list]:
-        """
-        Method to get the data for a specific group and channel
-
-
-        :return: A tuple containing the channel name and the data
-        """
-        # Get keys corresponding to currently
-        keys = self.group_keys.get(self.current_group, [])
-        # Get channel index
-        index = self.channels.index(self.current_channel)
-        # Iterate over all images of the group
-        for key in keys:
-            # Get all nuclei for this image
-            nuclei = self.cursor.execute(
-                "SELECT hash FROM roi WHERE image=? AND associated IS NULL",
-                (key,)
-            ).fetchall()
-            # Get the foci per individual nucleus
-            for nuc in nuclei:
-                # Append data for group and channel
-                self.group_data[group][index].append(
-                    self.cursor.execute(
-                        "SELECT COUNT(*) FROM roi WHERE associated=? AND channel=?",
-                        (nuc[0], self.current_channel)
-                        ).fetchall()[0][0]
-                    )
-        self.group_data[group] = foci_per_nucleus
-
-
-
-    def create_poisson_plots(self) -> QScrollArea:
+    def create_poisson_plot(self) -> QScrollArea:
         """
         Method to create plots for the value tab
 
@@ -1143,8 +1106,13 @@ class StatisticsDialog(QDialog):
         :param group_data: The data to plot
         :return: The create plots inside a QScollArea
         """
-        # Define scroll area for poi tab
-        sa, layout = Util.create_scroll_area()
+        # Define layouts to add the specific data
+        data_window = self.ui.vl_data
+        text_window = self.ui.vl_text
+        # Get the data to display
+        data = self.group_data[self.current_group][self.current_channel]
+        texts = []
+
         for i in range(len(channels)):
             if self.active_channels[channels[i]]:
                 check = False
@@ -1178,14 +1146,14 @@ class StatisticsDialog(QDialog):
                     layout.addLayout(plot_layout)
         return sa
 
-    def create_plots(self) -> None:
+    def create_plot(self) -> None:
         """
         Method to fill the dialog
 
         :return: None
         """
-        channels, group_data = self.get_data_for_group()
-        self.ui.vl_poisson.addWidget(self.create_poisson_plots())
+        # TODO clear data and text window
+        self.ui.vl_poisson.addWidget(self.create_poisson_plot())
 
 
 class ImgDialog(QDialog):
