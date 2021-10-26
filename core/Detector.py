@@ -17,7 +17,7 @@ import piexif
 from scipy import ndimage as ndi
 from scipy.ndimage import binary_fill_holes, label
 from skimage import io
-from skimage.draw import circle
+from skimage.draw import disk
 from skimage.feature import canny, blob_log
 from skimage.filters import threshold_local, gaussian
 from skimage.filters.rank import maximum
@@ -247,7 +247,7 @@ class Detector:
     def extract_roi_from_main_map(binary_maps: Iterable[np.ndarray],
                                   main_map: int, names: Iterable[str]) -> List[ROI]:
         """
-        Method to extract the main roi
+        Method to extract the main roi from an area map
 
         :param binary_maps: The labelled binary ROI maps for all channels
         :param main_map: The index of the main map
@@ -332,7 +332,8 @@ class Detector:
     def perform_roi_quality_check(rois: List[ROI], channels: Iterable[np.ndarray], channel_names: Iterable[str],
                                   max_focus_overlapp: float = .75, min_main_area: int = 1000,
                                   max_main_area: int = 30000, min_foc_area: int = 5, max_foc_area: int = 270,
-                                  cutoff: float = 0.03, logging: bool = True, analysis_settings: Dict = None) -> None:
+                                  cutoff: float = 0.03,  size_factor: float = 1.0, logging: bool = True,
+                                  analysis_settings: Dict = None) -> None:
         """
         Method to check detected rois for their quality. Changes ROI in place.
 
@@ -349,6 +350,7 @@ class Detector:
         :param max_main_area: The maximal area of a nucleus
         :param ws_line: Should the separation line for ws separated nuclei be drawn?
         :param cutoff: Factor to determine the focus cut-off
+        :param sife_factor: Factor to determine the scale of all size related factors like areas
         :param logging: Enables logging
         :param analysis_settings: Settings to use for the quality check
         :return: None
@@ -360,6 +362,7 @@ class Detector:
             min_foc_area = analysis_settings.get("quality_min_foc_size", min_foc_area)
             max_foc_area = analysis_settings.get("quality_max_foc_size", max_foc_area)
             cutoff = analysis_settings.get("cutoff", cutoff)
+            size_factor = analysis_settings.get("size_factor", size_factor)
             logging = analysis_settings.get("logging", logging)
         rem_list = []
         temp = []
@@ -373,8 +376,8 @@ class Detector:
             else:
                 foci.append(roi)
         Detector.log(f"Detected nuclei:{len(main)}\nDetected foci: {len(foci)}", logging)
-        # Remove very small or extremly large main ROI
-        main = [x for x in main if min_main_area < len(x) < max_main_area]
+        # Remove very small or extremely large main ROI
+        main = [x for x in main if min_main_area * size_factor < len(x) < max_main_area * size_factor]
         chan_del = []
         # Check if channel for nucleus can be analysed
         for nuc in main:
@@ -399,7 +402,7 @@ class Detector:
         association_roi.extend(foci)
         ass = Detector.create_association_map(association_roi)
         marked_foci = 0
-        # Remove foci whose channel was declared invalidated
+        # Remove foci whose channel was declared invalid
         for foc_rem in chan_del:
             # Get list of associated foci
             foci = ass[foc_rem[1]]
@@ -415,7 +418,7 @@ class Detector:
         foci = [x for _, focs in ass.items() for x in focs if x.associated is not None]
         Detector.log(f"Removed unassociated foci: {foclen - len(foci)}", logging)
         # Remove very small foci
-        foci = [x for x in foci if len(x) > min_foc_area < len(x) < max_foc_area]
+        foci = [x for x in foci if len(x) > min_foc_area < len(x) < max_foc_area * size_factor]
         Detector.log(f"Removed foci: {foclen - len(foci)}\nTime: {time.time() - s1: .4f} secs",
                      logging)
         # Focus quality check
@@ -468,7 +471,7 @@ class Detector:
     @staticmethod
     def detect_blobs(channels: List[np.ndarray], main_channel: int = -1, min_sigma: Union[int, float] = 1,
                      max_sigma: Union[int, float] = 5, num_sigma: int = 10,
-                     threshold: float = .1) -> Tuple[List[np.ndarray], List[int]]:
+                     threshold: float = .1, size_factor: float = 1.0) -> Tuple[List[np.ndarray], List[int]]:
         """
         Method to detect blobs in the given channels using the blob_log method
 
@@ -479,14 +482,19 @@ class Detector:
         :param num_sigma: The number of intermediate values of standard deviations
         to consider between min_sigma and max_sigma
         :param threshold: The absolute lower bound for scale space maxima
+        :param size_factor: Factor to influence the detection limits to accommodate for image resolution
         :return: A tuple of the detected blob-maps and the respective numbers of detected blobs
         """
         blob_maps = []
         blob_nums = []
         for ind in range(len(channels)):
             if ind != main_channel:
-                blobs = blob_log(channels[ind], min_sigma=min_sigma, max_sigma=max_sigma, num_sigma=num_sigma,
-                                 threshold=threshold, exclude_border=False)
+                blobs = blob_log(channels[ind],
+                                 min_sigma=min_sigma * size_factor,
+                                 max_sigma=max_sigma * size_factor,
+                                 num_sigma=num_sigma,
+                                 threshold=threshold,
+                                 exclude_border=False)
                 blob_map = Detector.create_blob_map(channels[ind].shape, blobs)
                 blob_num = len(blobs)
                 blob_maps.append(blob_map)
@@ -508,7 +516,7 @@ class Detector:
         map_ = np.zeros(shape, dtype="uint16")
         for ind in range(len(blob_dat)):
             blob = blob_dat[ind]
-            rr, cc = circle(blob[0], blob[1], blob[2] * np.sqrt(2) - 0.5, shape=shape)
+            rr, cc = disk((blob[0], blob[1]), blob[2] * np.sqrt(2) - 0.5, shape=shape)
             map_[rr, cc] = ind + 1
         return map_
 
@@ -559,6 +567,7 @@ class Detector:
                            iterations: int = 5, mask_size: int = 7,
                            percent_hmax: float = 0.05, local_threshold_multiplier: int = 8,
                            maximum_size_multiplier: int = 2,
+                           size_factor: float = 1.0,
                            analysis_settings: Dict = None) -> List[np.ndarray]:
         """
         Method to threshold the channels to prepare for nuclei and foci detection
@@ -571,6 +580,7 @@ class Detector:
         the detection threshold
         :param local_threshold_multiplier: Multiplier used to increase mask_size for local thresholding
         :param maximum_size_multiplier: Multiplier used to increase mask_size for noise removal
+        :param size_factor: Factor to accommodate for different image resolutions
         :param analysis_settings: Settings to use for thresholding
         :return: The thresholded channels
         """
@@ -581,13 +591,19 @@ class Detector:
             percent_hmax = analysis_settings.get("thresh_percent_hmax", percent_hmax)
             local_threshold_multiplier = analysis_settings.get("thresh_local_thresh_mult", local_threshold_multiplier)
             maximum_size_multiplier = analysis_settings.get("thresh_max_mult", maximum_size_multiplier)
+            size_factor = analysis_settings.get("size_factor", size_factor)
         thresh: List[Union[None, np.ndarray]] = [None] * len(channels)
-        selem = create_circular_mask(mask_size, mask_size)
+        # Calculate the circular mask to use for morphological operators
+        selem = create_circular_mask(mask_size * size_factor, mask_size * size_factor)
         # Load image
         orig = channels[main_channel]
+        # Get maximum value of main channel
         hmax = np.amax(orig)
+        # Get minimum value of main channel
         hmin = np.amin(orig)
+        # Calculate the used threshold
         threshold = hmin + round(percent_hmax * hmax)
+        # Threshold channel globally and fill holes
         ch_main_bin = ndi.binary_fill_holes(orig > threshold)
         # Calculate the euclidean distance map
         edm = ndi.distance_transform_edt(ch_main_bin)
@@ -599,16 +615,18 @@ class Detector:
         # Iteratively determine maximum
         for _ in range(iterations):
             maxi = maximum(maxi, selem=selem)
-        thresh_ = threshold_local(maxi, block_size=mask_size * local_threshold_multiplier + 1)
+        # Perform local thresholding
+        thresh_ = threshold_local(maxi, block_size=(mask_size * local_threshold_multiplier + 1) * size_factor)
+        # Threshold maximum EDM
         maxi = ndi.binary_fill_holes(maxi > thresh_)
         # Perform logical AND to remove areas that were not detected in ch_main_bin
         maxi = np.logical_and(maxi, ch_main_bin)
         # Open maxi to remove noise
-        maxi = binary_opening(maxi, selem=create_circular_mask(mask_size * maximum_size_multiplier,
-                                                               mask_size * maximum_size_multiplier))
+        maxi = binary_opening(maxi, selem=create_circular_mask(mask_size * maximum_size_multiplier * size_factor,
+                                                               mask_size * maximum_size_multiplier * size_factor))
         # Extract nuclei from map
         area, labels = ndi.label(maxi)
-        nucs = [None] * (labels + 1)
+        nucs: List[List, List] = [None] * (labels + 1)
         for y in range(len(area)):
             for x in range(len(area[0])):
                 pix = area[y][x]
@@ -618,7 +636,9 @@ class Detector:
                 nucs[pix][1].append(x)
         # Remove background
         del nucs[0]
+        # Get nuclei centers
         centers = [(np.average(x[0]), np.average(x[1])) for x in nucs]
+        # Create mask with marked nuclei centers -> Used as seed points for watershed
         cmask = np.zeros(shape=orig.shape)
         ind = 1
         for c in centers:
@@ -641,7 +661,9 @@ class Detector:
                 if det[pix] is None:
                     det[pix] = []
                 det[pix].append((y, x))
+        # Delete background
         del det[0]
+        # Extract foci from channels
         for ind in range(len(channels)):
             if ind != main_channel:
                 thresh[ind] = Detector.calculate_local_region_threshold(det,

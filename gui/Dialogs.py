@@ -63,7 +63,10 @@ class AnalysisSettingsDialog(QDialog):
                 self.ui.cbx_four.isChecked(),
                 self.ui.cbx_five.isChecked()
             ],
-            "main": abs(self.ui.main_channel_btn_group.checkedId()) - 2
+            "main": abs(self.ui.main_channel_btn_group.checkedId()) - 2,
+            "analysis_settings": {
+                "size_factor": int(self.ui.objective_selection_group.checkedButton().text()[:-1]) / 63.0,
+            }
         }
 
     def initialize_ui(self) -> None:

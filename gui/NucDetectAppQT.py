@@ -222,6 +222,7 @@ class NucDetect(QMainWindow):
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_max_foc_overlap", 0.75, "float");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("size_factor", 1, "float");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("cutoff", 0.03, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("num_threads", 8, "int");
             COMMIT;
             '''
         )
@@ -234,13 +235,13 @@ class NucDetect(QMainWindow):
         :return: None
         """
         if not os.path.isdir(Paths.thumb_path):
-            os.mkdir(Paths.thumb_path)
+            os.makedirs(Paths.thumb_path)
         if not os.path.isdir(Paths.nuc_detect_dir):
-            os.mkdir(Paths.nuc_detect_dir)
+            os.makedirs(Paths.nuc_detect_dir)
         if not os.path.isdir(Paths.result_path):
-            os.mkdir(Paths.result_path)
+            os.makedirs(Paths.result_path)
         if not os.path.isdir(Paths.images_path):
-            os.mkdir(Paths.images_path)
+            os.makedirs(Paths.images_path)
             shutil.copy2(os.path.join(os.pardir, "demo.tif"), os.path.join(Paths.images_path, "demo.tif"))
 
     def load_settings(self) -> Dict:
@@ -551,7 +552,8 @@ class NucDetect(QMainWindow):
         code = anal_sett_dial.exec()
         if code == QDialog.Accepted:
             settings = anal_sett_dial.get_data()
-            settings["analysis_settings"] = self.settings
+            an_sett = settings["analysis_settings"]
+            settings["analysis_settings"].update({x: y for (x, y) in self.settings.items() if x not in an_sett})
         else:
             # If the dialog was rejected, abort analysis
             return
@@ -619,7 +621,8 @@ class NucDetect(QMainWindow):
         code = anal_sett_dial.exec()
         if code == QDialog.Accepted:
             settings = anal_sett_dial.get_data()
-            settings["analysis_settings"] = self.settings
+            an_sett = settings["analysis_settings"]
+            settings["analysis_settings"].update({x: y for (x, y) in self.settings.items() if x not in an_sett})
         else:
             # If the dialog was rejected, abort analysis
             return
@@ -635,7 +638,7 @@ class NucDetect(QMainWindow):
         :return: None
         """
         start_time = time.time()
-        max_workers = 1 if settings["type"] else None
+        max_workers = 1 if settings["type"] else settings["analysis_settings"]["num_threads"]
         with ProcessPoolExecutor(max_workers=max_workers) as e:
             self.res_table_model.setRowCount(0)
             self.res_table_model.setColumnCount(2)
@@ -1221,7 +1224,7 @@ class NucDetect(QMainWindow):
         :param categories: The categories to save as str, individually separated by \n
         :return: None
         """
-        if categories is not "":
+        if categories != "":
             categories = categories.split('\n')
             hash_ = self.cur_img["key"]
             self.cursor.execute(

@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>475</width>
-    <height>382</height>
+    <height>459</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -27,6 +27,10 @@
 
 QRadioButton{
 	color: White;
+}
+
+QPushButton:checked{
+	background-color: rgba(8, 28, 61, 255);
 }
 
 QPushButton:hover{
@@ -71,21 +75,21 @@ QDialog{
   <layout class="QHBoxLayout" name="horizontalLayout">
    <item>
     <layout class="QFormLayout" name="formLayout">
-     <item row="3" column="0">
+     <item row="4" column="0">
       <widget class="QLabel" name="label">
        <property name="text">
         <string>Name</string>
        </property>
       </widget>
      </item>
-     <item row="8" column="0">
+     <item row="9" column="0">
       <widget class="QLabel" name="label_2">
        <property name="text">
         <string>Channel 1</string>
        </property>
       </widget>
      </item>
-     <item row="8" column="1">
+     <item row="9" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_2">
        <item>
         <widget class="QLineEdit" name="le_one">
@@ -125,14 +129,14 @@ QDialog{
        </item>
       </layout>
      </item>
-     <item row="9" column="0">
+     <item row="10" column="0">
       <widget class="QLabel" name="label_3">
        <property name="text">
         <string>Channel 2</string>
        </property>
       </widget>
      </item>
-     <item row="9" column="1">
+     <item row="10" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_3">
        <item>
         <widget class="QLineEdit" name="le_two">
@@ -175,14 +179,14 @@ QDialog{
        </item>
       </layout>
      </item>
-     <item row="10" column="0">
+     <item row="11" column="0">
       <widget class="QLabel" name="label_4">
        <property name="text">
         <string>Channel 3</string>
        </property>
       </widget>
      </item>
-     <item row="10" column="1">
+     <item row="11" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_4">
        <item>
         <widget class="QLineEdit" name="le_three">
@@ -225,14 +229,14 @@ QDialog{
        </item>
       </layout>
      </item>
-     <item row="11" column="0">
+     <item row="12" column="0">
       <widget class="QLabel" name="label_5">
        <property name="text">
         <string>Channel 4</string>
        </property>
       </widget>
      </item>
-     <item row="11" column="1">
+     <item row="12" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_5">
        <item>
         <widget class="QLineEdit" name="le_four">
@@ -275,14 +279,14 @@ QDialog{
        </item>
       </layout>
      </item>
-     <item row="12" column="0">
+     <item row="13" column="0">
       <widget class="QLabel" name="label_6">
        <property name="text">
         <string>Channel 5</string>
        </property>
       </widget>
      </item>
-     <item row="12" column="1">
+     <item row="13" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_6">
        <item>
         <widget class="QLineEdit" name="le_five">
@@ -325,7 +329,7 @@ QDialog{
        </item>
       </layout>
      </item>
-     <item row="6" column="1">
+     <item row="7" column="1">
       <widget class="QLabel" name="label_7">
        <property name="text">
         <string>Active Channels</string>
@@ -335,21 +339,21 @@ QDialog{
        </property>
       </widget>
      </item>
-     <item row="6" column="0">
+     <item row="7" column="0">
       <widget class="Line" name="line">
        <property name="orientation">
         <enum>Qt::Horizontal</enum>
        </property>
       </widget>
      </item>
-     <item row="4" column="0">
+     <item row="5" column="0">
       <widget class="QLabel" name="label_8">
        <property name="text">
         <string>Details</string>
        </property>
       </widget>
      </item>
-     <item row="4" column="1">
+     <item row="5" column="1">
       <widget class="QPlainTextEdit" name="pte_details">
        <property name="enabled">
         <bool>false</bool>
@@ -362,7 +366,7 @@ QDialog{
        </property>
       </widget>
      </item>
-     <item row="2" column="1">
+     <item row="3" column="1">
       <widget class="QLabel" name="label_9">
        <property name="text">
         <string>Experiment Details</string>
@@ -372,7 +376,7 @@ QDialog{
        </property>
       </widget>
      </item>
-     <item row="3" column="1">
+     <item row="4" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_7">
        <item>
         <widget class="QLineEdit" name="le_name">
@@ -399,14 +403,14 @@ QDialog{
        </item>
       </layout>
      </item>
-     <item row="5" column="0">
+     <item row="6" column="0">
       <widget class="QLabel" name="label_10">
        <property name="text">
         <string>Notes</string>
        </property>
       </widget>
      </item>
-     <item row="5" column="1">
+     <item row="6" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_8">
        <item>
         <widget class="QPlainTextEdit" name="pte_notes">
@@ -480,6 +484,106 @@ QDialog{
        </property>
       </widget>
      </item>
+     <item row="2" column="1">
+      <layout class="QHBoxLayout" name="horizontalLayout_10">
+       <item>
+        <widget class="QPushButton" name="btn_10x">
+         <property name="toolTip">
+          <string>10x Objective</string>
+         </property>
+         <property name="text">
+          <string>10x</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <attribute name="buttonGroup">
+          <string notr="true">objective_selection_group</string>
+         </attribute>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="btn_20x">
+         <property name="toolTip">
+          <string>20x Objective</string>
+         </property>
+         <property name="text">
+          <string>20x</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <attribute name="buttonGroup">
+          <string notr="true">objective_selection_group</string>
+         </attribute>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="btn_40x">
+         <property name="toolTip">
+          <string>40x Objective</string>
+         </property>
+         <property name="text">
+          <string>40x</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="checked">
+          <bool>false</bool>
+         </property>
+         <attribute name="buttonGroup">
+          <string notr="true">objective_selection_group</string>
+         </attribute>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="btn_63x">
+         <property name="toolTip">
+          <string>63x Objective</string>
+         </property>
+         <property name="text">
+          <string>63x</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+         <attribute name="buttonGroup">
+          <string notr="true">objective_selection_group</string>
+         </attribute>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="btn_100x">
+         <property name="toolTip">
+          <string>100x Objective</string>
+         </property>
+         <property name="text">
+          <string>100x</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <attribute name="buttonGroup">
+          <string notr="true">objective_selection_group</string>
+         </attribute>
+        </widget>
+       </item>
+      </layout>
+     </item>
+     <item row="2" column="0">
+      <widget class="QLabel" name="label_12">
+       <property name="toolTip">
+        <string>Determines the detection boundaries of the analysis. Standard: 63x</string>
+       </property>
+       <property name="text">
+        <string>Objective:</string>
+       </property>
+      </widget>
+     </item>
     </layout>
    </item>
    <item>
@@ -532,5 +636,6 @@ QDialog{
  <buttongroups>
   <buttongroup name="main_channel_btn_group"/>
   <buttongroup name="type_btn_group"/>
+  <buttongroup name="objective_selection_group"/>
  </buttongroups>
 </ui>

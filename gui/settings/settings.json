@@ -42,6 +42,21 @@
       }
     },
     {
+      "id": "num_threads",
+      "title": "Number of used threads",
+      "desc": "The number of threads utilized by the program. Should be reduced if memory problems occur.",
+      "type": "spin",
+      "value": 8,
+      "values": {
+        "min": 0,
+        "max": 256,
+        "step": 1,
+        "prefix": "",
+        "suffix": "",
+        "unit": "Threads"
+      }
+    },
+    {
       "id": "ml_analysis",
       "title": "Prefer Machine Learning",
       "desc": "Sets the standard method for analysis to machine learning",
