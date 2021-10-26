@@ -24,6 +24,7 @@ from skimage.filters.rank import maximum
 from skimage.segmentation import watershed
 from skimage.morphology import dilation
 from skimage.morphology.binary import binary_opening, binary_erosion
+from skimage import img_as_ubyte
 
 from core.JittedFunctions import eu_dist, create_circular_mask, relabel_array, imprint_data_into_channel
 from core.roi.AreaAnalysis import convert_area_to_array
@@ -609,7 +610,9 @@ class Detector:
         edm = ndi.distance_transform_edt(ch_main_bin)
         # Normalize edm
         xmax, xmin = edm.max(), edm.min()
-        x = (edm - xmin) / (xmax - xmin)
+        x = img_as_ubyte((edm - xmin) / (xmax - xmin))
+        plt.imshow(x)
+        plt.show()
         # Determine maxima of EDM
         maxi = maximum(x, selem=selem)
         # Iteratively determine maximum
