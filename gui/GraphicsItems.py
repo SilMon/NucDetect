@@ -1,7 +1,6 @@
 import sqlite3
 from typing import List, Iterable, Dict, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pyqtgraph as pg
 from PyQt5 import QtCore

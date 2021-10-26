@@ -1,7 +1,8 @@
-import numpy as np
 import math
-from numba import njit
 from typing import Iterable, Tuple
+
+import numpy as np
+from numba import njit
 
 
 @njit(cache=True)

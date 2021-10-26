@@ -1,14 +1,12 @@
 import time
+from pathlib import Path
+from typing import List, Tuple, Union
 
+import numpy as np
 import tensorflow as tf
-import matplotlib.pyplot as plt
 from numba import jit
 from skimage import io
 from tensorflow.keras import models
-from typing import List, Tuple, Union
-import numpy as np
-from pathlib import Path
-from skimage.segmentation import flood_fill
 
 
 class FCN:

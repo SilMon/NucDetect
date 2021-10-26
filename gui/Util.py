@@ -1,17 +1,17 @@
 import datetime
 import os
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from os.path import isfile
 from typing import List, Tuple, Union, Iterable
 
 from PyQt5 import QtCore
 from PyQt5.QtGui import QStandardItem, QIcon
 from PyQt5.QtWidgets import QScrollArea, QVBoxLayout, QHBoxLayout, QWidget
-from Definitions import Color
 from skimage import io, img_as_ubyte
 from skimage.transform import resize
-from concurrent.futures import ThreadPoolExecutor
 
+from Definitions import Color
 from core.Detector import Detector
 from gui import Paths
 

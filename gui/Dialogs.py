@@ -7,7 +7,7 @@ import pyqtgraph as pg
 from PyQt5 import QtGui, QtCore, uic
 from PyQt5.QtCore import QItemSelection, QItemSelectionModel, Qt, QRectF
 from PyQt5.QtGui import QStandardItem, QStandardItemModel, QResizeEvent, QKeyEvent
-from PyQt5.QtWidgets import QDialog, QMessageBox, QInputDialog, QCheckBox, QVBoxLayout, QFrame, QScrollArea, QWidget, \
+from PyQt5.QtWidgets import QDialog, QMessageBox, QInputDialog, QCheckBox, QFrame, QScrollArea, QWidget, \
     QLabel, QVBoxLayout, QSizePolicy, QGraphicsEllipseItem, QGraphicsLineItem, \
     QGraphicsItem, QProgressBar
 

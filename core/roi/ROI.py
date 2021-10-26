@@ -3,14 +3,14 @@ Created on 09.04.2019
 @author: Romano Weiss
 """
 from __future__ import annotations
+
 import hashlib
-import json
 import math
 import warnings
 from typing import Union, Dict, List, Tuple, Iterable
-from numba.typed import List as numList
 
 import numpy as np
+from numba.typed import List as numList
 
 from core.roi.AreaAnalysis import get_bounding_box, get_center, get_surface, get_ellipse_radii, get_orientation_angle, \
     get_orientation_vector, get_eccentricity, get_ovality

@@ -1,12 +1,11 @@
+import math
 from typing import List, Dict, Union, Iterable
 
+import numpy as np
+import pyqtgraph as pg
 from PyQt5 import QtGui
 from PyQt5.QtCore import QRectF, QLine, QPointF
 from PyQt5.QtGui import QPainter, QColor
-
-import numpy as np
-import math
-import pyqtgraph as pg
 from pyqtgraph import InfiniteLine
 
 

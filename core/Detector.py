@@ -3,31 +3,31 @@ Created 09.04.2019
 @author Romano Weiss
 """
 from __future__ import annotations
+
 import datetime
 import hashlib
 import math
 import os
 import time
 from copy import deepcopy
-import matplotlib.pyplot as plt
-from typing import Union, Dict, List, Tuple, Any, Iterable
+from typing import Union, Dict, List, Tuple, Iterable
 
+import matplotlib.pyplot as plt
 import numpy as np
 import piexif
 from scipy import ndimage as ndi
 from scipy.ndimage import binary_fill_holes, label
+from skimage import img_as_ubyte
 from skimage import io
 from skimage.draw import disk
 from skimage.feature import canny, blob_log
-from skimage.filters import threshold_local, gaussian
+from skimage.filters import threshold_local
 from skimage.filters.rank import maximum
-from skimage.segmentation import watershed
 from skimage.morphology import dilation
 from skimage.morphology.binary import binary_opening, binary_erosion
-from skimage import img_as_ubyte
+from skimage.segmentation import watershed
 
 from core.JittedFunctions import eu_dist, create_circular_mask, relabel_array, imprint_data_into_channel
-from core.roi.AreaAnalysis import convert_area_to_array
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 from fcn.FCN import FCN

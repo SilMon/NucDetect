@@ -1,12 +1,11 @@
-import os
-from typing import List, Callable, Iterable
+import time
+from typing import Callable, Iterable
 
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QGraphicsView
 
 from core.roi.ROIHandler import ROIHandler
-from gui.Util import create_partial_image_item_list, create_partial_list
-import time
+from gui.Util import create_partial_list
 
 
 class Loader(QTimer):

@@ -8,14 +8,12 @@ import csv
 import datetime
 import os
 from typing import Union, Dict, List, Tuple, Iterable
-from numba.typed import List as numList
 
 import numpy as np
+from numba.typed import List as numList
 
 from core.roi import AreaAnalysis
 from core.roi.ROI import ROI
-
-import matplotlib.pyplot as plt
 
 
 class ROIHandler:
