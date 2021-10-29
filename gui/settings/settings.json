@@ -255,7 +255,7 @@
       "title": "Focus Detection - Sigma for Canny Operator",
       "desc": "Standard deviation of used gaussian filter. Adverse effect on performance",
       "type": "decspin",
-      "value": 1.0,
+      "value": 1.5,
       "values": {
         "min": 0,
         "max": 20,
@@ -339,7 +339,7 @@
       "title": "Size factor for modification window",
       "desc": "Size factor to determine the default size of added nuclei and foci",
       "type": "decspin",
-      "value": 0.97,
+      "value": 1,
       "values": {
         "min": 0,
         "max": 5,
@@ -356,11 +356,11 @@
       "title": "Minimal Nucleus Size",
       "desc": "Minimal size a detected nucleus can have",
       "type": "slider",
-      "value": 1000,
+      "value": 750,
       "values": {
-        "min": 1000,
+        "min": 750,
         "max": 60000,
-        "step": 1000,
+        "step": 250,
         "unit": "pix"
       }
     },
@@ -369,7 +369,7 @@
       "title": "Maximal Nucleus Size",
       "desc": "Maximal size a detected nucleus can have",
       "type": "slider",
-      "value": 45000,
+      "value": 30000,
       "values": {
         "min": 1000,
         "max": 60000,

@@ -166,7 +166,6 @@ class Detector:
             )
         )
         # Remove unassociated foci
-        # TODO check if functional
         rois = [x for x in rois if x.associated is not None]
         Detector.log(f"Finished focus extraction {time.time() - s1:.4f}", logging)
         rois.extend(main)
@@ -611,8 +610,6 @@ class Detector:
         # Normalize edm
         xmax, xmin = edm.max(), edm.min()
         x = img_as_ubyte((edm - xmin) / (xmax - xmin))
-        plt.imshow(x)
-        plt.show()
         # Determine maxima of EDM
         maxi = maximum(x, selem=selem)
         # Iteratively determine maximum
