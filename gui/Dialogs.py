@@ -9,7 +9,7 @@ from PyQt5.QtCore import QItemSelection, QItemSelectionModel, Qt, QRectF
 from PyQt5.QtGui import QStandardItem, QStandardItemModel, QResizeEvent, QKeyEvent
 from PyQt5.QtWidgets import QDialog, QMessageBox, QInputDialog, QCheckBox, QFrame, QScrollArea, QWidget, \
     QLabel, QVBoxLayout, QSizePolicy, QGraphicsEllipseItem, QGraphicsLineItem, \
-    QGraphicsItem, QProgressBar
+    QGraphicsItem, QProgressBar, QSpacerItem
 
 from core.Detector import Detector
 from core.roi.ROIHandler import ROIHandler
@@ -994,19 +994,26 @@ class StatisticsDialog(QDialog):
         :param kwargs: Keyword arguments
         """
         super().__init__(*args, **kwargs)
+        self.was_initialzied = False
         self.ui = None
         self.experiment = experiment
         self.active_channels = active_channels
         self.connection: sqlite3.Connection = sqlite3.connect(Paths.database)
         self.cursor: sqlite3.Cursor = self.connection.cursor()
-        self.current_channel = None
+        self.current_channel = 0
         self.current_group = None
+        self.current_distribution = 0
         self.channels: List = []
+        self.groups: List = []
+        self.qlabels: List = []
+        self.qplot: List = []
         self.group_data: Dict = {}
         self.group_keys: Dict = {}
+        self.plot_widget: PoissonPlotWidget = None
         self.initialize_ui()
         self.get_raw_data()
-        self.create_plots()
+        self.prepare_plot()
+        self.was_initialzied = True
 
     def initialize_ui(self) -> None:
         """
@@ -1016,6 +1023,10 @@ class StatisticsDialog(QDialog):
         """
         self.ui = uic.loadUi(Paths.ui_stat_dial, self)
         self.ui.cbx_dist.addItems(["Poisson"])
+        # Bind comboboxes to listeners
+        self.ui.cbx_dist.currentIndexChanged.connect(self.change_distribution)
+        self.ui.cbx_channel.currentIndexChanged.connect(self.change_channel)
+        self.ui.cbx_group.currentIndexChanged.connect(self.change_group)
         self.setWindowTitle(f"Statistics for {self.experiment}")
         self.setWindowIcon(QtGui.QIcon('logo.png'))
         self.setWindowFlags(self.windowFlags() |
@@ -1056,18 +1067,18 @@ class StatisticsDialog(QDialog):
             return
         main = main[0][0]
         # Clean up channels
-        self.channels = [x[0] for x in channels if x[0] != main]
-        self.ui.cbx_channel.addItems(channels)
+        self.channels = [x[0] for x in channels if x[0] != main and self.active_channels[x[0]]]
+        self.ui.cbx_channel.addItems(self.channels)
         # Select first channel as standard
         self.ui.cbx_group.addItems(self.group_keys.keys())
         # Select first group as standard
         self.ui.cbx_channel.setCurrentIndex(0)
         self.ui.cbx_group.setCurrentIndex(0)
         self.current_channel = self.channels[0]
-        self.current_group = self.group_keys.keys()[0]
+        self.current_group = list(self.group_keys.keys())[0]
         # Create empty data lists
         for group in self.group_keys.keys():
-            # TODO check if functional
+            self.groups.append(group)
             self.group_data[group] = [[] for _ in self.channels]
         # Get data for every group
         self.get_data_for_groups()
@@ -1088,66 +1099,145 @@ class StatisticsDialog(QDialog):
                     "SELECT hash FROM roi WHERE image=? AND associated IS NULL",
                     (key,)
                 ).fetchall()
+                # Get the associated group for this image
                 # Get the foci per individual nucleus
                 for nuc in nuclei:
                     # Check all available channels
                     for channel in self.channels:
                         index = self.channels.index(channel)
                         # Get the data for this nucleus from database
-                        self.group_data[key][index].append(
+                        self.group_data[group][index].append(
                             self.cursor.execute(
                                 "SELECT COUNT(*) FROM roi WHERE associated=? AND channel=?",
                                 (nuc[0], channel)
                             ).fetchall()[0][0]
                         )
 
-    def create_poisson_plot(self) -> QScrollArea:
+    def prepare_plot(self) -> PoissonPlotWidget:
+        """
+        Method to prepare the plot
+
+        :return: The Plot Widget
+        """
+        if not self.plot_widget:
+            # Get the data to display
+            data = self.group_data[self.current_group][self.channels.index(self.current_channel)]
+            # Create the plot
+            self.plot_widget = PoissonPlotWidget(data=data, label=self.current_group)
+            # Add plot to UI
+            self.ui.vl_data.addWidget(self.plot_widget)
+            # Prepare labels to show
+            texts = [
+                f"Values:\t\t{len(data)}",
+                f"Average:\t{np.average(data):.2f}",
+                f"Min.:\t\t{np.amin(data)}",
+                f"Max.:\t\t{np.amax(data)}"
+            ]
+            self.create_labels(texts)
+
+    def update_plot_data(self) -> List[str]:
         """
         Method to create plots for the value tab
 
-        :param channels: A list of available channels
-        :param group_data: The data to plot
-        :return: The create plots inside a QScollArea
+        :return: The respective diagram as PlotItem and associated labels
         """
-        # Define layouts to add the specific data
-        data_window = self.ui.vl_data
-        text_window = self.ui.vl_text
         # Get the data to display
-        data = self.group_data[self.current_group][self.current_channel]
-        texts = []
+        data = self.group_data[self.current_group][self.channels.index(self.current_channel)]
+        self.plot_widget.set_data(data,
+                                  f"{self.current_channel}({self.current_group}) - Comparison to Poisson Distribution")
+        # Create the associated texts
+        texts = [
+            f"Values:\t\t{len(data)}",
+            f"Average:\t{np.average(data):.2f}",
+            f"Min.:\t\t{np.amin(data)}",
+            f"Max.:\t\t{np.amax(data)}"
+        ]
+        return texts
 
-        for i in range(len(channels)):
-            if self.active_channels[channels[i]]:
-                check = False
-                # Get the data for this channel
-                data = {key: value[i] for key, value in group_data.items()}
-                # Create Poisson Plot for channel
-                for group, values in data.items():
-                    # Create layout to add plot and labels
-                    plot_layout = self.ui.vl_data
-                    label_layout = self.ui.vl_text
-                    poiss = PoissonPlotWidget(data=values, label=group)
-                    poiss.setTitle(f"{group} - Comparison to Poisson Distribution")
-                    # Create the line to add
-                    line = QFrame()
-                    line.setFrameShape(QFrame.HLine)
-                    line.setFrameShadow(QFrame.Sunken)
-                    # Add poisson plot
-                    plot_layout.addWidget(poiss)
-                    # Add additional information
-                    label_layout.addWidget(QLabel(f"Values: {len(values)}"))
-                    label_layout.addWidget(QLabel(f"Average: {np.average(values):.2f}"))
-                    label_layout.addWidget(QLabel(f"Min.: {np.amin(values)}"))
-                    label_layout.addWidget(QLabel(f"Max.: {np.amax(values)}"))
-                    plot_layout.addLayout(label_layout)
-                    if i == len(channels) - 1:
-                        if not check:
-                            layout.addWidget(line)
-                            check = True
-                    else:
-                        layout.addWidget(line)
-                    layout.addLayout(plot_layout)
-        return sa
+    def create_labels(self, texts: List[str]) -> None:
+        """
+        Method to create the labels specified by texts
+        :param texts: List of strings to display
+        :return: None
+        """
+        # Add new texts
+        for text in texts:
+            label = QLabel(text)
+            label.setAlignment(Qt.AlignLeft)
+            self.ui.vl_text.addWidget(QLabel(text))
+        self.ui.vl_text.addItem(QSpacerItem(40, 20, QSizePolicy.Minimum, QSizePolicy.Expanding))
+
+    def get_active_plot_and_texts(self) -> List[str]:
+        """
+        Method to get the currently selected plot and associated texts
+        :return: a tuple containing the plot and the associated texts as List of strings
+        """
+        plot_type = self.ui.cbx_dist.currentIndex()
+        if plot_type == 0:
+            return self.update_plot_data()
+        else:
+            print("No match")
+            return self.update_plot_data()
+
+    def clear_labels(self) -> None:
+        """
+        Method to remove all added labels
+
+        :return: None
+        """
+        if self.ui.vl_text.itemAt(0):
+            # Delete all 4 labels
+            self.ui.vl_text.itemAt(0).widget().deleteLater()
+            self.ui.vl_text.itemAt(1).widget().deleteLater()
+            self.ui.vl_text.itemAt(2).widget().deleteLater()
+            self.ui.vl_text.itemAt(3).widget().deleteLater()
+            # Also delete spacer
+            self.ui.vl_text.removeItem(self.ui.vl_text.itemAt(4))
+
+    def clear_plots(self) -> None:
+        """
+        Method to clear all added plots
+
+        :return: None
+        """
+        if self.ui.vl_data.itemAt(0):
+            self.ui.vl_data.itemAt(0).widget().deleteLater()
+
+    def change_group(self, index: int) -> None:
+        """
+        Method to change the active group
+
+        :param index: The index of the new distribution
+        :return: None
+        """
+        if not self.was_initialzied:
+            return
+        self.current_group = self.groups[index]
+        self.create_plot()
+
+    def change_channel(self, index: int) -> None:
+        """
+        Method to change the active channel
+
+        :param index: The index of the new distribution
+        :return: None
+        """
+        if not self.was_initialzied:
+            return
+        self.current_channel = self.channels[index]
+        self.create_plot()
+
+    def change_distribution(self, index: int) -> None:
+        """
+        Method to change the active distribution
+
+        :param index: The index of the new distribution
+        :return: None
+        """
+        if not self.was_initialzied:
+            return
+        self.current_distribution = index
+        self.create_plot()
 
     def create_plot(self) -> None:
         """
@@ -1155,8 +1245,10 @@ class StatisticsDialog(QDialog):
 
         :return: None
         """
-        # TODO clear data and text window
-        self.ui.vl_poisson.addWidget(self.create_poisson_plot())
+        texts = self.get_active_plot_and_texts()
+        self.clear_labels()
+        self.create_labels(texts)
+        self.update_plot_data()
 
 
 class ImgDialog(QDialog):
@@ -1562,7 +1654,6 @@ class Editor(QDialog):
         self.image = image
         self.roi = roi
         self.size_factor = size_factor
-        print("Editor Size Factor")
         self.temp_items = []
         self.initialize_ui()
 
@@ -1713,6 +1804,11 @@ class Editor(QDialog):
             self.ui.spb_height.setValue(0)
             self.ui.spb_angle.setValue(0)
 
+    def keyReleaseEvent(self, event: QtGui.QKeyEvent) -> None:
+        super().keyReleaseEvent(event)
+        if event.key() == Qt.Key_Shift:
+            self.editor.shift_down = False
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
         super().keyPressEvent(event)
         if event.key() == Qt.Key_1:
@@ -1726,10 +1822,11 @@ class Editor(QDialog):
         elif event.key() == Qt.Key_5:
             self.ui.btn_show.setChecked(not self.ui.btn_show.isChecked())
         elif event.key() == Qt.Key_P:
-            print("Preview Button")
             self.preview_changes()
         elif event.key() == Qt.Key_A:
             self.set_changes(override=True)
+        elif event.key() == Qt.Key_Shift:
+            self.editor.shift_down = True
 
     def set_mode(self, mode: int) -> None:
         """

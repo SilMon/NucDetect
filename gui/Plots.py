@@ -209,21 +209,25 @@ class PoissonPlotWidget(pg.PlotWidget):
         self.data = kargs.get("data", [])
         self.data_name = kargs.get("label", "Channel")
         self.data_graph = None
+        self.data_graph_line = None
         self.poisson_graph = None
+        self.poisson_graph_line = None
+        self.data_average_line = None
         self.prepare_plot()
 
-    def set_data(self, data: Iterable[float], name: str) -> None:
+    def set_data(self, data: Iterable[float], title: str) -> None:
         """
         Method to change the displayed data
 
         :param data: The data to display as list of floats
-        :param name: The name of the group
+        :param title: The title to display
         :return: None
         """
         self.removeItem(self.data_graph)
         self.removeItem(self.poisson_graph)
+        self.removeItem(self.data_average_line)
         self.data = data
-        self.data_name = name
+        self.setTitle(title)
         self.prepare_plot()
 
     def prepare_plot(self) -> None:
@@ -244,13 +248,21 @@ class PoissonPlotWidget(pg.PlotWidget):
         # Calculate the probability of elements to occur according to the poisson distrubution
         poisson = self.poisson(av, np.arange(0, max(unique)))
         # Prepare bar graphs
-        self.data_graph = pg.BarGraphItem(x=unique, height=prob, width=0.8, brush=pg.mkBrush(color=(150, 50, 30, 125)))
-        self.poisson_graph = pg.BarGraphItem(x=np.arange(0, max(unique)), height=poisson, width=0.8,
-                                             brush=pg.mkBrush(color=(85, 30, 150, 125)))
+        self.data_graph = pg.BarGraphItem(x=unique-0.1, height=prob,
+                                          width=0.2, brush=pg.mkBrush(color=(255, 50, 30, 255)))
+        self.data_graph_line = pg.PlotDataItem(unique-0.1, prob, pen=pg.mkPen(color=(255, 50, 30, 100), width=5))
+        self.poisson_graph = pg.BarGraphItem(x=np.arange(0, max(unique))+0.1, height=poisson, width=0.2,
+                                             brush=pg.mkBrush(color=(85, 30, 255, 255)))
+        self.poisson_graph_line = pg.PlotDataItem(np.arange(0, max(unique))+0.1, poisson,
+                                                  pen=pg.mkPen(color=(85, 30, 255, 100), width=5))
+        self.data_average_line = InfiniteLine(av, angle=90, pen=pg.mkPen(color=(0, 255, 0, 255)))
         # Add indicator for data average
-        self.addItem(InfiniteLine(av, angle=90, pen=pg.mkPen(color=(0, 255, 0, 255))))
+        self.addItem(self.data_average_line)
+        # self.addItem(self.data_graph_line)
+        # self.addItem(self.poisson_graph_line)
         self.addItem(self.poisson_graph)
         self.addItem(self.data_graph)
+
         self.setToolTip("Red: Data Distribution\nBlue: Poisson Distribution\nGreen: Average")
         # Add Legend
         # TODO
@@ -263,7 +275,7 @@ class PoissonPlotWidget(pg.PlotWidget):
 
     def poisson(self, lam: float, test: Union[list, np.ndarray]):
         """
-        Recursive method to calculate the probability of elements to occur according to the poisson distrubution
+        Recursive method to calculate the probability of elements to occur according to the poisson distribution
 
         :param lam: The average of the distribution
         :param test: Either array of elements to test or one element to test

@@ -200,16 +200,16 @@ class NucDetect(QMainWindow):
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("ml_analysis", 0, "bool");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_check", 1, "bool");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("blob_min_sigma", 1, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("blob_max_sigma", 5, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("blob_max_sigma", 4, "float");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("blob_num_sigma", 10, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("blob_threshold", 0.1, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("thresh_iterations", 5, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("blob_threshold", 0.15, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("thresh_iterations", 10, "int");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("thresh_mask_size", 7, "int");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("thresh_percent_hmax", 0.05, "float");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("thresh_local_thresh_mult", 8, "int");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("thresh_max_mult", 2, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("canny_sigma", 1.5, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("canny_low_thresh", 0.1, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("canny_sigma", 3, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("canny_low_thresh", 0.10, "float");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("canny_up_thresh", 0.2, "float");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_nuclei", 0.95, "float");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_foci", 0.80, "float");
@@ -836,7 +836,8 @@ class NucDetect(QMainWindow):
         for entry in entries:
             self.prg_signal.emit(f"Loading ROI:  {ind}/{max}",
                                  ind, max, "")
-            temproi = ROI(channel=entry[3], main=entry[7] is None, associated=entry[7])
+            temproi = ROI(channel=entry[3], main=entry[7] is None,
+                          auto=bool(entry[2]), associated=entry[7])
             stats = crs.execute(
                 "SELECT * FROM statistics WHERE hash = ?",
                 (entry[0],)
@@ -1260,6 +1261,7 @@ class NucDetect(QMainWindow):
                         (key, value[0])
                     )
             sett.save_menu_settings()
+            self.connection.commit()
 
     def show_modification_window(self) -> None:
         """

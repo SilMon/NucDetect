@@ -176,7 +176,7 @@ class EditorView(pg.GraphicsView):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         super().mousePressEvent(event)
-        if self.mode == 0 and self.active_channel != 3 and event.button() == Qt.LeftButton and self.shift_down:
+        if self.mode == 0 and self.active_channel != 3 and event.button() == Qt.LeftButton:
             # Get click position
             pos = self.mpos
             if self.active_channel == self.main_channel:
@@ -185,8 +185,8 @@ class EditorView(pg.GraphicsView):
                                    round(pos.x()), round(pos.y()),
                                    0, (0, 0), self.main_channel, -1)
                 item.set_pens(
-                    pg.mkPen(color="FFD700", width=3, style=QtCore.Qt.DashLine),
-                    pg.mkPen(color="FFD700", width=3, style=QtCore.Qt.DashLine),
+                    pg.mkPen(color="#2A2ABB", width=3, style=QtCore.Qt.DashLine),
+                    pg.mkPen(color="#2A2ABB", width=3, style=QtCore.Qt.DashLine),
                     ROIDrawer.MARKERS[-1]
                 )
                 item.add_to_view(self.plot_item)
@@ -527,7 +527,8 @@ class ROIDrawer:
         :param ind: The index of the roi channel
         :return: None
         """
-        pen = pg.mkPen(color="FFD700", width=3, style=QtCore.Qt.DashLine)
+        pen = pg.mkPen(color="#191970" if roi.auto else "#2A2ABB",
+                       width=3, style=QtCore.Qt.DashLine)
         params = roi.calculate_ellipse_parameters()
         cy, cx = params["center"][0], params["center"][1]
         r1 = params["minor_axis"]

@@ -98,7 +98,7 @@
       "title": "Blob Detection - Maximum standard deviation",
       "desc": "The maximum standard deviation for Gaussian kernel. Higher values will help to detect larger foci",
       "type": "decspin",
-      "value": 5,
+      "value": 4,
       "values": {
         "min": 0,
         "max": 100,
@@ -128,7 +128,7 @@
       "title": "Blob Detection - Threshold",
       "desc": "Threshold for foci detection. Foci with an intensity lower than the thresold will be ignored. Lower values will help to detect foci with lower intensity",
       "type": "decspin",
-      "value": 0.1,
+      "value": 0.15,
       "values": {
         "min": 0,
         "max": 100,
@@ -158,7 +158,7 @@
       "title": "Nucleus Detection - Iterations",
       "desc": "Number of maximum filtering to perform in a row. Change only if you know what you are doing. Adverse effect on performance",
       "type": "slider",
-      "value": 5,
+      "value": 10,
       "values": {
         "min": 1,
         "max": 20,
@@ -255,7 +255,7 @@
       "title": "Focus Detection - Sigma for Canny Operator",
       "desc": "Standard deviation of used gaussian filter. Adverse effect on performance",
       "type": "decspin",
-      "value": 1.5,
+      "value": 3,
       "values": {
         "min": 0,
         "max": 20,
@@ -277,7 +277,7 @@
         "step": 0.01,
         "decimals": 3,
         "prefix": "",
-        "suffix": "",
+        "suffix": ""
       }
     }
   ],
