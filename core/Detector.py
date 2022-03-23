@@ -266,7 +266,7 @@ class Detector:
         return main
 
     @staticmethod
-    def encode_areas(area_map: np.ndarray) -> Dict[int, List[Tuple[int, int]]]:
+    def encode_areas(area_map: np.ndarray) -> Dict[int, List[Tuple[int, int, int]]]:
         """
         Method to extract individual areas from the given binary map.
 

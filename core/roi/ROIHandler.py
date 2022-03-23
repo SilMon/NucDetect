@@ -58,6 +58,16 @@ class ROIHandler:
             self.main = roi.ident
         self.stats.clear()
 
+    def add_rois(self, rois: List[ROI]) -> None:
+        """
+        Method to add new roi to this handler
+
+        :param rois: List of ROI to add
+        :return: None
+        """
+        for roi in rois:
+            self.add_roi(roi)
+
     def remove_roi(self, roi: ROI, cascade: bool = False) -> None:
         """
         Method to remove a ROI from this handler
@@ -71,6 +81,16 @@ class ROIHandler:
             # If cascadian deletion is activated, delete all associated roi
             self.rois = [x for x in self.rois if x.associated is not roi]
         self.stats.clear()
+
+    def remove_rois(self, rois: List[ROI]) -> None:
+        """
+        Method to remove ROI from this handler
+
+        :param rois: List of ROI to remove
+        :return: None
+        """
+        for roi in rois:
+            self.remove_roi(roi)
 
     def calculate_statistics(self, img: np.ndarray) -> Dict[str, Union[int, float]]:
         """
@@ -185,7 +205,7 @@ class ROIHandler:
                         elif chan != self.main:
                             row.append(0)
                     tempdat["data"].append(row)
-            if self.main is not "":
+            if self.main != "":
                 tempdat["footer"].append(("Detected Nuclei:",  stats[self.idents.index(self.main)]))
                 for chan in self.idents:
                     if chan != self.main:

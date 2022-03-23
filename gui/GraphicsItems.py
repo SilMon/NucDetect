@@ -124,6 +124,34 @@ class EditorView(pg.GraphicsView):
         """
         self.pos_track = state
 
+    def mark_as_changed(self, idents: List[int]) -> None:
+        """
+        Method to mark items with the given id as changed
+
+        :param idents: List of ids
+        :return: None
+        """
+        for ident in idents:
+            for item in self.items:
+                if item.roi_id not in self.delete:
+                    if item.roi_id == ident:
+                        item.changed = True
+
+    def clear_and_update(self) -> None:
+        """
+        Method to display new roi
+
+        :param rois: The new roi to show
+        :return: None
+        """
+        # Get list of changed items
+        changed = [x.roi_id for x in self.items]
+        # Clear item lists
+        self.items.clear()
+        self.draw_roi()
+        self.mark_as_changed(changed)
+        self.show_channel(3)
+
     def draw_roi(self) -> None:
         """
         Method to draw the roi

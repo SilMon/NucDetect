@@ -4,17 +4,24 @@ from typing import List, Any, Tuple, Dict, Union
 
 import numpy as np
 import pyqtgraph as pg
+import matplotlib.pyplot as plt
+from scipy import ndimage as ndi
 from PyQt5 import QtGui, QtCore, uic
-from PyQt5.QtCore import QItemSelection, QItemSelectionModel, Qt, QRectF
-from PyQt5.QtGui import QStandardItem, QStandardItemModel, QResizeEvent, QKeyEvent
+from PyQt5.QtCore import QItemSelection, QItemSelectionModel, Qt, QRectF, QPoint, QPointF
+from PyQt5.QtGui import QStandardItem, QStandardItemModel, QResizeEvent, QKeyEvent, QPen, QMouseEvent, QBrush, QColor
 from PyQt5.QtWidgets import QDialog, QMessageBox, QInputDialog, QCheckBox, QFrame, QScrollArea, QWidget, \
     QLabel, QVBoxLayout, QSizePolicy, QGraphicsEllipseItem, QGraphicsLineItem, \
-    QGraphicsItem, QProgressBar, QSpacerItem
+    QGraphicsItem, QProgressBar, QSpacerItem, QGraphicsRectItem, QGraphicsView
+from skimage.draw import line
+from skimage.segmentation import watershed
 
 from core.Detector import Detector
+from core.JittedFunctions import eu_dist
+from core.roi.AreaAnalysis import convert_area_to_binary_map, imprint_area_into_array
+from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 from gui import Paths, Util
-from gui.Definitions import Icon
+from gui.Definitions import Icon, Color
 from gui.GraphicsItems import EditorView
 from gui.Plots import PoissonPlotWidget
 from gui.Util import create_image_item_list_from
@@ -27,7 +34,7 @@ pg.setConfigOptions(imageAxisOrder='row-major')
 
 class AnalysisSettingsDialog(QDialog):
 
-    def __init__(self, all_=False, settings=None,  *args, **kwargs):
+    def __init__(self, all_=False, settings=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.ui = None
         self.all = all_
@@ -870,9 +877,9 @@ class GroupDialog(QDialog):
         item = self.group_model.item(index)
         data = item.data()
         clk = QMessageBox.question(self, "Erase group",
-                                    f"Do you really want to delete the group {data['name']}?"
-                                    " This action cannot be reversed!",
-                                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
+                                   f"Do you really want to delete the group {data['name']}?"
+                                   " This action cannot be reversed!",
+                                   QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
         if clk == QMessageBox.Yes:
             # Remove list item
             self.group_model.removeRow(index)
@@ -939,7 +946,7 @@ class ExperimentSelectionDialog(QDialog):
         main = self.cursor.execute(
             "SELECT DISTINCT channel FROM roi WHERE image IN (SELECT image FROM groups WHERE experiment=?)"
             " AND associated IS NULL",
-            (exp, )
+            (exp,)
         ).fetchall()[0][0]
         # Clean up channels
         channels = [x[0] for x in channels if x[0] != main]
@@ -1631,7 +1638,6 @@ class CategorizationDialog(QDialog):
 
 
 class Editor(QDialog):
-
     __slots__ = [
         "ui",
         "editor",
@@ -1641,17 +1647,20 @@ class Editor(QDialog):
         "temp_items"
     ]
 
-    def __init__(self, image: np.ndarray, roi: ROIHandler, size_factor: float = 1):
+    def __init__(self, image: np.ndarray, roi: ROIHandler, size_factor: float = 1, img_name: str = ""):
         """
         Constructor
 
         :param image: The image to edit
         :param roi: The detected roi
+        :param size_factor: Scaling factor for standard sizes
+        :param img_name: Name of the image
         """
         super(Editor, self).__init__()
         self.ui = None
         self.editor = None
         self.image = image
+        self.img_name = img_name
         self.roi = roi
         self.size_factor = size_factor
         self.temp_items = []
@@ -1668,12 +1677,19 @@ class Editor(QDialog):
         :return: None
         """
         self.ui = uic.loadUi(Paths.ui_editor_dial, self)
-        self.editor = EditorView(self.image, self.roi, self, self.size_factor)
+        self.setWindowTitle(f"Modification Dialog for {self.img_name}")
+        self.setWindowIcon(Icon.get_icon("LOGO"))
+        self.setWindowFlags(self.windowFlags() |
+                            QtCore.Qt.WindowSystemMenuHint |
+                            QtCore.Qt.WindowMinMaxButtonsHint |
+                            QtCore.Qt.Window)
+        self.editor: EditorView = EditorView(self.image, self.roi, self, self.size_factor)
         self.ui.view.addWidget(self.editor)
         # Add icons to buttons
         self.ui.btn_view.setIcon(Icon.get_icon("EYE"))
         self.ui.btn_add.setIcon(Icon.get_icon("PLUS_CIRCLE"))
         self.ui.btn_edit.setIcon(Icon.get_icon("EDIT"))
+        self.ui.btn_auto.setIcon(Icon.get_icon("MAGIC"))
         self.ui.btn_show.setIcon(Icon.get_icon("CIRCLE"))
         self.ui.btn_coords.setIcon(Icon.get_icon("MOUSE"))
         self.ui.btn_preview.setIcon(Icon.get_icon("EYE"))
@@ -1703,6 +1719,7 @@ class Editor(QDialog):
         self.ui.spb_sizeFactor.valueChanged.connect(
             lambda: self.change_size_factor(self.ui.spb_sizeFactor.value())
         )
+        self.ui.btn_auto.clicked.connect(self.auto_edit)
         # Setup editing boxes
         sy, sx, _ = self.image.shape
         self.ui.spb_x.setMinimum(0)
@@ -1725,6 +1742,24 @@ class Editor(QDialog):
         self.ui.spb_angle.valueChanged.connect(self.ui.btn_preview.setEnabled)
         self.ui.btn_preview.clicked.connect(self.set_changes)
         self.ui.btn_accept.clicked.connect(self.set_changes)
+
+    def auto_edit(self) -> None:
+        """
+        Method to open the auto edit dialog
+
+        :return: None
+        """
+        auto_edit_dialog = AutoEdit(main=self.image[..., self.roi.idents.index(self.roi.main)],
+                                    roi=self.roi, img_name=self.img_name)
+        code = auto_edit_dialog.exec()
+        if code == QDialog.Accepted:
+            # Get newly created roi
+            rois = auto_edit_dialog.extracted_roi
+            # Remove all involved old roi
+            self.roi.remove_rois(auto_edit_dialog.deletion_list)
+            self.editor.delete.append(auto_edit_dialog.deletion_list)
+            self.roi.add_rois(rois)
+            self.editor.clear_and_update()
 
     def change_size_factor(self, new_value: float) -> None:
         """
@@ -1860,4 +1895,574 @@ class Editor(QDialog):
         :return: None
         """
         self.ui.lbl_status.setText(status)
+
+
+class AutoEdit(QDialog):
+
+    edit_rect_pen = QPen(QColor(255, 0, 0), 5, Qt.DashLine)
+
+    def __init__(self, main: np.ndarray, roi: ROIHandler, img_name: str = ""):
+        super(AutoEdit, self).__init__()
+        self.img_name = img_name
+        self.main = main
+        self.handler = roi
+        self.roi = self.get_main_roi(roi)
+        self.edit_rect = QGraphicsRectItem(0, 0, self.main.shape[1], self.main.shape[0])
+        self.edit_rect.setPen(self.edit_rect_pen)
+        self.img_item = pg.ImageItem()
+        self.plot_item = pg.PlotItem()
+        self.main_map = self.get_main_map(main.shape, self.roi)
+        self.edm = ndi.distance_transform_edt(main)
+        self.map_index = 0
+        # Create a working map to enable undo
+        self.temp_main = np.copy(self.main)
+        self.temp_map = np.copy(self.main_map)
+        self.temp_edm = np.copy(self.edm)
+        self.centers: List[AutoEditCenterItem] = []
+        self.active_centers: List[AutoEditCenterItem] = []
+        self.removed_centers: List[AutoEditCenterItem] = []
+        self.extracted_roi = []
+        self.deletion_list: List[int] = []
+        self.plot_view = AutoEditGraphicsView()
+        self.plot_vb = self.plot_item.vb
+        self.ui = uic.loadUi(Paths.ui_editor_auto_dial, self)
+        self.initialize_ui()
+
+    def initialize_ui(self) -> None:
+        """
+        Method to initalize the UI of this dialog
+
+        :return: None
+        """
+        self.setWindowTitle(f"Semi-Automatical Nucleus Extraction of {self.img_name}")
+        self.setWindowIcon(Icon.get_icon("MAGIC"))
+        self.setWindowFlags(self.windowFlags() |
+                            QtCore.Qt.WindowSystemMenuHint |
+                            QtCore.Qt.WindowMinMaxButtonsHint |
+                            QtCore.Qt.Window)
+        self.plot_item.addItem(self.img_item)
+        self.img_item.setImage(self.temp_main)
+        self.plot_item.addItem(self.edit_rect)
+        self.plot_view.setCentralWidget(self.plot_item)
+        self.plot_vb.setAspectLocked(True)
+        self.plot_vb.invertY(True)
+        self.ui.vl_data.addWidget(self.plot_view)
+
+        self.ui.spb_x.setMinimum(0)
+        self.ui.spb_x.setMaximum(self.main.shape[1])
+        self.ui.spb_x.setValue(self.main.shape[1] / 2)
+        self.ui.spb_y.setMinimum(0)
+        self.ui.spb_y.setMaximum(self.main.shape[0])
+        self.ui.spb_y.setValue(self.main.shape[0] / 2)
+
+        self.ui.spb_height.setMinimum(0)
+        self.ui.spb_height.setMaximum(self.main.shape[0])
+        self.ui.spb_height.setValue(self.main.shape[0])
+        self.ui.spb_width.setMinimum(0)
+        self.ui.spb_width.setMaximum(self.main.shape[1])
+        self.ui.spb_width.setValue(self.main.shape[1])
+        self.ui.spb_x.valueChanged.connect(self.change_edit_rectangle)
+        self.ui.spb_y.valueChanged.connect(self.change_edit_rectangle)
+        self.ui.spb_width.valueChanged.connect(self.change_edit_rectangle)
+        self.ui.spb_height.valueChanged.connect(self.change_edit_rectangle)
+        # Set icons for all buttons
+        self.ui.btn_lock.setIcon(Icon.get_icon("LOCK"))
+        self.ui.btn_reset.setIcon(Icon.get_icon("UNDO"))
+        self.ui.btn_channel.setIcon(Icon.get_icon("IMAGE"))
+        self.ui.btn_binmap.setIcon(Icon.get_icon("IMAGE"))
+        self.ui.btn_edm.setIcon(Icon.get_icon("IMAGE"))
+        self.ui.btn_reset.clicked.connect(self.restore_maps)
+        self.ui.btn_channel.toggled.connect(
+            lambda: self.change_map_mode(0)
+        )
+        self.ui.btn_binmap.toggled.connect(
+            lambda: self.change_map_mode(1)
+        )
+        self.ui.btn_edm.toggled.connect(
+            lambda: self.change_map_mode(2)
+        )
+        self.ui.btn_lock.clicked.connect(self.lock_image)
+        self.add_existing_nuclei_centers()
+        self.set_status("Please adjust the editing rectangle to fit the zone you want to edit")
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if not event.button() == Qt.LeftButton:
+            return
+        # Check if the position aligns with a center
+        items = self.plot_view.get_items_at_mapped_position(self.plot_view.raw_mouse_position, AutoEditCenterItem)
+        if items:
+            # Delete items
+            for item in items:
+                self.plot_item.removeItem(item)
+                self.centers.remove(item)
+                if item.reference:
+                    self.removed_centers.append(item.reference)
+        else:
+            # Check if the new center lies within the editing rectangle
+            pos = self.plot_view.mapped_mouse_position
+            posx, posy = pos.x(), pos.y()
+            x, y, width, height = self.get_editing_rectangle_dimensions()
+            if y <= posy < y + height and x <= posx <= x + width:
+                # Add new item
+                center = self.get_center_at_position(pos.x(), pos.y())
+                self.add_center_to_plot(center)
+
+    def perform_adjusted_watershed(self) -> np.ndarray:
+        """
+        Method to use the defined centers to perform watershed segmentation
+
+        :return: None
+        """
+        # Get list of adjusted centers
+        adj_cent = self.adjust_centers_to_edm()
+        # Adjust the edm
+        adj_edm = -self.adjust_edm(adj_cent)
+        # Create a mask for watershed
+        mask = np.zeros(shape=adj_edm.shape)
+        for p in adj_cent:
+            mask[p[0]][p[1]] = 1
+        # Label individual centers on the mask
+        markers, _ = ndi.label(mask)
+        # Perform watershed
+        segmap = watershed(adj_edm, markers, mask=self.temp_map)
+        # Check if areas align with the map edge and delete them
+        del_list = []
+        height, width = segmap.shape
+        for y in range(height):
+            for x in range(width):
+                if (y == 0 or y == height - 1) or (x == 0 or x == width - 1) and segmap[y][x] != 0:
+                    del_list.append(segmap[y][x])
+        del_list = set(del_list)
+        for y in range(height):
+            for x in range(width):
+                if segmap[y][x] in del_list:
+                    segmap[y][x] = 0
+        # Adjust segmentation map to size of original image
+        adj_segmap = np.zeros(shape=self.main_map.shape)
+        x, y, width, height = self.get_current_editing_rect()
+        adj_segmap[x: x + width, y: y + height] = segmap
+        # Check which predefined centers are in the areas of the segmentation map
+        for item in self.centers:
+            if item.reference:
+                # Get center of the item
+                cy, cx = item.center
+                if adj_segmap[cy][cx] == 0:
+                    self.deletion_list.append(item.reference)
+        return adj_segmap
+
+    def accept(self) -> None:
+        segmap = self.perform_adjusted_watershed()
+        roi_areas = self.extract_roi_from_segmentationmap(segmap)
+        for index, area in roi_areas.items():
+            # Create new roi
+            roi = ROI(channel=self.handler.main, auto=False)
+            roi.set_area(area)
+            self.extracted_roi.append(roi)
+        super().accept()
+
+    @staticmethod
+    def extract_roi_from_segmentationmap(map_: np.ndarray) -> Dict[int, List[Tuple[int, int, int]]]:
+        """
+        Method to extract roi from a segmentation map
+
+        :param map_: The segmentation map
+        :return: A list of extracted ROI
+        """
+        return Detector.encode_areas(map_)
+
+    def adjust_centers_to_edm(self) -> List[Tuple[int, int]]:
+        """
+        Method to adjust the position of the defined centers to the maxima of the EDM
+
+        :return: A list of adjusted centers
+        """
+        # Adjust center values using the EDM
+        adj_rad = 15
+        adj_cent = []
+        for center_item in self.active_centers:
+            rect = center_item.rect()
+            p = int(rect.y() - rect.height() // 2), int(rect.x() - rect.width() // 2)
+            # Get the current lowest distance value
+            cur_val = self.edm[p[0]][p[1]]
+            # Iterate over neighborhood of center
+            for y in range(max(0, p[0] - adj_rad), min(self.edm.shape[0], p[0] + adj_rad)):
+                for x in range(max(0, p[1] - adj_rad), min(self.edm.shape[1], p[1] + adj_rad)):
+                    if self.edm[y][x] < cur_val:
+                        cur_val = self.edm[y][x]
+                        p = (y, x)
+            adj_cent.append(p)
+        return adj_cent
+
+    @staticmethod
+    def get_nearest_center(center: Tuple[int, int], index: int,
+                           centers: List[Tuple[int, int]]) -> Tuple[int, int]:
+        """
+        Method to get the center with the smallest distance to the given center
+
+        :param center: The center
+        :param index: The index of the center in the given list of centers
+        :param centers: List of all possible centers including the given center
+        :return: The nearest center
+        """
+        smallest_dist = 150
+        nearest_center = None
+        for index2 in range(index + 1, len(centers), 1):
+            center2 = centers[index2]
+            dist = eu_dist(center, center2)
+            if dist < smallest_dist:
+                smallest_dist = dist
+                nearest_center = center2
+        return nearest_center
+
+    def adjust_edm(self, adj_centers: List[Tuple[int, int]]) -> np.ndarray:
+        """
+        Method to separate the centers on the edm to improve watershed quality
+
+        :param adj_centers: List of adjusted centers to use for EDM adjustment
+        :return: None
+        """
+        adj_edm = np.copy(self.temp_edm)
+        for index, center in enumerate(adj_centers):
+            center = adj_centers[index]
+            nearest_center = self.get_nearest_center(center, index, adj_centers)
+            if nearest_center:
+                # Calculate central point between both centers
+                c3 = round((center[0] + nearest_center[0]) / 2), round((center[1] + nearest_center[1]) / 2)
+                if self.edm[c3[0]][c3[1]]:
+                    # Get vector between center and the central point
+                    v = center[0] - c3[0], center[1] - c3[1]
+                    # Get orthogonal vector and normalize
+                    max_coord = max(abs(v[0]), abs(v[1]))
+                    c_orth = v[1] / max_coord, -v[0] / max_coord
+                    rr, cc = line(center[0], center[1],
+                                  nearest_center[0], nearest_center[1])
+                    line_bc = zip(rr, cc)
+                    brakes = self.get_end_points_of_separation_lines(adj_edm, line_bc, c_orth)
+                    if brakes:
+                        rr, cc = line(brakes[0][0], brakes[0][1], brakes[1][0], brakes[1][1])
+                        adj_edm[rr, cc] = 0
+        return adj_edm
+
+    @staticmethod
+    def get_end_points_of_separation_lines(edm: np.ndarray, linepoints, orth: Tuple[float, float]):
+        max_distance = 10000000
+        brakes = None
+        for line_point in linepoints:
+            # If the point is in the background, stop progression
+            if edm[line_point[0]][line_point[1]] == 0:
+                brakes = None
+                break
+            left_brake = None
+            right_brake = None
+            counter = 1
+            while not left_brake or not right_brake:
+                if not right_brake:
+                    right = line_point[0] + round(orth[0] * counter), line_point[1] + round(
+                        orth[1] * counter)
+                    if right[0] >= edm.shape[0] or right[1] >= edm.shape[1] or edm[right[0]][right[1]] == 0:
+                        right_brake = right
+                if not left_brake:
+                    left = line_point[0] - round(orth[0] * counter), line_point[1] - round(
+                        orth[1] * counter)
+                    if left[0] >= edm.shape[0] or left[1] >= edm.shape[1] or edm[left[0]][left[1]] == 0:
+                        left_brake = left
+                counter += 1
+            cur_dist = eu_dist(left_brake, right_brake)
+            if max_distance > cur_dist:
+                max_distance = cur_dist
+                brakes = left, right
+        return brakes
+
+    @staticmethod
+    def get_center_at_position(x: int, y: int, reference: int = None) -> QGraphicsEllipseItem:
+        """
+        Method to get an ellipse item with the given center
+
+        :param x: The x position
+        :param y: The y position
+        :param reference: Signifies if this center is linked to an existing ROI
+        :return: The center as QGraphicsEllipseItem
+        """
+        center = AutoEditCenterItem(x, y, 15, 15, reference)
+        center.setPen(QPen(Color.BRIGHT_RED))
+        center.setBrush(QBrush(Color.BRIGHT_RED))
+        return center
+
+    def add_existing_nuclei_centers(self) -> None:
+        """
+        Function to add existing nuclei from the given ROIHandler
+
+        :return: None
+        """
+        # Get dimensions of editing rectangle
+        x, y, width, height = self.get_editing_rectangle_dimensions()
+        for roi in self.roi:
+            # Get the center of the roi
+            pos = roi.calculate_dimensions()["center"]
+            center = self.get_center_at_position(pos[1], pos[0], roi.id)
+            # Check if roi is inside the editing rectangle
+            if y <= pos[0] <= y + height:
+                if x <= pos[1] <= x + width:
+                    # Add the ROI to the deletion list
+                    self.deletion_list.append(roi)
+                    # Add the center to plot
+                    self.add_center_to_plot(center)
+
+    def add_center_to_plot(self, center: QGraphicsEllipseItem) -> None:
+        """
+        Method to add the given center to the plot
+
+        :param reference: Signifies if this center is linked to an existing ROI
+        :param center: The center as QGraphicsEllipseItem
+        :return: None
+        """
+        self.centers.append(center)
+        self.plot_item.addItem(center)
+
+    def add_nucleus_center(self, event: QMouseEvent) -> None:
+        """
+        Method to add a new nucleus center to the image
+
+        :return: None
+        """
+        # Check of the defined position is inside the editing rectangle
+
+        # Define Nucleus center
+        center = self.get_center_at_position(event.pos().x(), event.pos().y())
+        self.add_center_to_plot(center)
+
+    def remove_center(self, center: QGraphicsEllipseItem) -> None:
+        """
+        Method to remove an added center
+
+        :param center: The center to remove
+        :return: None
+        """
+        self.centers.remove(center)
+        self.plot_item.removeItem(center)
+
+    def change_edit_rectangle(self) -> None:
+        """
+        Method to change the editing rectangle
+
+        :return: None
+        """
+        centerX = self.ui.spb_x.value() - round(self.ui.spb_width.value() / 2)
+        centerY = self.ui.spb_y.value() - round(self.ui.spb_height.value() / 2)
+        self.edit_rect.setRect(centerX,
+                               centerY,
+                               self.ui.spb_width.value(),
+                               self.ui.spb_height.value())
+        self.edit_rect.setPen(self.edit_rect_pen)
+
+    def lock_image(self) -> None:
+        """
+        Method to lock the image and hinder further editing. Prepares the image for analysis.
+
+        :return: None
+        """
+        enabled = self.ui.btn_lock.isChecked()
+        self.enable_buttons(enabled)
+        #self.edit_rect.setPen(QPen(Color.INVISIBLE))
+        # Get current adjustment points
+        x, y, width, height = self.get_editing_rectangle_dimensions()
+        # Add all items at adjusted position
+        for item in self.centers:
+            # Get current item position
+            rect = item.boundingRect()
+            posx, posy = rect.x(), rect.y()
+            if y <= posy < y + height and x <= posx <= x + width:
+                # Define new bounding rect for item
+                b_rect = QRectF(posx - x, posy - y, 15, 15)
+                item.setRect(b_rect)
+                self.active_centers.append(item)
+            else:
+                self.plot_item.removeItem(item)
+        self.crop_image()
+        self.edit_rect.setRect(QRectF(0, 0, width, height))
+        self.enable_spinboxes(False)
+        self.set_status("Image locked, please select nuclei centers by clicking ont the image")
+
+    def get_editing_rectangle_dimensions(self) -> Tuple[int, int, int, int]:
+        """
+        Function to get the dimensions of the editing rectangle
+
+        :return: Tuple with x, y, width, height
+        """
+        rect = self.edit_rect.rect()
+        return int(rect.x()), int(rect.y()), int(rect.width()), int(rect.height())
+
+    def crop_image(self) -> None:
+        """
+        Method to crop the image to the size of the editing rectangle
+
+        :return: None
+        """
+        # Get rect of the editing rectangle
+        x, y, width, height = self.get_editing_rectangle_dimensions()
+        # Crop the image
+        self.temp_edm = self.temp_edm[y: y + height, x: x + width]
+        self.temp_map = self.temp_map[y: y + height, x: x + width]
+        self.temp_main = self.temp_main[y: y + height, x: x + width]
+        self.img_item.setImage(self.temp_main)
+
+    def enable_spinboxes(self, enabled: bool = True) -> None:
+        """
+        Method to enable/disable the editing rectangle spinboxes
+
+        :param enabled: Enable status of the spinboxes
+        :return: None
+        """
+        self.ui.spb_x.setEnabled(enabled)
+        self.ui.spb_y.setEnabled(enabled)
+        self.ui.spb_width.setEnabled(enabled)
+        self.ui.spb_height.setEnabled(enabled)
+
+    def set_status(self, status: str) -> None:
+        """
+        Method to display a status to the user
+
+        :param status: The status to display
+        :return: None
+        """
+        self.ui.lbl_status.setText(status)
+
+    def get_current_editing_rect(self):
+        x, y = self.ui.spb_x.value(), self.ui.spb_y.value()
+        width, height = self.ui.spb_width.value(), self.ui.spb_height.value()
+        return x - width // 2, y - height // 2, width, height
+
+    def enable_buttons(self, enabled: bool) -> None:
+        """
+        Method to enable/disable all editing buttons
+
+        :param enabled: bool
+        :return: None
+        """
+        self.ui.btn_binmap.setEnabled(enabled)
+        self.ui.btn_channel.setEnabled(enabled)
+        self.ui.btn_edm.setEnabled(enabled)
+
+    def change_map_mode(self, index: int) -> None:
+        """
+        Method to change the shown map
+
+        :param index: The index of the map
+        :return: None
+        """
+        self.map_index = index
+        self.show_map()
+
+    def restore_maps(self) -> None:
+        """
+        Method to restore the original map
+
+        :return: None
+        """
+        self.enable_buttons(True)
+        self.enable_spinboxes(True)
+        self.temp_main = self.main
+        self.temp_map = self.main_map
+        self.temp_edm = self.edm
+        self.show_map()
+        # Re-Add all removed centers
+        for item in self.centers:
+            item.reset_position()
+            self.plot_item.addItem(item)
+        # Reset the position of the editing rectangle
+        self.change_edit_rectangle()
+
+    def show_map(self) -> None:
+        """
+        Method to show the current working map
+
+        :return: None
+        """
+        if self.map_index == 0:
+            self.img_item.setImage(self.temp_main)
+        elif self.map_index == 1:
+            self.img_item.setImage(self.temp_map)
+        else:
+            self.img_item.setImage(self.temp_edm)
+
+    @staticmethod
+    def get_main_roi(roi: ROIHandler) -> List[ROI]:
+        """
+        Method to get all roi that are labelled as main
+
+        :param roi: The handler containing all roi
+        :return: List of all main roi
+        """
+        return [x for x in roi if x.main]
+
+    @staticmethod
+    def get_main_map(shape: Tuple[int, int], rois: List[ROI]) -> np.ndarray:
+        """
+        Method to create a binary map containing all roi
+
+        :param shape: The shape of the map
+        :param rois: The roi to imprint into the map
+        :return: The created map
+        """
+        map_ = np.zeros(shape)
+        for roi in rois:
+            imprint_area_into_array(roi.area, map_, 1)
+        return map_
+
+
+class AutoEditGraphicsView(pg.GraphicsView):
+    """
+    Class to track mouse movement over the graphicsview
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.mapped_mouse_position = QPoint()
+        self.raw_mouse_position = None
+
+    def mouseMoveEvent(self, ev):
+        if self.centralWidget:
+            new_pos = self.centralWidget.vb.mapSceneToView(ev.pos())
+            self.raw_mouse_position = ev.pos()
+            self.mapped_mouse_position.setX(round(new_pos.x()))
+            self.mapped_mouse_position.setY(round(new_pos.y()))
+
+    def get_items_at_mapped_position(self, pos: QPointF, matching_type: Any) -> List[Any]:
+        """
+        Method to get all visible items at the specified position
+
+        :param pos: The position to look at
+        :param matching_type: If not None, only items with the same class will be returned
+        :return: All found items
+        """
+        if matching_type:
+            return [x for x in self.scene().items(self.mapToScene(pos)) if isinstance(x, matching_type)]
+        else:
+            return self.scene().items(self.mapToScene(pos))
+
+
+class AutoEditCenterItem(QGraphicsEllipseItem):
+
+    def __init__(self, posx, posy, width, height, reference: int = None):
+        """
+        Constructor for this item
+
+        :param posx: The center X positon
+        :param posy: The center Y position
+        :param width: The width of the item
+        :param height: The height of the item
+        :param reference: Hash of the ROI this center was derived from
+        """
+        super().__init__(posx - width//2, posy - height//2, width, height)
+        self.center = posy, posx
+        self.orig_rect = QRectF(posx - width//2, posy - height//2, width, height)
+        self.reference = reference
+
+    def reset_position(self) -> None:
+        """
+        Function to restore the original position of this item
+
+        :return: None
+        """
+        self.setRect(self.orig_rect)
 

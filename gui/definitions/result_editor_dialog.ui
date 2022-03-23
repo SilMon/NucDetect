@@ -85,7 +85,7 @@ QGraphicsView{
 	background-color: black;
 }</string>
   </property>
-  <layout class="QVBoxLayout" name="verticalLayout">
+  <layout class="QVBoxLayout" name="verticalLayout" stretch="0,0,0,0,0">
    <item>
     <layout class="QVBoxLayout" name="view">
      <item>
@@ -183,7 +183,7 @@ QGraphicsView{
           <string>Acitvates Edit Mode. Allow Editing of existing Nuclei/Foci. Hotkey: 3</string>
          </property>
          <property name="text">
-          <string>Edit</string>
+          <string>Manual Edit</string>
          </property>
          <property name="checkable">
           <bool>true</bool>
@@ -191,6 +191,23 @@ QGraphicsView{
          <attribute name="buttonGroup">
           <string notr="true">btng_mode</string>
          </attribute>
+        </widget>
+       </item>
+       <item>
+        <widget class="Line" name="line">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="btn_auto">
+         <property name="toolTip">
+          <string>Opens a dialog to semi-automatically adjust the nucleus detection</string>
+         </property>
+         <property name="text">
+          <string>Auto Edit</string>
+         </property>
         </widget>
        </item>
        <item>

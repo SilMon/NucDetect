@@ -9,6 +9,7 @@ class Color:
     ITEM_MODIFIED = QColor("#5A8c9ea3")
     BRIGHT_RED = QColor(222, 23, 56)
     LIGHT_BLUE = QColor(47, 167, 212)
+    INVISIBLE = QColor(0, 0, 0, 0)
 
 
 class Icon:
@@ -51,7 +52,11 @@ class Icon:
             "DOT_CIRCLE": qta.icon("fa5.dot-circle", color=Icon.STANDARD),
             "DRAFTING_COMPASS": qta.icon("fa5s.drafting-compass", color=Icon.STANDARD),
             "MOUSE": qta.icon("fa5s.mouse-pointer", color=Icon.STANDARD),
-            "CHECK": qta.icon("fa5s.check", color=Icon.HIGHLIGHT)
+            "CHECK": qta.icon("fa5s.check", color=Icon.HIGHLIGHT),
+            "MAGIC": qta.icon("fa5s.magic", color=Icon.HIGHLIGHT),
+            "LOCK": qta.icon("fa5s.lock", color=Icon.STANDARD),
+            "UNDO": qta.icon("fa5s.undo", color=Icon.STANDARD),
+            "IMAGE": qta.icon("fa5s.image", color=Icon.STANDARD)
         }
         return icons.get(ident, QIcon())
 

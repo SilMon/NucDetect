@@ -1269,11 +1269,9 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        print(self.settings["size_factor"])
         editor = Editor(image=Detector.load_image(self.cur_img["path"]),
-                        roi=self.roi_cache, size_factor=self.settings["size_factor"])
-        editor.setWindowTitle(f"Modification Dialog for {self.cur_img['file_name']}")
-        editor.setWindowIcon(QtGui.QIcon("logo.png"))
+                        roi=self.roi_cache, size_factor=self.settings["size_factor"],
+                        img_name=self.cur_img['file_name'])
         editor.setWindowFlags(editor.windowFlags() |
                               QtCore.Qt.WindowSystemMenuHint |
                               QtCore.Qt.WindowMinMaxButtonsHint |
