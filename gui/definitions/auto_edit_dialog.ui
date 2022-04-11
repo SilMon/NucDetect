@@ -1,0 +1,308 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>Dialog</class>
+ <widget class="QDialog" name="Dialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1500</width>
+    <height>1000</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Dialog</string>
+  </property>
+  <property name="styleSheet">
+   <string notr="true">QPushButton[objectName=&quot;btn_red&quot;]{
+	color: red;
+}
+
+QPushButton[objectName=&quot;btn_green&quot;]{
+	color: green;
+}
+
+QPushButton[objectName=&quot;btn_blue&quot;]{
+	color: blue;
+}
+
+QPushButton{
+	color: White;
+	background-color: rgba(22, 42, 75 , 255);
+	border: none;
+	font-size: 14px;
+ 	text-align: center;
+     display: inline-block;
+	min-height: 25;
+	min-width: 40;
+}
+
+QPushButton:hover{
+	background-color:  rgba(15, 35, 68 , 255);
+}
+
+QPushButton:pressed{
+	background-color:  rgba(8, 28, 61 , 255);
+}
+
+QPushButton:disabled{
+	background-color:  rgba(40, 60, 100 , 255);
+}
+
+QPushButton:checked{
+	background-color:  rgba(8, 28, 61 , 255);
+}
+
+QTableView, QListView{
+	color: White;
+	background-color: rgba(77, 77, 77, 128)
+}
+
+QLabel{
+	color:White;
+	font-size:16px;
+}
+
+QProgressBar {
+	color: White;
+    border: 1px solid grey;
+    background-color: rgb(10, 60, 110);
+ }
+
+ QProgressBar::chunk {
+     background-color: rgba(77, 77, 77, 128);
+ }
+
+QMainWindow{
+	background-color: rgb(0, 51, 102);
+}
+
+QDialog{
+	background-color: rgb(0, 51, 102);
+}
+
+QGraphicsView{
+	background-color: black;
+}</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout" stretch="0,0,0,0,0">
+   <item>
+    <layout class="QHBoxLayout" name="hl_buttons">
+     <item>
+      <widget class="QPushButton" name="btn_lock">
+       <property name="toolTip">
+        <string>Reduce the image to the editing area and prepare nucleus extraction</string>
+       </property>
+       <property name="text">
+        <string>Lock Image</string>
+       </property>
+       <property name="checkable">
+        <bool>true</bool>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btn_reset">
+       <property name="toolTip">
+        <string>Reset the image and editing area</string>
+       </property>
+       <property name="text">
+        <string>Reset</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="Line" name="line">
+       <property name="orientation">
+        <enum>Qt::Vertical</enum>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btn_channel">
+       <property name="toolTip">
+        <string>Show the image channel</string>
+       </property>
+       <property name="text">
+        <string>Channel</string>
+       </property>
+       <property name="checkable">
+        <bool>true</bool>
+       </property>
+       <property name="checked">
+        <bool>true</bool>
+       </property>
+       <attribute name="buttonGroup">
+        <string notr="true">btng_view</string>
+       </attribute>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btn_binmap">
+       <property name="toolTip">
+        <string>Show the binarized image channel</string>
+       </property>
+       <property name="text">
+        <string>Binary Map</string>
+       </property>
+       <property name="checkable">
+        <bool>true</bool>
+       </property>
+       <attribute name="buttonGroup">
+        <string notr="true">btng_view</string>
+       </attribute>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="btn_edm">
+       <property name="toolTip">
+        <string>Show a euclidean distance map of the binarized area of the image</string>
+       </property>
+       <property name="text">
+        <string>Euclidean Distance Map</string>
+       </property>
+       <property name="checkable">
+        <bool>true</bool>
+       </property>
+       <attribute name="buttonGroup">
+        <string notr="true">btng_view</string>
+       </attribute>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QLabel" name="lbl_status">
+     <property name="text">
+      <string>TextLabel</string>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignCenter</set>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QVBoxLayout" name="vl_data"/>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="hl_adjust">
+     <item>
+      <layout class="QFormLayout" name="formLayout">
+       <item row="0" column="0">
+        <widget class="QLabel" name="label">
+         <property name="text">
+          <string>Center X:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="1">
+        <widget class="QSpinBox" name="spb_x">
+         <property name="toolTip">
+          <string>Center position of the editing rectangle on the x-axis</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="0">
+        <widget class="QLabel" name="label_2">
+         <property name="text">
+          <string>Center Y:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="1">
+        <widget class="QSpinBox" name="spb_y">
+         <property name="toolTip">
+          <string>Center position of the editing rectangle on the y-axis</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+     <item>
+      <layout class="QFormLayout" name="formLayout_2">
+       <item row="0" column="0">
+        <widget class="QLabel" name="label_3">
+         <property name="text">
+          <string>Width:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="0">
+        <widget class="QLabel" name="label_4">
+         <property name="text">
+          <string>Height:</string>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="1">
+        <widget class="QSpinBox" name="spb_width">
+         <property name="toolTip">
+          <string>Width of the editing rectangle</string>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="1">
+        <widget class="QSpinBox" name="spb_height">
+         <property name="toolTip">
+          <string>Height of the editing rectangle</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="toolTip">
+      <string>OK: Start nucleus extraction from the specified area.</string>
+     </property>
+     <property name="orientation">
+      <enum>Qt::Horizontal</enum>
+     </property>
+     <property name="standardButtons">
+      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections>
+  <connection>
+   <sender>buttonBox</sender>
+   <signal>accepted()</signal>
+   <receiver>Dialog</receiver>
+   <slot>accept()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>248</x>
+     <y>254</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>157</x>
+     <y>274</y>
+    </hint>
+   </hints>
+  </connection>
+  <connection>
+   <sender>buttonBox</sender>
+   <signal>rejected()</signal>
+   <receiver>Dialog</receiver>
+   <slot>reject()</slot>
+   <hints>
+    <hint type="sourcelabel">
+     <x>316</x>
+     <y>260</y>
+    </hint>
+    <hint type="destinationlabel">
+     <x>286</x>
+     <y>274</y>
+    </hint>
+   </hints>
+  </connection>
+ </connections>
+ <buttongroups>
+  <buttongroup name="btng_view"/>
+ </buttongroups>
+</ui>
