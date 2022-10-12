@@ -1,4 +1,5 @@
 import time
+import multiprocessing
 from typing import Callable, Iterable
 
 from PyQt5.QtCore import QTimer
@@ -53,8 +54,8 @@ class Loader(QTimer):
         self.items_loaded += len(items)
         # Check if all items were loaded
         if not items:
-            print(f"Timer stop after loading {self.items_loaded} items")
-            print(f"Total loading time: {time.time() - self.start_time:.2f}")
+            print(f"\nTimer stop after loading {self.items_loaded} items")
+            print(f"Total loading time: {time.time() - self.start_time:.2f}\n")
             self.stop()
         # Update the last index
         self.last_index += self.batch_size
@@ -78,7 +79,7 @@ class Loader(QTimer):
 class ROIDrawerTimer(Loader):
 
     def __init__(self, items: ROIHandler, view: QGraphicsView,
-                 batch_size: int = 25, batch_time: int = 250,
+                 batch_size: int = 25, batch_time: int = 50,
                  feedback: Callable = None, processing: Callable = None):
         """
         Class to implement lazy roi drawing.

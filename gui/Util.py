@@ -13,6 +13,7 @@ from skimage.transform import resize
 
 from Definitions import Color
 from core.Detector import Detector
+from detector_modules.ImageLoader import ImageLoader
 from gui import Paths
 
 IMAGE_FORMATS = [
@@ -113,7 +114,7 @@ def create_list_item(path: str) -> QStandardItem:
     folder = temp[0].split(sep=os.sep)[-1]
     file = temp[1]
     if os.path.splitext(file)[1] in IMAGE_FORMATS:
-        d = Detector.get_image_data(path)
+        d = ImageLoader.get_image_data(path)
         date = d["datetime"]
         if isinstance(date, datetime.datetime):
             t = (date.strftime("%d.%m.%Y"), date.strftime("%H:%M:%S"))
@@ -121,7 +122,7 @@ def create_list_item(path: str) -> QStandardItem:
             t = date.decode("ascii").split(" ")
             temp = t[0].split(":")
             t[0] = f"{temp[2]}.{temp[1]}.{temp[0]}"
-        key = Detector.calculate_image_id(path)
+        key = ImageLoader.calculate_image_id(path)
         item = QStandardItem()
         item_text = f"Name: {file}\nFolder: {folder}\nDate: {t[0]}\nTime: {t[1]}"
         item.setText(item_text)
@@ -160,7 +161,7 @@ def create_thumbnail(image_path: str, size: Tuple = (75, 75)) -> str:
     :return: The path leading to the thumbnail
     """
     # Calculate the hash of the image
-    ident = Detector.calculate_image_id(image_path)
+    ident = ImageLoader.calculate_image_id(image_path)
     # Create path to thumbnail
     thumb_path = os.path.join(Paths.thumb_path, f"{ident}.jpg")
     # Check if the thumbnail already exists

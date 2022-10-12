@@ -1,9 +1,31 @@
 import math
-from typing import Tuple, Union
+from typing import Iterable, Tuple, Union
 
 import numpy as np
 from numba import njit
 from numba.typed import List as nList
+
+
+@njit(cache=True)
+def create_lg_lut(m: int) -> Iterable[int]:
+    """
+    Function to create a little_gauss lookup table for the given m values
+
+    :param m: The max number to calculate the little gauss for
+    :return: The created lut
+    """
+    return [little_gauss(x) for x in range(m + 1)]
+
+
+@njit(cache=True)
+def little_gauss(n: int) -> int:
+    """
+    Function to calculate the the sum of all numbers between 0 and n
+
+    :param n: The number to calculate the sum for
+    :return: The sum
+    """
+    return (n * n + n) // 2
 
 
 @njit(cache=True)

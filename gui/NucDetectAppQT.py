@@ -26,6 +26,7 @@ from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSpl
 from core.Detector import Detector
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
+from detector_modules.ImageLoader import ImageLoader
 from gui import Paths, Util
 from gui.Definitions import Icon
 from gui.Dialogs import ExperimentDialog, ExperimentSelectionDialog, StatisticsDialog, ImgDialog, SettingsDialog, \
@@ -199,29 +200,26 @@ class NucDetect(QMainWindow):
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("logging", 1, "bool");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("ml_analysis", 0, "bool");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_check", 1, "bool");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("blob_min_sigma", 1, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("blob_max_sigma", 4, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("blob_num_sigma", 10, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("blob_threshold", 0.15, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("thresh_iterations", 10, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("thresh_mask_size", 7, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("thresh_percent_hmax", 0.05, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("thresh_local_thresh_mult", 8, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("thresh_max_mult", 2, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("canny_sigma", 3, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("canny_low_thresh", 0.10, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("canny_up_thresh", 0.2, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_sigma", 2, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_sigma", 5, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("num_sigma", 10, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("acc_thresh", 0.945, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("iterations", 10, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("mask_size", 7, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("percent_hmax", 0.05, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("local_threshold_multiplier", 8, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("maximum_size_multiplier", 2, "int");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_nuclei", 0.95, "float");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_foci", 0.80, "float");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("show_ellipsis", 1, "bool");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("track_mouse", 1, "bool");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_min_nuc_size", 750, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_min_foc_size", 8, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_max_nuc_size", 30000, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_max_foc_size", 280, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_max_foc_overlap", 0.75, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_main_area", 750, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_foc_area", 8, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_main_area", 30000, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_foc_area", 280, "int");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_foc_int", 0.075, "float");
+            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("overlap", 0.5, "float");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("size_factor", 1, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("cutoff", 0.03, "float");
             INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("num_threads", 8, "int");
             COMMIT;
             '''
@@ -511,7 +509,7 @@ class NucDetect(QMainWindow):
                     "SELECT * FROM images WHERE md5 = ?",
                     (key,)
             ).fetchall():
-                d = Detector.get_image_data(path)
+                d = ImageLoader.get_image_data(path)
                 self.cursor.execute(
                     "INSERT OR IGNORE INTO images VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (key, d["datetime"], d["channels"], d["width"], d["height"],
@@ -548,6 +546,8 @@ class NucDetect(QMainWindow):
         if not self.cur_img:
             self.selec_signal.emit(True)
         # Get settings for this analysis
+        self.ui.list_images.setEnabled(False)
+        self.enable_buttons(False)
         anal_sett_dial = AnalysisSettingsDialog(settings=self.settings)
         code = anal_sett_dial.exec()
         if code == QDialog.Accepted:
@@ -556,6 +556,8 @@ class NucDetect(QMainWindow):
             settings["analysis_settings"].update({x: y for (x, y) in self.settings.items() if x not in an_sett})
         else:
             # If the dialog was rejected, abort analysis
+            self.ui.list_images.setEnabled(True)
+            self.enable_buttons(True)
             return
         self.res_table_model.setRowCount(0)
         self.prg_signal.emit(f"Analysing {self.cur_img['file_name']}",
@@ -625,6 +627,8 @@ class NucDetect(QMainWindow):
             settings["analysis_settings"].update({x: y for (x, y) in self.settings.items() if x not in an_sett})
         else:
             # If the dialog was rejected, abort analysis
+            self.ui.list_images.setEnabled(True)
+            self.enable_buttons(True)
             return
         thread = Thread(target=self._analyze_all, args=(settings, ))
         thread.start()
@@ -774,11 +778,13 @@ class NucDetect(QMainWindow):
             roidat.append((hash(roi), key, True, roi.ident, str(dim["center"]), dim["width"], dim["height"], asso))
             for p in roi.area:
                 pdat.append((hash(roi), p[0], p[1], p[2]))
+            orientation = f"({ellp['orientation'][0]:.9f}, {ellp['orientation'][1]:.9f})" if roi.main else None
             elldat.append(
                 (hash(roi), key, stats["area"], stats["intensity average"], stats["intensity median"],
                  stats["intensity maximum"], stats["intensity minimum"], stats["intensity std"],
                  ellp["eccentricity"], ellp["roundness"], str(ellp["center"]), ellp["major_axis"], ellp["minor_axis"],
-                 ellp["angle"], ellp["area"], str(ellp["orientation"]), ellp["shape_match"])
+                 ellp["angle"], ellp["area"], orientation,
+                 ellp["shape_match"])
             )
         # Save data to database
         curs.executemany(
@@ -881,7 +887,7 @@ class NucDetect(QMainWindow):
             for s in sec:
                 if s.associated == hash(m):
                     s.associated = m
-        print(f"Loaded {len(rois)} roi from database")
+        print(f"Loaded {len(rois)} roi of image {self.cur_img['file_name']} from database")
         return rois
 
     def create_result_table_from_list(self, handler: ROIHandler, experiment: str = None) -> None:
@@ -1269,7 +1275,10 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        editor = Editor(image=Detector.load_image(self.cur_img["path"]),
+        # Load channels for image from database
+        channels = self.cursor.execute("SELECT index_, name FROM channels  WHERE md5=?",
+                                       (self.cur_img["key"],)).fetchall()
+        editor = Editor(image=ImageLoader.load_image(self.cur_img["path"]), active_channels=channels,
                         roi=self.roi_cache, size_factor=self.settings["size_factor"],
                         img_name=self.cur_img['file_name'])
         editor.setWindowFlags(editor.windowFlags() |

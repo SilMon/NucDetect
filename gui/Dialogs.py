@@ -50,6 +50,7 @@ class AnalysisSettingsDialog(QDialog):
         return {
             "type": abs(self.ui.type_btn_group.checkedId()) - 2,
             "re-analyse": self.cbx_reanalyse.isChecked(),
+            "use_pre-processing": self.cbx_preproc.isChecked(),
             "add_to_experiment": self.ui.cbx_experiment.isChecked(),
             "experiment_details": {
                 "name": self.ui.le_name.text(),
@@ -1644,15 +1645,18 @@ class Editor(QDialog):
         "image",
         "roi",
         "size_factor",
-        "temp_items"
+        "temp_items",
+        "active_channels"
     ]
 
-    def __init__(self, image: np.ndarray, roi: ROIHandler, size_factor: float = 1, img_name: str = ""):
+    def __init__(self, image: np.ndarray, roi: ROIHandler, active_channels: List[Tuple[int, str, int]],
+                 size_factor: float = 1, img_name: str = ""):
         """
         Constructor
 
         :param image: The image to edit
         :param roi: The detected roi
+        :param active_channels: Index, Name
         :param size_factor: Scaling factor for standard sizes
         :param img_name: Name of the image
         """
@@ -1662,6 +1666,7 @@ class Editor(QDialog):
         self.image = image
         self.img_name = img_name
         self.roi = roi
+        self.active_channels = active_channels
         self.size_factor = size_factor
         self.temp_items = []
         self.initialize_ui()
@@ -1683,7 +1688,7 @@ class Editor(QDialog):
                             QtCore.Qt.WindowSystemMenuHint |
                             QtCore.Qt.WindowMinMaxButtonsHint |
                             QtCore.Qt.Window)
-        self.editor: EditorView = EditorView(self.image, self.roi, self, self.size_factor)
+        self.editor: EditorView = EditorView(self.image, self.roi, self, self.active_channels, self.size_factor)
         self.ui.view.addWidget(self.editor)
         # Add icons to buttons
         self.ui.btn_view.setIcon(Icon.get_icon("EYE"))
@@ -1707,7 +1712,7 @@ class Editor(QDialog):
         self.ui.cbx_channel.addItem("Composite")
         self.ui.cbx_channel.setCurrentText("Composite")
         self.ui.cbx_channel.currentIndexChanged.connect(
-            lambda: self.editor.show_channel(self.ui.cbx_channel.currentIndex())
+            lambda: self.editor.show_channel(self.ui.cbx_channel.currentText())
         )
         # React to Draw Ellipsis Button toggle
         self.ui.btn_show.toggled.connect(
@@ -1726,20 +1731,25 @@ class Editor(QDialog):
         self.ui.spb_x.setMaximum(sx - 1)
         self.ui.spb_x.valueChanged.connect(self.ui.btn_accept.setEnabled)
         self.ui.spb_x.valueChanged.connect(self.ui.btn_preview.setEnabled)
+        self.ui.spb_x.valueChanged.connect(self.preview_changes)
         self.ui.spb_y.setMinimum(0)
         self.ui.spb_y.setMaximum(sy - 1)
         self.ui.spb_y.valueChanged.connect(self.ui.btn_accept.setEnabled)
         self.ui.spb_y.valueChanged.connect(self.ui.btn_preview.setEnabled)
+        self.ui.spb_y.valueChanged.connect(self.preview_changes)
         self.ui.spb_width.setMinimum(0)
         self.ui.spb_width.setMaximum(sx)
         self.ui.spb_width.valueChanged.connect(self.ui.btn_accept.setEnabled)
         self.ui.spb_width.valueChanged.connect(self.ui.btn_preview.setEnabled)
+        self.ui.spb_width.valueChanged.connect(self.preview_changes)
         self.ui.spb_height.setMinimum(0)
         self.ui.spb_height.setMaximum(sy)
         self.ui.spb_height.valueChanged.connect(self.ui.btn_accept.setEnabled)
         self.ui.spb_height.valueChanged.connect(self.ui.btn_preview.setEnabled)
+        self.ui.spb_height.valueChanged.connect(self.preview_changes)
         self.ui.spb_angle.valueChanged.connect(self.ui.btn_accept.setEnabled)
         self.ui.spb_angle.valueChanged.connect(self.ui.btn_preview.setEnabled)
+        self.ui.spb_angle.valueChanged.connect(self.preview_changes)
         self.ui.btn_preview.clicked.connect(self.set_changes)
         self.ui.btn_accept.clicked.connect(self.set_changes)
 
@@ -1797,10 +1807,11 @@ class Editor(QDialog):
         :return: None
         """
         # Define QRect to adjust position of item
-        rect = QRectF(self.ui.spb_x.value(), self.ui.spb_y.value(),
+        rect = QRectF(self.ui.spb_x.value() - self.ui.spb_width.value()/2,
+                      self.ui.spb_y.value() - self.ui.spb_height.value()/2,
                       self.ui.spb_width.value(), self.ui.spb_height.value())
         angle = self.ui.spb_angle.value()
-        self.editor.set_changes(rect, angle)
+        self.editor.set_changes(rect, angle, True)
 
     def setup_editing(self, item: QGraphicsItem) -> None:
         """

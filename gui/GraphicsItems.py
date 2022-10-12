@@ -1,4 +1,5 @@
 import sqlite3
+import time
 from typing import List, Iterable, Dict, Tuple
 
 import numpy as np
@@ -24,9 +25,11 @@ class EditorView(pg.GraphicsView):
         QColor(0, 255, 255),  # Cyan
     ]
 
-    def __init__(self, image: np.ndarray, roi: ROIHandler, parent: QDialog, size_factor: float = 1):
+    def __init__(self, image: np.ndarray, roi: ROIHandler,
+                 parent: QDialog, active_channels: List[Tuple[int, str]], size_factor: float = 1):
         super(EditorView, self).__init__()
         self.parent = parent
+        self.active_channels = {x[1]: x[0] for x in active_channels}
         self.size_factor = size_factor
         self.mode = -1
         self.image = image
@@ -60,7 +63,7 @@ class EditorView(pg.GraphicsView):
         self.selected_item: ROIItem = None
         self.shift_down = False
         self.saved_values: Dict = None
-        self.show_channel(3)
+        self.show_channel("Composite")
 
     def set_changes(self, rect: QRectF, angle: float, preview: bool = True) -> None:
         """
@@ -85,11 +88,11 @@ class EditorView(pg.GraphicsView):
         self.draw_additional = state
         ROIDrawer.draw_additional_items(self.items, self.draw_additional)
 
-    def show_channel(self, channel: int) -> None:
+    def show_channel(self, channel: str) -> None:
         """
         Method to show the specified channel of the image
 
-        :param channel: The index of the channel
+        :param channel: The name of the channel
         :return: None
         """
         if self.selected_item:
@@ -97,11 +100,14 @@ class EditorView(pg.GraphicsView):
             self.selected_item = None
             self.parent.enable_editing_widgets(False)
         self.active_channel = channel
-        if channel == self.image.shape[2]:
+        if channel == "Composite":
             self.img_item.setImage(self.image)
+            index = self.image.shape[2]
         else:
-            self.img_item.setImage(self.image[..., channel])
-        ROIDrawer.change_channel(self.items, channel, self.draw_additional)
+            # Check to which index the name corresponds
+            index = self.active_channels[channel]
+            self.img_item.setImage(self.image[..., index])
+        ROIDrawer.change_channel(self.items, index, self.draw_additional)
 
     def change_mode(self, mode: int = 0) -> None:
         """
@@ -150,7 +156,7 @@ class EditorView(pg.GraphicsView):
         self.items.clear()
         self.draw_roi()
         self.mark_as_changed(changed)
-        self.show_channel(3)
+        self.show_channel("Composite")
 
     def draw_roi(self) -> None:
         """
@@ -189,7 +195,8 @@ class EditorView(pg.GraphicsView):
                 # Remove item from scene
                 self.selected_item.remove_from_view(self)
                 # Add item to deletion list to remove it from the database
-                self.delete.append(self.selected_item.roi_id)
+                if self.selected_item.roi_id != -1:
+                    self.delete.append(self.selected_item.roi_id)
         elif event.key() == Qt.Key_1:
             self.change_mode(-1)
         elif event.key() == Qt.Key_2:
@@ -204,10 +211,10 @@ class EditorView(pg.GraphicsView):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         super().mousePressEvent(event)
-        if self.mode == 0 and self.active_channel != 3 and event.button() == Qt.LeftButton:
+        if self.mode == 0 and self.active_channel != "Composite" and event.button() == Qt.LeftButton:
             # Get click position
             pos = self.mpos
-            if self.active_channel == self.main_channel:
+            if self.active_channels[self.active_channel] == self.main_channel:
                 item = NucleusItem(round(pos.x() - 75 * self.size_factor), round(pos.y() - 38 * self.size_factor),
                                    round(150 * self.size_factor), round(76 * self.size_factor),
                                    round(pos.x()), round(pos.y()),
@@ -225,9 +232,10 @@ class EditorView(pg.GraphicsView):
                 self.parent.setup_editing(item)
             else:
                 item = FocusItem(round(pos.x() - 3.5 * self.size_factor), round(pos.y() - 3.5 * self.size_factor),
-                                 round(7 * self.size_factor), round(7 * self.size_factor), self.active_channel, -1)
+                                 round(7 * self.size_factor), round(7 * self.size_factor),
+                                 self.active_channels[self.active_channel], -1)
                 item.set_pen(
-                    ROIDrawer.MARKERS[self.active_channel],
+                    ROIDrawer.MARKERS[self.active_channels[self.active_channel]],
                     ROIDrawer.MARKERS[-1]
                 )
             item.changed = True
@@ -235,10 +243,10 @@ class EditorView(pg.GraphicsView):
             self.temp_items.append(item)
             # Add item to view
             item.add_to_view(self.plot_item)
-        if self.mode == 1 and self.active_channel != 3 and event.button() == Qt.LeftButton:
+        if self.mode == 1 and self.active_channel != "Composite" and event.button() == Qt.LeftButton:
             items = [x for x in self.scene().items(self.mapToScene(event.pos()))
                      if isinstance(x, NucleusItem) or isinstance(x, FocusItem)]
-            items = [x for x in items if x.channel_index == self.active_channel]
+            items = [x for x in items if x.channel_index == self.active_channels[self.active_channel]]
             if items:
                 if self.selected_item:
                     self.selected_item.enable_editing(False)
@@ -262,6 +270,7 @@ class EditorView(pg.GraphicsView):
 
         :return: None
         """
+        start = time.time()
         # Create connection to database
         conn = sqlite3.connect(Paths.database)
         # Create cursor to do stuff
@@ -289,7 +298,9 @@ class EditorView(pg.GraphicsView):
                 unassociated.extend([x[0] for x in roi_hash])
         # Change the rows of fetched foci
         curs.executemany("UPDATE OR IGNORE roi SET associated=NULL WHERE associated=?", sql_delete)
+        print(f"A: {time.time() - start:.2f} sec")
         for item in self.items:
+            istart = time.time()
             if item.changed:
                 # Check if item was added
                 if item.roi_id != -1:
@@ -304,6 +315,7 @@ class EditorView(pg.GraphicsView):
                                      (None, item.roi_id))
                     else:
                         unassociated.append(item.roi_id)
+                print(f"\nITime 1: {time.time() - start}")
                 # Get coordinates corresponding to the item
                 rr, cc = ellipse(item.center[1], item.center[0], item.height / 2, item.width / 2,
                                  self.image.shape, np.deg2rad(-item.angle))
@@ -318,9 +330,12 @@ class EditorView(pg.GraphicsView):
                 if isinstance(item, FocusItem):
                     unassociated.append(roihash)
                 self.replace_placeholder(maps[item.channel_index], roihash)
+                print(f"ITime 2: {time.time() - start}")
                 self.write_item_to_database(curs, item, roi, rle, self.image, self.roi.ident)
                 # Add ROI to ROIHandler
                 self.roi.rois.append(roi)
+                print(f"ITime 3: {time.time() - start}")
+        print(f"End: {time.time() - start:.2f} sec")
         associations = self.create_associations(self.roi.idents.index(self.roi.main), maps, unassociated)
         # Clean unassociated list
         unassociated = [(x, ) for x in unassociated if x not in associations.keys()]
