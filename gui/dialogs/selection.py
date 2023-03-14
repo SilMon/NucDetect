@@ -1,4 +1,3 @@
-import sqlite3
 from typing import List, Any, Tuple
 
 import pyqtgraph as pg
@@ -8,9 +7,9 @@ from PyQt5.QtGui import QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import QDialog, QCheckBox, QProgressBar
 
 import Paths
+from Util import create_image_item_list_from
 from database.connections import Requester
 from definitions.icons import Icon
-from Util import create_image_item_list_from
 from loader import Loader
 
 pg.setConfigOptions(imageAxisOrder='row-major')

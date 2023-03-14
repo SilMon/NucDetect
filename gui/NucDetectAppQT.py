@@ -27,12 +27,12 @@ from core.Detector import Detector
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 from database.connections import Connector, Requester, Inserter
+from definitions.icons import Icon, Color
 from detector_modules.ImageLoader import ImageLoader
 from dialogs.data import Editor, ExperimentDialog, StatisticsDialog
 from dialogs.selection import ExperimentSelectionDialog
 from dialogs.settings import AnalysisSettingsDialog, SettingsDialog
 from gui import Paths, Util
-from definitions.icons import Icon, Color
 from gui.Util import create_image_item_list_from
 from gui.loader import Loader
 

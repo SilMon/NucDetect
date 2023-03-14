@@ -8,7 +8,6 @@ import time
 from copy import deepcopy
 from typing import Union, Dict, List, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 
 from core.roi.ROI import ROI
@@ -98,7 +97,6 @@ class Detector:
             mapc.get_match_for_nuclei()
             rois.extend(mapc.merge_overlapping_foci())
         rois.extend(main_roi)
-        rois = iproi + mlroi
         # Check for quality of roi
         if rois:
             qroi = self.perform_quality_check(channels, names, analysis_settings, rois)

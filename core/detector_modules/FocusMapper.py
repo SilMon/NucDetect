@@ -2,14 +2,10 @@ import warnings
 from typing import Iterable, Tuple, Dict, List
 
 import numpy as np
-from matplotlib import pyplot as plt
-from skimage import img_as_ubyte
 from skimage.draw import disk
-from skimage.morphology import disk as mdisk
 from skimage.feature import blob_log
-from skimage.filters import median
 
-from DataProcessing import create_lg_lut, create_circular_mask
+from DataProcessing import create_lg_lut
 from detector_modules.AreaMapper import AreaMapper
 
 

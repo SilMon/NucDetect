@@ -2,7 +2,6 @@ import math
 from typing import Iterable, Tuple, List
 
 import numpy as np
-from matplotlib import pyplot as plt
 from numba import njit
 
 

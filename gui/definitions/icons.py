@@ -1,10 +1,11 @@
+import os
+
 import qtawesome as qta
 from PyQt5 import QtGui
 from PyQt5.QtCore import QSize
 from PyQt5.QtGui import QIcon, QColor
 
 import Paths
-import os
 
 
 class Color:

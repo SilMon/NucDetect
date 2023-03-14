@@ -1,5 +1,3 @@
-import sqlite3
-import time
 from typing import List, Iterable, Dict, Tuple
 
 import numpy as np
@@ -8,13 +6,11 @@ from PyQt5 import QtCore
 from PyQt5.QtCore import QRectF, Qt, QPointF
 from PyQt5.QtGui import QColor, QKeyEvent, QMouseEvent
 from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem
-from matplotlib import pyplot as plt
 from skimage.draw import ellipse
 
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 from database.connections import Requester, Inserter
-from gui import Paths
 from gui.loader import ROIDrawerTimer
 
 
