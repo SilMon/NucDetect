@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>475</width>
-    <height>459</height>
+    <height>477</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -75,10 +75,232 @@ QDialog{
   <layout class="QHBoxLayout" name="horizontalLayout">
    <item>
     <layout class="QFormLayout" name="formLayout">
+     <item row="0" column="0">
+      <widget class="QLabel" name="lbl_reanalyse">
+       <property name="text">
+        <string>Re-Analyse:</string>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="1">
+      <widget class="QCheckBox" name="cbx_reanalyse">
+       <property name="toolTip">
+        <string>If checked, all images will be analysed, independent of existing analysis data</string>
+       </property>
+       <property name="text">
+        <string/>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="0">
+      <widget class="QLabel" name="label_13">
+       <property name="text">
+        <string>Use Pre-Processing:</string>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="1">
+      <widget class="QCheckBox" name="cbx_preproc">
+       <property name="text">
+        <string/>
+       </property>
+       <property name="checked">
+        <bool>true</bool>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="0">
+      <widget class="QLabel" name="label_12">
+       <property name="toolTip">
+        <string>Determines the detection boundaries of the analysis. Standard: 63x</string>
+       </property>
+       <property name="text">
+        <string>Objective:</string>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="1">
+      <layout class="QHBoxLayout" name="horizontalLayout_10">
+       <item>
+        <widget class="QPushButton" name="btn_10x">
+         <property name="toolTip">
+          <string>10x Objective</string>
+         </property>
+         <property name="text">
+          <string>10x</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <attribute name="buttonGroup">
+          <string notr="true">objective_selection_group</string>
+         </attribute>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="btn_20x">
+         <property name="toolTip">
+          <string>20x Objective</string>
+         </property>
+         <property name="text">
+          <string>20x</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <attribute name="buttonGroup">
+          <string notr="true">objective_selection_group</string>
+         </attribute>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="btn_40x">
+         <property name="toolTip">
+          <string>40x Objective</string>
+         </property>
+         <property name="text">
+          <string>40x</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="checked">
+          <bool>false</bool>
+         </property>
+         <attribute name="buttonGroup">
+          <string notr="true">objective_selection_group</string>
+         </attribute>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="btn_63x">
+         <property name="toolTip">
+          <string>63x Objective</string>
+         </property>
+         <property name="text">
+          <string>63x</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
+         </property>
+         <attribute name="buttonGroup">
+          <string notr="true">objective_selection_group</string>
+         </attribute>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="btn_100x">
+         <property name="toolTip">
+          <string>100x Objective</string>
+         </property>
+         <property name="text">
+          <string>100x</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <attribute name="buttonGroup">
+          <string notr="true">objective_selection_group</string>
+         </attribute>
+        </widget>
+       </item>
+      </layout>
+     </item>
      <item row="5" column="0">
       <widget class="QLabel" name="label">
        <property name="text">
         <string>Name</string>
+       </property>
+      </widget>
+     </item>
+     <item row="5" column="1">
+      <layout class="QHBoxLayout" name="horizontalLayout_7">
+       <item>
+        <widget class="QLineEdit" name="le_name">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <property name="toolTip">
+          <string>Name of the experiment</string>
+         </property>
+         <property name="text">
+          <string>Default</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="cbx_experiment">
+         <property name="toolTip">
+          <string>Check to create an experiment containing all analysed images</string>
+         </property>
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+     <item row="6" column="0">
+      <widget class="QLabel" name="label_8">
+       <property name="text">
+        <string>Details</string>
+       </property>
+      </widget>
+     </item>
+     <item row="6" column="1">
+      <widget class="QPlainTextEdit" name="pte_details">
+       <property name="enabled">
+        <bool>false</bool>
+       </property>
+       <property name="toolTip">
+        <string>Details about the experiment</string>
+       </property>
+       <property name="plainText">
+        <string>No Details</string>
+       </property>
+      </widget>
+     </item>
+     <item row="7" column="0">
+      <widget class="QLabel" name="label_10">
+       <property name="text">
+        <string>Notes</string>
+       </property>
+      </widget>
+     </item>
+     <item row="7" column="1">
+      <layout class="QHBoxLayout" name="horizontalLayout_8">
+       <item>
+        <widget class="QPlainTextEdit" name="pte_notes">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <property name="toolTip">
+          <string>Additional notes about the experiment</string>
+         </property>
+         <property name="plainText">
+          <string>No Notes</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+     <item row="8" column="0">
+      <widget class="Line" name="line">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+      </widget>
+     </item>
+     <item row="8" column="1">
+      <widget class="QLabel" name="label_7">
+       <property name="text">
+        <string>Active Channels</string>
+       </property>
+       <property name="alignment">
+        <set>Qt::AlignCenter</set>
        </property>
       </widget>
      </item>
@@ -329,40 +551,10 @@ QDialog{
        </item>
       </layout>
      </item>
-     <item row="8" column="1">
-      <widget class="QLabel" name="label_7">
+     <item row="3" column="0">
+      <widget class="QLabel" name="label_11">
        <property name="text">
-        <string>Active Channels</string>
-       </property>
-       <property name="alignment">
-        <set>Qt::AlignCenter</set>
-       </property>
-      </widget>
-     </item>
-     <item row="8" column="0">
-      <widget class="Line" name="line">
-       <property name="orientation">
-        <enum>Qt::Horizontal</enum>
-       </property>
-      </widget>
-     </item>
-     <item row="6" column="0">
-      <widget class="QLabel" name="label_8">
-       <property name="text">
-        <string>Details</string>
-       </property>
-      </widget>
-     </item>
-     <item row="6" column="1">
-      <widget class="QPlainTextEdit" name="pte_details">
-       <property name="enabled">
-        <bool>false</bool>
-       </property>
-       <property name="toolTip">
-        <string>Details about the experiment</string>
-       </property>
-       <property name="plainText">
-        <string>No Details</string>
+        <string>Dots per micron:</string>
        </property>
       </widget>
      </item>
@@ -376,228 +568,19 @@ QDialog{
        </property>
       </widget>
      </item>
-     <item row="5" column="1">
-      <layout class="QHBoxLayout" name="horizontalLayout_7">
-       <item>
-        <widget class="QLineEdit" name="le_name">
-         <property name="enabled">
-          <bool>false</bool>
-         </property>
-         <property name="toolTip">
-          <string>Name of the experiment</string>
-         </property>
-         <property name="text">
-          <string>Default</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QCheckBox" name="cbx_experiment">
-         <property name="toolTip">
-          <string>Check to create an experiment containing all analysed images</string>
-         </property>
-         <property name="text">
-          <string/>
-         </property>
-        </widget>
-       </item>
-      </layout>
-     </item>
-     <item row="7" column="0">
-      <widget class="QLabel" name="label_10">
-       <property name="text">
-        <string>Notes</string>
-       </property>
-      </widget>
-     </item>
-     <item row="7" column="1">
-      <layout class="QHBoxLayout" name="horizontalLayout_8">
-       <item>
-        <widget class="QPlainTextEdit" name="pte_notes">
-         <property name="enabled">
-          <bool>false</bool>
-         </property>
-         <property name="toolTip">
-          <string>Additional notes about the experiment</string>
-         </property>
-         <property name="plainText">
-          <string>No Notes</string>
-         </property>
-        </widget>
-       </item>
-      </layout>
-     </item>
-     <item row="1" column="1">
-      <layout class="QHBoxLayout" name="horizontalLayout_9">
-       <item>
-        <widget class="QRadioButton" name="rbtn_type_c">
-         <property name="toolTip">
-          <string>Analysis will be performed using image processing algorithms</string>
-         </property>
-         <property name="text">
-          <string>Classical</string>
-         </property>
-         <property name="checked">
-          <bool>true</bool>
-         </property>
-         <attribute name="buttonGroup">
-          <string notr="true">type_btn_group</string>
-         </attribute>
-        </widget>
-       </item>
-       <item>
-        <widget class="QRadioButton" name="rbtn_type_ml">
-         <property name="toolTip">
-          <string>Analysis will be performed via a Fully COnvolutional Neural Nerwork with U-Net architecture</string>
-         </property>
-         <property name="text">
-          <string>U-Net (experimentell)</string>
-         </property>
-         <attribute name="buttonGroup">
-          <string notr="true">type_btn_group</string>
-         </attribute>
-        </widget>
-       </item>
-      </layout>
-     </item>
-     <item row="1" column="0">
-      <widget class="QLabel" name="label_11">
-       <property name="text">
-        <string>Type: </string>
-       </property>
-      </widget>
-     </item>
-     <item row="0" column="0">
-      <widget class="QLabel" name="lbl_reanalyse">
-       <property name="text">
-        <string>Re-Analyse:</string>
-       </property>
-      </widget>
-     </item>
-     <item row="0" column="1">
-      <widget class="QCheckBox" name="cbx_reanalyse">
-       <property name="toolTip">
-        <string>If checked, all images will be analysed, independent of existing analysis data</string>
-       </property>
-       <property name="text">
-        <string/>
-       </property>
-      </widget>
-     </item>
      <item row="3" column="1">
-      <layout class="QHBoxLayout" name="horizontalLayout_10">
-       <item>
-        <widget class="QPushButton" name="btn_10x">
-         <property name="toolTip">
-          <string>10x Objective</string>
-         </property>
-         <property name="text">
-          <string>10x</string>
-         </property>
-         <property name="checkable">
-          <bool>true</bool>
-         </property>
-         <attribute name="buttonGroup">
-          <string notr="true">objective_selection_group</string>
-         </attribute>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="btn_20x">
-         <property name="toolTip">
-          <string>20x Objective</string>
-         </property>
-         <property name="text">
-          <string>20x</string>
-         </property>
-         <property name="checkable">
-          <bool>true</bool>
-         </property>
-         <attribute name="buttonGroup">
-          <string notr="true">objective_selection_group</string>
-         </attribute>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="btn_40x">
-         <property name="toolTip">
-          <string>40x Objective</string>
-         </property>
-         <property name="text">
-          <string>40x</string>
-         </property>
-         <property name="checkable">
-          <bool>true</bool>
-         </property>
-         <property name="checked">
-          <bool>false</bool>
-         </property>
-         <attribute name="buttonGroup">
-          <string notr="true">objective_selection_group</string>
-         </attribute>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="btn_63x">
-         <property name="toolTip">
-          <string>63x Objective</string>
-         </property>
-         <property name="text">
-          <string>63x</string>
-         </property>
-         <property name="checkable">
-          <bool>true</bool>
-         </property>
-         <property name="checked">
-          <bool>true</bool>
-         </property>
-         <attribute name="buttonGroup">
-          <string notr="true">objective_selection_group</string>
-         </attribute>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="btn_100x">
-         <property name="toolTip">
-          <string>100x Objective</string>
-         </property>
-         <property name="text">
-          <string>100x</string>
-         </property>
-         <property name="checkable">
-          <bool>true</bool>
-         </property>
-         <attribute name="buttonGroup">
-          <string notr="true">objective_selection_group</string>
-         </attribute>
-        </widget>
-       </item>
-      </layout>
-     </item>
-     <item row="3" column="0">
-      <widget class="QLabel" name="label_12">
+      <widget class="QDoubleSpinBox" name="spbx_mmpd">
        <property name="toolTip">
-        <string>Determines the detection boundaries of the analysis. Standard: 63x</string>
+        <string>Standard value (1.3938) assumes a 1024x1024 image at 630 magnification</string>
        </property>
-       <property name="text">
-        <string>Objective:</string>
-       </property>
-      </widget>
-     </item>
-     <item row="2" column="0">
-      <widget class="QLabel" name="label_13">
-       <property name="text">
-        <string>Use Pre-Processing:</string>
-       </property>
-      </widget>
-     </item>
-     <item row="2" column="1">
-      <widget class="QCheckBox" name="cbx_preproc">
-       <property name="text">
+       <property name="suffix">
         <string/>
        </property>
-       <property name="checked">
-        <bool>true</bool>
+       <property name="decimals">
+        <number>4</number>
+       </property>
+       <property name="value">
+        <double>1.393800000000000</double>
        </property>
       </widget>
      </item>
@@ -651,8 +634,7 @@ QDialog{
   </connection>
  </connections>
  <buttongroups>
-  <buttongroup name="type_btn_group"/>
-  <buttongroup name="main_channel_btn_group"/>
   <buttongroup name="objective_selection_group"/>
+  <buttongroup name="main_channel_btn_group"/>
  </buttongroups>
 </ui>

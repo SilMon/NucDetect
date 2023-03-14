@@ -1,5 +1,7 @@
-import numpy as np
 from typing import List, Tuple, Dict, Iterable
+
+import numpy as np
+from numba.typed import List as nList
 
 from roi.AreaAnalysis import imprint_area_into_array
 from roi.ROI import ROI
@@ -82,7 +84,7 @@ def create_nucleus_hash_map(nuclei: Iterable[ROI], shape: Tuple[int, int]) -> np
     """
     map_ = np.zeros(shape=shape, dtype="int64")
     for nucleus in nuclei:
-        imprint_area_into_array(nucleus.area, map_, hash(nucleus))
+        imprint_area_into_array(nList(nucleus.area), map_, hash(nucleus))
     return map_
 
 
@@ -113,7 +115,7 @@ def associate_roi(rois: Iterable[ROI], main_map: np.ndarray) -> None:
     """
     for roi in rois:
         # Calculate center of roi
-        y, x = roi.calculate_dimensions()["center"]
-        # Look if center corresponds to an nucleus
+        y, x = roi.calculate_dimensions()["center_y"], roi.calculate_dimensions()["center_x"]
+        # Look if center corresponds to a nucleus
         if main_map[y][x] and main_map[y][x] > 0 and not roi.main:
             roi.associated = main_map[y][x]

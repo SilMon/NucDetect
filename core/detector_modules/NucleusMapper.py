@@ -1,15 +1,16 @@
-from detector_modules.AreaMapper import AreaMapper
-from scipy import ndimage as ndi
-import matplotlib.pyplot as plt
-from skimage.filters.rank import maximum
-from skimage.segmentation import watershed
-from skimage.filters import threshold_local
-from skimage import img_as_ubyte
-from skimage.morphology.binary import binary_opening
-import numpy as np
 import warnings
-from JittedFunctions import create_circular_mask
-from typing import Iterable, Tuple, Dict, List
+from typing import List
+
+import numpy as np
+from scipy import ndimage as ndi
+from skimage import img_as_ubyte
+from skimage.filters import threshold_local
+from skimage.filters.rank import maximum
+from skimage.morphology.binary import binary_opening
+from skimage.segmentation import watershed
+
+from DataProcessing import create_circular_mask
+from detector_modules.AreaMapper import AreaMapper
 
 
 class NucleusMapper(AreaMapper):
@@ -26,7 +27,7 @@ class NucleusMapper(AreaMapper):
         "logging": False
     }
 
-    def get_nucleus_maps(self) -> Iterable[np.ndarray]:
+    def get_nucleus_maps(self) -> np.ndarray:
         """
         Method to create the nucleus map for the given channel
 
@@ -43,7 +44,7 @@ class NucleusMapper(AreaMapper):
             warnings.warn("No settings found, standard settings used for nucleus mapping")
         return self.map_nuclei()
 
-    def map_nuclei(self) -> Iterable[np.ndarray]:
+    def map_nuclei(self) -> np.ndarray:
         """
         Function to map the nuclei on the given main channel
 
@@ -107,11 +108,12 @@ class NucleusMapper(AreaMapper):
         thresh = threshold_local(maxi, block_size=(mask_size * local_threshold_multiplier + 1) * size_factor)
         maxi = ndi.binary_fill_holes(maxi > thresh)
         maxi = np.logical_and(maxi, binary_map)
-        maxi = binary_opening(maxi, selem=create_circular_mask(mask_size * maximum_size_multiplier * size_factor,
-                                                               mask_size * maximum_size_multiplier * size_factor))
+        maxi = binary_opening(maxi, footprint=create_circular_mask(mask_size * maximum_size_multiplier * size_factor,
+                                                                   mask_size * maximum_size_multiplier * size_factor))
         return maxi
 
-    def create_center_mask(self, max_it: np.ndarray) -> np.ndarray:
+    @staticmethod
+    def create_center_mask(max_it: np.ndarray) -> np.ndarray:
         """
         Method to create a center mask for watershed segmentation
 

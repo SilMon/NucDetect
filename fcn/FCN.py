@@ -1,3 +1,4 @@
+import logging
 import time
 from pathlib import Path
 from typing import List, Tuple, Union
@@ -5,8 +6,9 @@ from typing import List, Tuple, Union
 import numpy as np
 import tensorflow as tf
 from numba import jit
+from scipy.ndimage import label
 from skimage import io
-from tensorflow.keras import models
+from tensorflow.python.keras import models
 
 
 class FCN:
@@ -26,7 +28,6 @@ class FCN:
                 # Currently, memory growth needs to be the same across GPUs
                 for gpu in gpus:
                     tf.config.experimental.set_memory_growth(gpu, True)
-                logical_gpus = tf.config.experimental.list_logical_devices('GPU')
             except RuntimeError as e:
                 # Memory growth must be set before GPUs have been initialized
                 print(e)
@@ -50,7 +51,7 @@ class FCN:
                       model: int,
                       channels: List[int],
                       threshold: float = 0.35,
-                      logging=True) -> List[np.ndarray]:
+                      logging_=True) -> List[np.ndarray]:
         """
         Method to create the prediction mask of an image, specified by path
 
@@ -58,33 +59,35 @@ class FCN:
         :param model: The model to use for the prediction
         :param channels: A list containing the indices of channels to analyse
         :param threshold: The minimal certainty of the prediction
-        :param logging: Enables logging
+        :param logging_: Enables logging
         :return: The prediction mask
         """
         # Load the image
-        if path is isinstance(path, np.ndarray):
+        if isinstance(path, np.ndarray):
             img = path
         else:
             img = io.imread(path)
+        logging.info("Image loaded")
         start = time.time()
         # Split the image into tiles
         tiles = self.split_image(img, channels)
+        logging.info("Sub-Images created")
         # Create predictions for all tiles
         pred_tiles = []
         threshs = []
         model = self.nuc_model if model == self.NUCLEI else self.foc_model
         for i in range(len(channels)):
             pred_tiles.append(FCN.predict_tiles(tiles[i], model))
-        FCN.log(f"Prediction finished: {time.time() - start} secs", logging)
+        logging.info(f"Prediction finished in {time.time() - start:.4f}")
         maps = []
         # Merge predictions for the tiles to create the prediction map
         for p in pred_tiles:
             maps.append(FCN.merge_prediction_masks(p, img.shape))
-        FCN.log(f"Merging finished: {time.time() - start:.4f} secs", logging)
+        logging.info(f"Prediction masks merged ({time.time() - start:.4f} secs)")
         # Threshold maps
         for m in maps:
             threshs.append(FCN.threshold_prediction_mask(m, threshold=threshold))
-        FCN.log(f"Thresholding finished: {time.time() - start:.4f} secs", logging)
+        logging.info("Prediction masks converted to binary maps ({time.time() - start:.4f} secs")
         return threshs
 
     @staticmethod
@@ -95,9 +98,10 @@ class FCN:
         :return: A tuple of the loaded models
         """
         nuc_path: Path = FCN.script_dir / "nucleus_detector.h5"
-        foc_path: Path = FCN.script_dir / "focus_detector.h5"
-        nuc_model = models.load_model(nuc_path.resolve())
-        foc_model = models.load_model(foc_path.resolve())
+        foc_path: Path = FCN.script_dir / "detector.h5"
+        nuc_model = models.load_models(nuc_path.resolve())
+        foc_model = models.load_models(foc_path.resolve())
+        logging.info("Models loaded")
         return nuc_model, foc_model
 
     @staticmethod
@@ -134,7 +138,10 @@ class FCN:
                 x2 = ts * (x + 1)
                 for channel in range(len(channels)):
                     # Extract the channel
-                    c = img[..., channels[channel]]
+                    if len(img.shape) > 2:
+                        c = img[..., channels[channel]]
+                    else:
+                        c = img
                     extract = c[y1:y2, x1:x2]
                     tile = np.zeros(shape=(ts, ts))
                     tile[0:extract.shape[0], 0:extract.shape[1]] = extract
@@ -203,6 +210,8 @@ class FCN:
         width = prediction_mask.shape[1]
         mask = prediction_mask > threshold
         mask = mask.astype("uint8")
+        return label(mask)
+        """
         # Label the individual areas of the map
         label = 2
         for y in range(height):
@@ -211,6 +220,7 @@ class FCN:
                     FCN.flood_fill(mask, (y, x), label)
                     label += 1
         return mask
+        """
 
     @staticmethod
     @jit(nopython=True)
@@ -241,7 +251,7 @@ class FCN:
 
     @staticmethod
     def predict_tiles(tiles: List[np.ndarray],
-                      model: tf.keras.Model) -> List[np.ndarray]:
+                      model: models.Model) -> List[np.ndarray]:
         """
         Method to predict a list of tiles
 

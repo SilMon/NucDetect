@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import csv
+import multiprocessing
 import os
-import re
 import shutil
 import sqlite3
 import sys
@@ -26,11 +26,13 @@ from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSpl
 from core.Detector import Detector
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
+from database.connections import Connector, Requester, Inserter
 from detector_modules.ImageLoader import ImageLoader
+from dialogs.data import Editor, ExperimentDialog, StatisticsDialog
+from dialogs.selection import ExperimentSelectionDialog
+from dialogs.settings import AnalysisSettingsDialog, SettingsDialog
 from gui import Paths, Util
-from gui.Definitions import Icon
-from gui.Dialogs import ExperimentDialog, ExperimentSelectionDialog, StatisticsDialog, ImgDialog, SettingsDialog, \
-    AnalysisSettingsDialog, Editor
+from definitions.icons import Icon, Color
 from gui.Util import create_image_item_list_from
 from gui.loader import Loader
 
@@ -58,10 +60,14 @@ class NucDetect(QMainWindow):
         # Create working directories
         self.create_required_dirs()
         # Connect to database
-        self.connection = sqlite3.connect(Paths.database)
-        self.cursor = self.connection.cursor()
-        # Create tables if they do not exists
-        self.create_tables(self.cursor)
+        self.connector = Connector()
+        # Create needed tables if necessary
+        self.connector.create_tables()
+        # Create standard settings if necessary
+        self.connector.create_standard_settings()
+        self.req_connector = Connector(protected=False)
+        self.requester = Requester(self.req_connector)
+        self.inserter = Inserter(self.connector)
         # Load the settings from database
         self.settings = self.load_settings()
         # Create detector for analysis
@@ -85,145 +91,7 @@ class NucDetect(QMainWindow):
         self.unsaved_changes = False
         # Setup UI
         self._setup_ui()
-        self.icon = Icon.get_icon("LOGO")
-        self.setWindowTitle("NucDetect")
-        self.setWindowIcon(self.icon)
         self.showMaximized()
-
-    @staticmethod
-    def create_tables(cursor: sqlite3.Cursor) -> None:
-        """
-        Method to create the tables in the database
-
-        :param cursor: Cursor for the database
-        :return: None
-        """
-        # Create the tables
-        cursor.executescript(
-            '''
-            BEGIN TRANSACTION;
-            CREATE TABLE IF NOT EXISTS "categories" (
-                            "image"	INTEGER,
-                            "category"	TEXT,
-                            PRIMARY KEY("image","category")
-            ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS "channels" (
-                            "md5"	INTEGER,
-                            "index_"	INTEGER,
-                            "name"	INTEGER,
-                            "active"	INTEGER,
-                            "main"	INTEGER,
-                            PRIMARY KEY("md5","index_")
-            ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS "experiments" (
-                            "name"	TEXT,
-                            "details"	TEXT,
-                            "notes"	TEXT,
-                            PRIMARY KEY("name")
-            ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS "groups" (
-                            "image"	INTEGER,
-                            "experiment"	INTEGER,
-                            "name"	TEXT,
-                            PRIMARY KEY("image","experiment")
-            ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS "images" (
-                            "md5"	TEXT,
-                            "datetime"	TEXT,
-                            "channels"	INTEGER NOT NULL,
-                            "width"	INTEGER NOT NULL,
-                            "height"	INTEGER NOT NULL,
-                            "x_res"	INTEGER,
-                            "y_res"	INTEGER,
-                            "unit"	INTEGER,
-                            "analysed"	INTEGER NOT NULL,
-                            "settings"	TEXT,
-                            "experiment"	TEXT,
-                            "modified" INTEGER NOT NULL,
-                            PRIMARY KEY("md5")
-            ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS "points" (
-                            "hash"	INTEGER,
-                            "row"	INTEGER,
-                            "column"	INTEGER,
-                            "width"	INTEGER,
-                            PRIMARY KEY("hash","row","column")
-            ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS "roi" (
-                            "hash"	INTEGER,
-                            "image"	INTEGER,
-                            "auto"	INTEGER,
-                            "channel"	TEXT,
-                            "center"	TEXT,
-                            "width"	INTEGER,
-                            "height"	INTEGER,
-                            "associated"	INTEGER,
-                            PRIMARY KEY("hash","image")
-            ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS "settings" (
-                            "key_"	TEXT,
-                            "value"	TEXT,
-                            "type_" TEXT,
-                            PRIMARY KEY("key_")
-            ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS "statistics" (
-                            "hash"	INTEGER,
-                            "image"	INTEGER,
-                            "area"	INTEGER,
-                            "intensity_average"	INTEGER,
-                            "intensity_median"	INTEGER,
-                            "intensity_maximum"	INTEGER,
-                            "intensity_minimum"	INTEGER,
-                            "intensity_std"	INTEGER,
-                            "eccentricity"	INTEGER,
-                            "roundness"	INTEGER,
-                            "ellipse_center"	TEXT,
-                            "ellipse_major"	INTEGER,
-                            "ellipse_minor"	INTEGER,
-                            "ellipse_angle"	INTEGER,
-                            "ellipse_area"	INTEGER,
-                            "orientation_vector"	TEXT,
-                            "ellipticity"	INTEGER,
-                            PRIMARY KEY("hash","image")
-            ) WITHOUT ROWID;
-            COMMIT;
-            '''
-        )
-        # Create the standard settings
-        cursor.executescript(
-            '''
-            BEGIN TRANSACTION;
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("logging", 1, "bool");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("exp_std_name", "Default", "str");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("names", "Red;Green;Blue", "str");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("main_channel", 2, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("logging", 1, "bool");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("ml_analysis", 0, "bool");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("quality_check", 1, "bool");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_sigma", 2, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_sigma", 5, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("num_sigma", 10, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("acc_thresh", 0.945, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("iterations", 10, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("mask_size", 7, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("percent_hmax", 0.05, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("local_threshold_multiplier", 8, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("maximum_size_multiplier", 2, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_nuclei", 0.95, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_foci", 0.80, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("show_ellipsis", 1, "bool");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("track_mouse", 1, "bool");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_main_area", 750, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_foc_area", 8, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_main_area", 30000, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_foc_area", 280, "int");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_foc_int", 0.075, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("overlap", 0.5, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("size_factor", 1, "float");
-            INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("num_threads", 8, "int");
-            COMMIT;
-            '''
-        )
 
     @staticmethod
     def create_required_dirs() -> None:
@@ -247,11 +115,9 @@ class NucDetect(QMainWindow):
         Method to load the saved Settings
         :return: None
         """
-        self.cursor.execute(
-            "SELECT * FROM settings"
-        )
+        settings_sql = self.requester.get_all_settings()
         settings = {}
-        for row in self.cursor.fetchall():
+        for row in settings_sql:
             settings[row[0]] = self.convert_to_type(row[1], row[2])
         return settings
 
@@ -290,6 +156,11 @@ class NucDetect(QMainWindow):
         :return: None
         """
         self.ui = uic.loadUi(Paths.ui_main, self)
+        self.ui.setStyleSheet(open("definitions/css/main.css").read())
+        # General Window Initialization
+        self.setWindowTitle("NucDetect - Focus Analysis Software")
+        self.setWindowIcon(Icon.get_icon("LOGO"))
+        self.ui.lbl_logo.setPixmap(QPixmap("definitions/images/banner.png"))
         # Initialization of the image list
         self.img_list_model = QStandardItemModel(self.ui.list_images)
         self.ui.list_images.setModel(self.img_list_model)
@@ -310,9 +181,7 @@ class NucDetect(QMainWindow):
         self.ui.btn_experiments.clicked.connect(self.show_experiment_dialog)
         self.ui.btn_save.clicked.connect(self.save_results)
         self.ui.btn_analyse.clicked.connect(self.analyze)
-        self.ui.btn_images.clicked.connect(self.show_result_image)
         self.ui.btn_statistics.clicked.connect(self.show_statistics)
-        self.ui.btn_categories.clicked.connect(self.show_categorization)
         self.ui.btn_settings.clicked.connect(self.show_settings)
         self.ui.btn_modify.clicked.connect(self.show_modification_window)
         self.ui.btn_analyse_all.clicked.connect(self.analyze_all)
@@ -323,9 +192,7 @@ class NucDetect(QMainWindow):
         self.ui.btn_load.setIcon(Icon.get_icon("FOLDER_OPEN"))
         self.ui.btn_experiments.setIcon(Icon.get_icon("FLASK"))
         self.ui.btn_save.setIcon(Icon.get_icon("SAVE"))
-        self.ui.btn_images.setIcon(Icon.get_icon("MICROSCOPE"))
         self.ui.btn_statistics.setIcon(Icon.get_icon("CHART_BAR"))
-        self.ui.btn_categories.setIcon(Icon.get_icon("LIST_UL"))
         self.ui.btn_settings.setIcon(Icon.get_icon("COGS"))
         self.ui.btn_modify.setIcon(Icon.get_icon("TOOLS"))
         self.ui.btn_analyse.setIcon(Icon.get_icon("HAT_WIZARD_BLUE"))
@@ -358,29 +225,8 @@ class NucDetect(QMainWindow):
         if self.cur_img:
             ana = self.cur_img["analysed"]
             if ana:
-                exp = self.cursor.execute("SELECT experiment FROM images WHERE md5=?",
-                                          (self.cur_img["key"],)).fetchall()
-                experiment = None
-                # Check if image is part of an experiment
-                if exp[0][0]:
-                    # Get number of attached images
-                    num_imgs = self.cursor.execute("SELECT COUNT(md5) FROM images WHERE experiment=?",
-                                                   exp[0]).fetchall()[0][0]
-                    msg = QMessageBox()
-                    msg.setStyleSheet(open("messagebox.css", "r").read())
-                    msg.setWindowIcon(QtGui.QIcon('logo.png'))
-                    msg.setIcon(QMessageBox.Information)
-                    msg.setWindowTitle("Experiment attached!")
-                    msg.setText("")
-                    msg.setInformativeText(f"The selected image is assigned to the experiment {exp[0][0]}, "
-                                           f"with {num_imgs} attached images. Loading it can take up"
-                                           f" to approx. {num_imgs * 5 / 60:.2f} min ({num_imgs * 5} secs). ")
-                    msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
-                    msg.button(QMessageBox.Ok).setText("Load Experiment")
-                    msg.button(QMessageBox.Cancel).setText("Load Image Data")
-                    ok = msg.exec_()
-                    if ok == QMessageBox.Ok:
-                        experiment = exp[0][0]
+                # Get information for this image
+                experiment = self.show_experiment_loading_warning_dialog()
                 self.prg_signal.emit(f"Loading data from database for {self.cur_img['file_name']}",
                                      0, 100, "")
                 thread = Thread(target=self.load_saved_data, args=(experiment, ))
@@ -391,6 +237,52 @@ class NucDetect(QMainWindow):
                 self.enable_buttons(False, ana_buttons=False)
         else:
             self.ui.btn_analyse.setEnabled(False)
+
+    def show_experiment_loading_warning_dialog(self) -> Union[str, None]:
+        """
+        Method to show the experiment loading warning dialog for the current image
+
+        :return: The name of the associated experiment, if any. None if the image is not associated
+        """
+        # Get the associated experiment
+        exp = self.requester.get_experiment_for_image(self.cur_img["key"])
+        if not exp:
+            return
+        # Get number of attached images
+        num_imgs = self.requester.get_associated_images_for_experiment(exp)
+        exit_code = self.open_two_choice_dialog(
+            "Experiment attached!",
+            "",
+            f"The selected image is assigned to the experiment {exp}, "
+            f"with {num_imgs} attached images. Loading it can take up"
+            f" to approx. {num_imgs / 60:.2f} min ({num_imgs} secs). ",
+            ("Load Experiment", "Load Image Data")
+        )
+        return exp if exit_code == QMessageBox.Ok else None
+
+    @staticmethod
+    def open_two_choice_dialog(title: str = "", info: str = "", text: str = "",
+                               button_texts: Tuple[str, str] = ("", "")) -> int:
+        """
+        Method to open a two choice dialog
+
+        :param title: The window title
+        :param info: The info text
+        :param text: The general text
+        :param button_texts: The texts for the buttons
+        :return: The exit code of the dialog
+        """
+        msg = QMessageBox()
+        msg.setStyleSheet(open("gui/definitions/css/messagebox.css", "r").read())
+        msg.setWindowIcon(QtGui.QIcon('gui/definitions/images/logo.png'))
+        msg.setIcon(QMessageBox.Information)
+        msg.setWindowTitle(title)
+        msg.setText(text)
+        msg.setInformativeText(info)
+        msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+        msg.button(QMessageBox.Ok).setText(button_texts[0])
+        msg.button(QMessageBox.Cancel).setText(button_texts[1])
+        return msg.exec_()
 
     def load_saved_data(self, experiment: str = None) -> None:
         """
@@ -458,15 +350,17 @@ class NucDetect(QMainWindow):
         for t in os.walk(url):
             tpaths = [os.path.join(t[0], x) for x in t[2]]
             paths.extend([x for x in tpaths if x not in self.loaded_files])
-        self.loaded_files.extend(paths)
+        self.loaded_files.extend(sorted(paths, key=lambda x: os.path.basename(x)))
+        batch_size = max(len(paths) // 200, 15)
         # Check if the list of available files is larger than 25
         if len(self.loaded_files) > 25 and not reload:
             self.setEnabled(False)
             self.update_timer = Loader(self.loaded_files, feedback=self.add_image_items,
-                                       processing=create_image_item_list_from)
+                                       processing=create_image_item_list_from, batch_size=batch_size)
         elif len(self.loaded_files) > 25:
             self.setEnabled(False)
-            self.update_timer = Loader(paths, feedback=self.add_image_items, processing=create_image_item_list_from)
+            self.update_timer = Loader(paths, feedback=self.add_image_items,
+                                       processing=create_image_item_list_from, batch_size=batch_size)
         else:
             self.enable_buttons(True)
             items = Util.create_image_item_list_from(paths, indicate_progress=True)
@@ -502,24 +396,23 @@ class NucDetect(QMainWindow):
             path = item.data()["path"]
             key = item.data()["key"]
             name = item.data()["file_name"]
+            if key in self.hash_to_name.keys():
+                return
             self.hash_to_name[key] = name
             self.img_list_model.appendRow(item)
             self.reg_images.append((key, path))
-            if not self.cursor.execute(
-                    "SELECT * FROM images WHERE md5 = ?",
-                    (key,)
-            ).fetchall():
+            info = self.requester.get_info_for_image(key)
+            # If the image cannot be found in the database, add it
+            if not info:
                 d = ImageLoader.get_image_data(path)
-                self.cursor.execute(
-                    "INSERT OR IGNORE INTO images VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (key, d["datetime"], d["channels"], d["width"], d["height"],
-                     str(d["x_res"]), str(d["y_res"]), d["unit"], 0, -1, None, 0)
-                )
-            self.connection.commit()
+                self.inserter.add_new_image(key, d["year"], d["month"], d["day"], d["hour"], d["day"],
+                                            d["channels"], d["width"], d["height"], d["x_res"],
+                                            d["y_res"], d["unit"])
+                self.connector.commit_changes()
 
     def remove_image_from_list(self) -> None:
         """
-        Method to remove an loaded image from the file list.
+        Method to remove a loaded image from the file list.
 
         :return: None
         """
@@ -537,9 +430,29 @@ class NucDetect(QMainWindow):
         self.img_list_model.clear()
         self.reg_images.clear()
 
+    def show_analysis_settings_dialog(self, show_redo_option: bool = False) -> Union[Dict, None]:
+        """
+        Method to show the analysis settings dialog
+
+        :return: Bool which signifies if the dialog was confirmed or cancelled
+        """
+        anal_sett_dial = AnalysisSettingsDialog(settings=self.settings,
+                                                all_=show_redo_option)
+        code = anal_sett_dial.exec()
+        if code == QDialog.Accepted:
+            settings = anal_sett_dial.get_data()
+            an_sett = settings["analysis_settings"]
+            settings["analysis_settings"].update({x: y for (x, y) in self.settings.items() if x not in an_sett})
+            return settings
+        else:
+            # If the dialog was rejected, abort analysis
+            self.ui.list_images.setEnabled(True)
+            self.enable_buttons(True)
+            return None
+
     def analyze(self) -> None:
         """
-        Method to analyze an loaded image
+        Method to analyze a loaded image
 
         :return: None
         """
@@ -548,16 +461,9 @@ class NucDetect(QMainWindow):
         # Get settings for this analysis
         self.ui.list_images.setEnabled(False)
         self.enable_buttons(False)
-        anal_sett_dial = AnalysisSettingsDialog(settings=self.settings)
-        code = anal_sett_dial.exec()
-        if code == QDialog.Accepted:
-            settings = anal_sett_dial.get_data()
-            an_sett = settings["analysis_settings"]
-            settings["analysis_settings"].update({x: y for (x, y) in self.settings.items() if x not in an_sett})
-        else:
+        settings = self.show_analysis_settings_dialog()
+        if not settings:
             # If the dialog was rejected, abort analysis
-            self.ui.list_images.setEnabled(True)
-            self.enable_buttons(True)
             return
         self.res_table_model.setRowCount(0)
         self.prg_signal.emit(f"Analysing {self.cur_img['file_name']}",
@@ -601,6 +507,7 @@ class NucDetect(QMainWindow):
         print(f"Creation result table: {time.time() - s0:.4f} secs")
         self.prg_signal.emit("Checking database", maxi * 0.9, maxi, "")
         s1 = time.time()
+
         self.save_rois_to_database(data)
         print(f"Writing to database: {time.time() - s1:.4f} secs")
         self.prg_signal.emit(message.format(f"{time.time() - start:.2f} secs"),
@@ -608,6 +515,7 @@ class NucDetect(QMainWindow):
         self.create_result_table_from_list(self.roi_cache)
         self.enable_buttons()
         self.ui.list_images.setEnabled(True)
+        self.reflect_item_status_changes()
 
     def analyze_all(self) -> None:
         """
@@ -619,16 +527,8 @@ class NucDetect(QMainWindow):
         self.ui.list_images.setEnabled(False)
         self.unsaved_changes = True
         # Get settings for this analysis
-        anal_sett_dial = AnalysisSettingsDialog(all_=True, settings=self.settings)
-        code = anal_sett_dial.exec()
-        if code == QDialog.Accepted:
-            settings = anal_sett_dial.get_data()
-            an_sett = settings["analysis_settings"]
-            settings["analysis_settings"].update({x: y for (x, y) in self.settings.items() if x not in an_sett})
-        else:
-            # If the dialog was rejected, abort analysis
-            self.ui.list_images.setEnabled(True)
-            self.enable_buttons(True)
+        settings = self.show_analysis_settings_dialog(show_redo_option=True)
+        if not settings:
             return
         thread = Thread(target=self._analyze_all, args=(settings, ))
         thread.start()
@@ -642,8 +542,8 @@ class NucDetect(QMainWindow):
         :return: None
         """
         start_time = time.time()
-        max_workers = 1 if settings["type"] else settings["analysis_settings"]["num_threads"]
-        with ProcessPoolExecutor(max_workers=max_workers) as e:
+        # Use all available threads except 4
+        with ProcessPoolExecutor(max_workers=multiprocessing.cpu_count() - 1) as e:
             self.res_table_model.setRowCount(0)
             self.res_table_model.setColumnCount(2)
             self.res_table_model.setHorizontalHeaderLabels(["Image Name", "Image Hash", "Number of ROI"])
@@ -662,8 +562,6 @@ class NucDetect(QMainWindow):
             start = batch_size + 1 if batch_size < len(paths) else len(paths) + 1
             stop = len(paths) + batch_size if len(paths) > batch_size else len(paths) + 2
             step = batch_size
-            # Clear results table
-
             # Iterate over all images in batches
             for b in range(start, stop, step):
                 s2 = time.time()
@@ -678,12 +576,20 @@ class NucDetect(QMainWindow):
                     self.save_rois_to_database(r, all_=True)
                     self.res_table_model.appendRow(
                         [QStandardItem(self.hash_to_name[r["handler"].ident]),
-                        QStandardItem(r["handler"].ident),
+                         QStandardItem(r["handler"].ident),
                          QStandardItem(str(len(r["handler"])))]
                     )
                     ind += 1
-                print(f"Analysed batch {cur_batch} in {time.time() - s2:.3f} secs\t"
-                      f"Total: {time.time() - start_time:.3f} secs")
+                    self.ui.table_results.scrollToBottom()
+                images_left = maxi - ind
+                time_per_image = int((time.time() - start_time) / ind)
+                eta = images_left * time_per_image
+                h = eta // 3600
+                m = eta % 3600 // 60
+                s = eta % 3600 % 60
+                print(f"Analysed batch {cur_batch: 02d}/{maxi // step: 02d} in {time.time() - s2: 09.3f} secs\t\t"
+                      f"Total: {time.time() - start_time: 09.3f} secs\t\t"
+                      f"ETA: {h:02d}h:{m:02d}m:{s:02d}s")
                 curind = b
                 cur_batch += 1
             self.enable_buttons()
@@ -699,10 +605,11 @@ class NucDetect(QMainWindow):
                 data["analysed"] = True
                 item.setData(data)
             self.selec_signal.emit(True)
+            self.check_all_item_statuses()
         print(f"Total analysis time: {time.time() - start_time:.3f} secs")
 
     @staticmethod
-    def save_rois_to_database(data: Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]],
+    def save_rois_to_database(data: Dict[str, Union[str, ROIHandler, np.ndarray, Dict[str, str]]],
                               all_: bool = False) -> None:
         """
         Method to save the data stored in the ROIHandler rois to the database
@@ -711,102 +618,65 @@ class NucDetect(QMainWindow):
         :param all_: Deactivates printing to console
         :return: None
         """
-        con = sqlite3.connect(Paths.database)
-        curs = con.cursor()
         key = data["id"]
-        # Delete existing analysis data if image was already analysed
-        if curs.execute(
-                "SELECT analysed FROM images WHERE md5 = ?",
-                (key,)
-        ).fetchall()[0][0]:
-            for h in curs.execute(
-                    "SELECT hash FROM roi WHERE image = ?",
-                    (key,)
-            ).fetchall():
-                # Delete saved points
-                curs.execute(
-                    "DELETE FROM points where hash = ?",
-                    (h[0],)
-                )
-                # Delete saved statistics
-                curs.execute(
-                    "DELETE FROM statistics where hash = ?",
-                    (h[0], )
-                )
-            curs.execute(
-                "DELETE FROM roi WHERE image = ?",
-                (key,)
-            )
+        # Establish new connector
+        req = Requester()
+        ins = Inserter()
+        # Get info for image and check if image was analysed already
+        if req.get_info_for_image(key)[8]:
+            # Delete saved data
+            ins.delete_existing_image_data(key)
         # Check if image should be added to experiment
         if data["add to experiment"]:
             exp_data = data["experiment details"]
-            # Add new experiment
-            curs.execute(
-                "INSERT OR IGNORE INTO experiments VALUES (?, ?, ?)",
-                (exp_data["name"], exp_data["details"], exp_data["notes"])
-            )
-            # Add image to standard group
-            curs.execute(
-                "INSERT OR IGNORE INTO groups VALUES(?, ?, ?)",
-                (key, exp_data["name"], "Standard")
-            )
-            # Update experiment column in images table
-            curs.execute(
-                "UPDATE images SET experiment = ? WHERE md5 = ?",
-                (exp_data["name"], key)
-            )
+            ins.add_image_to_experiment(key, exp_data["name"], exp_data["details"],
+                                        exp_data["notes"], "Standard")
         # Update channel info
         for ind in range(len(data["names"])):
-            active = data["active channels"][ind]
-            name = data["names"][ind]
-            main = True if data["main channel"] == ind else False
-            curs.execute(
-                "INSERT OR IGNORE INTO channels VALUES (?, ?, ?, ?, ?)",
-                (key, ind, name, active, main)
-            )
+            ins.add_channel(key, ind, data["names"][ind],
+                            data["active channels"][ind], data["main channel"] == ind)
         # Save data for detected ROI
+        roidat, pdat, elldat = NucDetect.prepare_roihandler_for_database(data["handler"], data["channels"])
+        # Check if there is any data to save
+        if roidat:
+            # Save data to database
+            ins.save_roi_data_for_image(key, roidat, pdat, elldat)
+        ins.commit_and_close()
+        req.commit_and_close()
+        if not all_:
+            print("ROI saved to database")
+
+    @staticmethod
+    def prepare_roihandler_for_database(handler: ROIHandler, channels: List[np.ndarray]) -> Tuple[List, List, List]:
+        """
+        Function to get the necessary data to save the given ROI to the database
+        :param handler: The roi handler holding the ROI
+        :param channels: List of the channels the roi are derived from
+        :return: General ROI data, ROI area data
+        """
         roidat = []
         pdat = []
         elldat = []
         # Collect data
-        for roi in data["handler"].rois:
+        for roi in handler.rois:
             dim = roi.calculate_dimensions()
             ellp = roi.calculate_ellipse_parameters()
             # Get the channel of the roi
-            stats = roi.calculate_statistics(data["channels"][data["handler"].idents.index(roi.ident)])
-            asso = hash(roi.associated) if roi.associated is not None else None
-            roidat.append((hash(roi), key, True, roi.ident, str(dim["center"]), dim["width"], dim["height"], asso))
+            stats = roi.calculate_statistics(channels[handler.idents.index(roi.ident)])
+            asso = hash(roi.associated) if roi.associated else None
+            roidat.append((hash(roi), handler.ident, True, roi.ident,
+                           str(dim["center_x"]), str(dim["center_y"]),
+                           dim["width"], dim["height"], asso, roi.detection_method, roi.match))
             for p in roi.area:
                 pdat.append((hash(roi), p[0], p[1], p[2]))
-            orientation = f"({ellp['orientation'][0]:.9f}, {ellp['orientation'][1]:.9f})" if roi.main else None
             elldat.append(
-                (hash(roi), key, stats["area"], stats["intensity average"], stats["intensity median"],
+                (hash(roi), handler.ident, stats["area"], stats["intensity average"], stats["intensity median"],
                  stats["intensity maximum"], stats["intensity minimum"], stats["intensity std"],
-                 ellp["eccentricity"], ellp["roundness"], str(ellp["center"]), ellp["major_axis"], ellp["minor_axis"],
-                 ellp["angle"], ellp["area"], orientation,
-                 ellp["shape_match"])
+                 ellp["eccentricity"], ellp["roundness"], ellp["center_x"], ellp["center_y"],
+                 ellp["major_axis"], ellp["minor_axis"], ellp["angle"], ellp["area"],
+                 ellp['orientation_y'], ellp['orientation_x'], ellp["shape_match"])
             )
-        # Save data to database
-        curs.executemany(
-            "INSERT OR IGNORE INTO roi VALUES (?, ?, ?, ?, ?, ?, ?,?)",
-            roidat
-        )
-        curs.executemany(
-            "INSERT OR IGNORE INTO points VALUES (?, ?, ?, ?)",
-            pdat
-        )
-        curs.executemany(
-            "INSERT OR IGNORE INTO statistics VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            elldat
-        )
-        curs.execute(
-            "UPDATE images SET analysed = ? WHERE md5 = ?",
-            (True, key)
-        )
-        con.commit()
-        con.close()
-        if not all_:
-            print("ROI saved to database")
+        return roidat, pdat, elldat
 
     def load_rois_from_database(self, md5: str) -> ROIHandler:
         """
@@ -817,78 +687,80 @@ class NucDetect(QMainWindow):
         """
         self.prg_signal.emit(f"Loading data",
                              0, 100, "")
-        con = sqlite3.connect(Paths.database)
-        crs = con.cursor()
+        # Get requester
         rois = ROIHandler(ident=md5)
-        entries = crs.execute(
-            "SELECT * FROM roi WHERE image = ?",
-            (md5,)
-        ).fetchall()
-        names = crs.execute(
-            "SELECT * FROM channels WHERE md5 = ?",
-            (md5,)
-        ).fetchall()
+        entries = self.requester.get_associated_roi(md5)
+        names = self.requester.get_channels(md5)
         for name in names:
             rois.idents.insert(name[1], name[2])
+        processed_roi = self.process_roi_database_entries(entries)
+        rois.add_rois(processed_roi)
+        print(f"Loaded {len(rois)} roi of image {self.cur_img['file_name']} from database")
+        return rois
+
+    def process_roi_database_entries(self, entries: List[Tuple], ) -> List[ROI]:
+        """
+        Method to process the stored ROI
+        :param entries: The entries to convert
+        :return: List of created ROI objects
+        """
         main_ = []
         sec = []
-        statkeys = ("area", "intensity average",
-                    "intensity median", "intensity maximum",
+        statkeys = ("area", "intensity average", "intensity median", "intensity maximum",
                     "intensity minimum", "intensity std", "eccentricity", "roundness")
-        ellkeys = ("center", "major_axis", "minor_axis", "angle",
-                   "orientation", "area", "shape_match")
+        ellkeys = ("center_x", "center_y", "major_axis", "minor_axis", "angle", "orientation_x",
+                   "orientation_y", "area", "shape_match")
         ind = 1
-        max = len(entries)
+        max_ = len(entries)
+        roi = []
         for entry in entries:
-            self.prg_signal.emit(f"Loading ROI:  {ind}/{max}",
-                                 ind, max, "")
-            temproi = ROI(channel=entry[3], main=entry[7] is None,
-                          auto=bool(entry[2]), associated=entry[7])
-            stats = crs.execute(
-                "SELECT * FROM statistics WHERE hash = ?",
-                (entry[0],)
-            ).fetchall()[0]
+            self.prg_signal.emit(f"Loading ROI:  {ind}/{max_}",
+                                 ind, max_, "")
+
+            temproi = ROI(channel=entry[3], main=entry[8] is None,
+                          auto=bool(entry[2]), associated=entry[7], method=entry[8], match=entry[9])
+            stats = self.requester.get_statistics_for_roi(entry[0])
             temproi.stats = dict(zip(statkeys, stats[2:10]))
             if temproi.main:
                 main_.append(temproi)
             else:
                 sec.append(temproi)
             rle = []
-            for p in crs.execute(
-                    "SELECT * FROM points WHERE hash = ?",
-                    (entry[0],)
-            ).fetchall():
+            for p in self.requester.get_points_for_roi(entry[0]):
                 rle.append((p[1], p[2], p[3]))
-            temproi.add_to_area(rle)
-            if temproi.main:
-                center = re.search(r"\((\d*)\D*(\d*)\)?", stats[10])
-                center = (int(center.group(1)), int(center.group(2)))
-                major = stats[11]
-                minor = stats[12]
-                angle = stats[13]
-                area = stats[14]
-                ov = re.search(r"\((-?\d*\.\d*)\D*(-?\d*\.\d*)\)?", stats[15])
-                ov = (float(ov.group(1)), float(ov.group(2)))
-                ellip = stats[16]
-            else:
-                center = (None, None)
-                major = None
-                minor = None
-                angle = None
-                area = None
-                ov = None, None
-                ellip = None
-            ellp = (center, major, minor, angle, ov, area, ellip)
+            temproi.set_area(rle)
+            ellp = self.extract_statistics_for_roi(stats, temproi.main)
             temproi.ell_params = dict(zip(ellkeys, ellp))
             temproi.id = entry[0]
-            rois.add_roi(temproi)
             ind += 1
+            roi.append(temproi)
         for m in main_:
             for s in sec:
                 if s.associated == hash(m):
                     s.associated = m
-        print(f"Loaded {len(rois)} roi of image {self.cur_img['file_name']} from database")
-        return rois
+        return roi
+
+    @staticmethod
+    def extract_statistics_for_roi(statistics: Tuple, is_main: bool = False) -> Tuple:
+        """
+        Method to extract the statistics from database results
+
+        :param statistics: The statistics to extract
+        :param is_main: Is the roi a main roi?
+        :return: The extracted statistics
+        """
+        if not is_main:
+            return None, None, None, None, None, None, None, None, None
+        center_x = statistics[10]
+        center_y = statistics[11]
+        major = statistics[12]
+        minor = statistics[13]
+        angle = statistics[14]
+        area = statistics[15]
+        ov_x = statistics[16]
+        ov_y = statistics[17]
+        ellip = statistics[18]
+        return center_x, center_y, major, minor, angle, area, ov_x, ov_y, ellip
 
     def create_result_table_from_list(self, handler: ROIHandler, experiment: str = None) -> None:
         """
@@ -901,52 +773,51 @@ class NucDetect(QMainWindow):
         self.prg_signal.emit(f"Create Result Table",
                              0, 100, "")
         self.res_table_model.setRowCount(0)
-        connection = sqlite3.connect(Paths.database)
-        cursor = connection.cursor()
         # Get all available channels for the image
-        chans = cursor.execute("SELECT * FROM channels WHERE md5=?", (handler.ident, )).fetchall()
+        chans = Requester().get_channels(handler.ident)
         # Remove main channel and  from list
         chans = [x[2] for x in chans if not bool(x[4]) and bool(x[3])]
         # Sort channel list
         chans = sorted(chans)
         # Create header
-        header = ["Image Name", "Image Identifier", "Group", "ROI Identifier", "Center[(y, x)]", "Area [px]",
-                  "Ellipticity[%]", "Or. Angle [deg]", "Maj. Axis", "Min. Axis"]
-        if experiment:
-            # Get all assigned images
-            num_imgs = cursor.execute("SELECT COUNT(md5) FROM images WHERE experiment=?",
-                                      (experiment, )).fetchall()[0][0]
-            # Load data for experiment
-            rows = self.get_table_data_from_database(experiment, chans, cursor)
-            # Sort rows according to group
-            rows = sorted(rows, key=lambda x: x[1])
-            self.set_experiment_status_label_text(
-                f"Experiment: {experiment}\nImages: {num_imgs}"
-            )
-            self.cur_exp = experiment
-            # Get channel names
-            channel_names = cursor.execute("SELECT DISTINCT name FROM channels WHERE md5"
-                                           " IN (SELECT md5 FROM images WHERE experiment=?) and main=?",
-                                           (experiment, 0)).fetchall()
-            channel_names = sorted([x[0] for x in channel_names])
-            header.extend(channel_names)
-        else:
-            rows = self.get_table_data_for_image((handler.ident,), chans, cursor)
-            # Get channel names
-            channel_names = cursor.execute("SELECT name FROM channels WHERE md5=? AND main=?",
-                                           (handler.ident, 0)).fetchall()
-            channel_names = sorted([x[0] for x in channel_names])
+        header = ["Image Name", "Image Identifier", "Group", "ROI Identifier", "Center Y", "Center X", "Area [px]",
+                  "Ellipticity[%]", "Or. Angle [deg]", "Maj. Axis", "Min. Axis", "match"]
+        header.extend(chans)
+        if not experiment:
             header.remove("Group")
-            header.extend(channel_names)
-            self.set_experiment_status_label_text(
-                f"Experiment: None\nImages: 1"
-            )
+        rows = self.prepare_main_table_rows(chans, experiment)
         self.create_table_rows(rows)
         # Set header of table
         self.res_table_model.setHorizontalHeaderLabels(header)
         header = [header]
         header.extend(rows)
         self.data = header
+
+    def prepare_main_table_rows(self, channels: List[str], experiment: Union[str, None] = None) -> List[List[str]]:
+        """
+        Method to prepare the rows of the result table on the main UI
+
+        :param channels: The name of the foci channels to show
+        :param experiment: Name of the experiment to show. None if only the current image should be shown
+        :return: The prepared rows
+        """
+        if experiment:
+            # Get all assigned images
+            num_imgs = self.requester.get_number_of_associated_images_for_experiment(experiment)
+            # Load data for experiment
+            rows = self.get_table_data_from_database(experiment, channels)
+            # Sort rows according to group
+            rows = sorted(rows, key=lambda x: x[1])
+            self.set_experiment_status_label_text(
+                f"Experiment: {experiment}\nImages: {num_imgs}"
+            )
+            self.cur_exp = experiment
+        else:
+            rows = self.get_table_data_for_image(self.cur_img["key"])
+            self.set_experiment_status_label_text(
+                f"Experiment: None\nImages: 1"
+            )
+        return rows
 
     def create_table_rows(self, rows: List[List[str]], append: bool = True) -> Union[None, List[List[QStandardItem]]]:
         """
@@ -997,53 +868,53 @@ class NucDetect(QMainWindow):
         :return: List of row to created for display
         """
         # Get images associated with experiment
-        imgs = cursor.execute("SELECT md5 FROM images WHERE experiment=?",
-                              (experiment,)).fetchall()
+        imgs = self.requester.get_associated_images_for_experiment(experiment)
         rows: List[List[str]] = []
         # Iterate over all images
         for img in imgs:
             row = self.get_table_data_for_image(img, channel_names, cursor)
             # Check if the image was assigned to a group
-            group = cursor.execute("SELECT name FROM groups WHERE image=?", img).fetchall()
-            if group:
-                group = group[0][0]
-            else:
-                group = "No Group"
+            group = self.requester.get_associated_group_for_image(img)
             for row_ in row:
                 row_.insert(2, group)
             rows.extend(row)
         return rows
 
-    def get_table_data_for_image(self, img: Tuple[str], channel_names: List[str],
-                                 cursor: sqlite3.Cursor) -> List[List[str]]:
+    def get_table_data_for_image(self, img: str) -> List[List[str]]:
         """
         Method to get the table data for the specified image
 
         :param img: The image to get the data for
-        :param channel_names: Names of the active channels without the main channel
-        :param cursor: Cursor pointing to the database
         :return: List of rows created for display
         """
         rows: List[List[str]] = []
         # Get all associated nuclei for the image
-        nucs = cursor.execute("SELECT hash FROM roi WHERE associated IS NULL AND image=?", img).fetchall()
+        nucs = self.requester.get_nuclei_hashes_for_image(img)
         nuclen = len(nucs)
         ind = 1
         # Convert key to file name
-        name = self.hash_to_name[img[0]]
+        name = self.hash_to_name[img]
         # Get all information for each focus
         for nuc in nucs:
-            self.prg_signal.emit(f"Creating table for image {img[0]}: {ind}/{nuclen}",
+            self.prg_signal.emit(f"Creating table for image {name}: {ind}/{nuclen}",
                                  (ind/nuclen) * 100, 100, "")
+            # Get general information about the nucleus
+            general = self.requester.get_roi_info(nuc)
             # Get statistics of nucleus
-            stats = cursor.execute("SELECT * FROM statistics WHERE hash=?", nuc).fetchall()[0]
-            row = [name, img[0], str(nuc[0]), stats[10], str(stats[2]), f"{float(stats[16]) * 100:.2f}",
-                   f"{float(stats[13]):.2f}", f"{float(stats[11]):.2f}", f"{float(stats[12]):.2f}"]
+            stats = self.requester.get_statistics_for_roi(nuc)
+            """
+            hash, image, area, int_av, int_med, int_max, int_med, int_std
+            ecc, rou, ell_cent_x, ell_cent_y, ell_maj, ell_min, ell_ang, 
+            ell_ar, or_x, or_y, ellipticity
+            """
+            match = general[10] * 100 if general[10] else 100
+            row = [name, str(img), str(nuc), str(stats[11]), str(stats[10]), f"{stats[15]: .2f}",
+                   f"{float(stats[18]) * 100:.2f}", f"{float(stats[14]):.2f}",
+                   f"{float(stats[12]):.2f}", f"{float(stats[13]):.2f}", f"{match:.2f}"]
             # Count available foci
-            for channel in channel_names:
-                count = cursor.execute("SELECT COUNT(hash) FROM roi WHERE associated=? AND channel=?",
-                                       (nuc[0], channel)).fetchall()
-                row.append(str(count[0][0]))
+            for channel in self.requester.get_channel_names(img, False):
+                count = self.requester.count_foci_for_nucleus_and_channel(nuc, channel)
+                row.append(str(count))
             rows.append(row)
             ind += 1
         return rows
@@ -1073,9 +944,7 @@ class NucDetect(QMainWindow):
             self.ui.btn_reload.setEnabled(state)
         self.ui.btn_load.setEnabled(state)
         self.ui.btn_save.setEnabled(state)
-        self.ui.btn_images.setEnabled(state)
         self.ui.btn_statistics.setEnabled(state)
-        self.ui.btn_categories.setEnabled(state)
         self.ui.btn_modify.setEnabled(state)
 
     def _select_next_image(self, first: bool = False) -> None:
@@ -1109,21 +978,6 @@ class NucDetect(QMainWindow):
         self.ui.lbl_status.setText(f"{text} -- {(progress / maxi) * 100:.2f}% {symbol}")
         self.ui.prg_bar.setMaximum(maxi)
         self.ui.prg_bar.setValue(progress)
-
-    def show_result_image(self) -> None:
-        """
-        Method to open an dialog to show the analysis results as plt plot
-
-        :return: None
-        """
-        image_dialog = ImgDialog(image=Detector.load_image(self.cur_img["path"]), handler=self.roi_cache)
-        image_dialog.setWindowTitle(f"Result Images for {self.cur_img['file_name']}")
-        image_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
-        image_dialog.setWindowFlags(image_dialog.windowFlags() |
-                                    QtCore.Qt.WindowSystemMenuHint |
-                                    QtCore.Qt.WindowMinMaxButtonsHint |
-                                    QtCore.Qt.Window)
-        image_dialog.exec_()
 
     def save_results(self) -> None:
         """
@@ -1174,12 +1028,12 @@ class NucDetect(QMainWindow):
         :return: None
         """
         # Check if experiments were defined
-        exps = self.cursor.execute("SELECT * FROM experiments").fetchall()
+        exps = self.requester.get_all_experiments()
         if not exps:
             msg = QMessageBox()
             msg.setWindowIcon(Icon.get_icon("LOGO"))
             msg.setIcon(QMessageBox.Information)
-            msg.setStyleSheet(open("messagebox.css", "r").read())
+            msg.setStyleSheet(open("gui/definitions/css/messagebox.css", "r").read())
             msg.setWindowTitle("Warning")
             msg.setText("No experiments were defined")
             msg.setInformativeText("Statistics can only be displayed, if images are assigned to an experiment")
@@ -1201,51 +1055,6 @@ class NucDetect(QMainWindow):
         else:
             return
 
-    def show_categorization(self) -> None:
-        """
-        Method to open a dialog to enable the user to categories the loaded image
-
-        :return: None
-        """
-        cl_dialog = QDialog()
-        cl_dialog.ui = uic.loadUi(Paths.ui_class_dial, cl_dialog)
-        cl_dialog.setWindowTitle(f"Classification of {self.cur_img['file_name']}")
-        cl_dialog.setWindowIcon(QtGui.QIcon('logo.png'))
-        hash_ = self.cur_img["key"]
-        categories = self.cursor.execute(
-            "SELECT category FROM categories WHERE image = ?",
-            (hash_,)
-        ).fetchall()
-        cate = ""
-        for cat in categories:
-            cate += str(cat[0]) + "\n"
-        cl_dialog.ui.te_cat.setPlainText(cate)
-        code = cl_dialog.exec()
-        if code == QDialog.Accepted:
-            self._categorize_image(cl_dialog.ui.te_cat.toPlainText())
-
-    def _categorize_image(self, categories: str) -> None:
-        """
-        Method to save image categories to the database
-
-        :param categories: The categories to save as str, individually separated by \n
-        :return: None
-        """
-        if categories != "":
-            categories = categories.split('\n')
-            hash_ = self.cur_img["key"]
-            self.cursor.execute(
-                "DELETE FROM categories WHERE image = ?",
-                (hash_,)
-            )
-            for cat in categories:
-                if cat:
-                    self.cursor.execute(
-                        "INSERT INTO categories VALUES(?, ?)",
-                        (hash_, cat)
-                    )
-            self.connection.commit()
-
     def show_settings(self) -> None:
         """
         Method to open the settings dialog
@@ -1256,18 +1065,15 @@ class NucDetect(QMainWindow):
         sett.initialize_from_file(os.path.join(os.getcwd(), "settings/settings.json"))
         sett.setWindowTitle("Settings")
         sett.setModal(True)
-        sett.setWindowIcon(QtGui.QIcon("logo.png"))
+        sett.setWindowIcon(QtGui.QIcon("gui/definitions/images/logo.png"))
         code = sett.exec()
         if code == QDialog.Accepted:
             if sett.changed:
                 for key, value in sett.changed.items():
                     self.settings[key] = value[0]
-                    self.cursor.execute(
-                        "UPDATE OR IGNORE settings SET value = ? WHERE key_ = ?",
-                        (key, value[0])
-                    )
+                    self.inserter.update_setting(key, value[0])
             sett.save_menu_settings()
-            self.connection.commit()
+            self.inserter.commit()
 
     def show_modification_window(self) -> None:
         """
@@ -1276,8 +1082,7 @@ class NucDetect(QMainWindow):
         :return: None
         """
         # Load channels for image from database
-        channels = self.cursor.execute("SELECT index_, name FROM channels  WHERE md5=?",
-                                       (self.cur_img["key"],)).fetchall()
+        channels = [(x[1], x[2]) for x in self.requester.get_channels(self.cur_img["key"])]
         editor = Editor(image=ImageLoader.load_image(self.cur_img["path"]), active_channels=channels,
                         roi=self.roi_cache, size_factor=self.settings["size_factor"],
                         img_name=self.cur_img['file_name'])
@@ -1288,6 +1093,48 @@ class NucDetect(QMainWindow):
         code = editor.exec()
         if code == QDialog.Accepted:
             self.create_result_table_from_list(self.roi_cache)
+            self.reflect_item_status_changes()
+
+    def reflect_item_status_changes(self) -> None:
+        """
+        Method to change the image list items if the underlying image was analysed
+
+        :return: None
+        """
+        # Check if image was modified
+        analysed, modified = Util.check_if_image_was_analysed_and_modified(self.cur_img["key"])
+        self.cur_img["analysed"] = analysed
+        self.cur_img["modified"] = modified
+        # Save the data changes to the items data
+        for index in self.ui.list_images.selectionModel().selectedIndexes():
+            item = self.img_list_model.item(index.row())
+            item.setData(self.cur_img)
+        if analysed:
+            if modified:
+                item.setBackground(Color.ITEM_MODIFIED)
+            else:
+                item.setBackground(Color.ITEM_ANALYSED)
+
+    def check_all_item_statuses(self) -> None:
+        """
+        Method to change the image list items if the underlying image was analysed
+
+        :return: None
+        """
+        model = self.ui.list_images.model()
+        for index in range(model.rowCount()):
+            item = model.item(index)
+            # Get the data
+            data = item.data()
+            analysed, modified = Util.check_if_image_was_analysed_and_modified(data["key"])
+            data["analysed"] = analysed
+            data["modified"] = modified
+            item.setData(data)
+            if analysed:
+                if modified:
+                    item.setBackground(Color.ITEM_MODIFIED)
+                else:
+                    item.setBackground(Color.ITEM_ANALYSED)
 
     def on_close(self) -> None:
         """
@@ -1295,7 +1142,7 @@ class NucDetect(QMainWindow):
 
         :return:
         """
-        self.connection.close()
+        self.connector.close_connection()
 
 
 class TableFilterModel(QSortFilterProxyModel):
@@ -1307,8 +1154,8 @@ class TableFilterModel(QSortFilterProxyModel):
         super(TableFilterModel, self).__init__(parent)
 
     def lessThan(self, ind1, ind2):
-        ldat = self.sourceModel().itemData(ind1)[257]
-        rdat = self.sourceModel().itemData(ind2)[257]
+        ldat = self.sourceModel().itemData(ind1)[0]
+        rdat = self.sourceModel().itemData(ind2)[0]
         if isinstance(ldat, tuple):
             if ldat[1] == rdat[1]:
                 return ldat[0] < rdat[0]
@@ -1333,8 +1180,8 @@ def exception_hook(exc_type, exc_value, traceback_obj) -> None:
     print(text)
     msg = QMessageBox()
     msg.setIcon(QMessageBox.Critical)
-    msg.setWindowIcon(QtGui.QIcon('logo.png'))
-    msg.setStyleSheet(open("messagebox.css", "r").read())
+    msg.setWindowIcon(QtGui.QIcon('definitions/images/logo.png'))
+    msg.setStyleSheet(open("definitions/css/messagebox.css", "r").read())
     msg.setText(text)
     msg.setInformativeText(info)
     msg.setWindowTitle(title)
@@ -1351,7 +1198,7 @@ def main() -> None:
         warnings.filterwarnings("ignore")
         sys.excepthook = exception_hook
         app = QtWidgets.QApplication(sys.argv)
-        pixmap = QPixmap("banner_norm.png")
+        pixmap = QPixmap("definitions/images/banner_norm.png")
         splash = QSplashScreen(pixmap)
         splash.show()
         splash.showMessage("Loading...")

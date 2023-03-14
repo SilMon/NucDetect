@@ -14,6 +14,7 @@ from numba.typed import List as numList
 
 from core.roi.AreaAnalysis import get_bounding_box, get_center, get_surface, get_ellipse_radii, get_orientation_angle, \
     get_orientation_vector, get_eccentricity, get_ovality
+from roi import AreaAnalysis
 
 
 class ROI:
@@ -24,15 +25,18 @@ class ROI:
         "area",
         "dims",
         "stats",
-        "ell_params", # ellipse parameters
+        "ell_params",
         "length",
         "associated",
         "id",
-        "marked"
+        "marked",
+        "detection_method",
+        "match"
     ]
 
     def __init__(self, main: bool = True, channel: str = "Blue", auto: bool = True,
-                 associated: Union[ROI, None] = None, marked: bool = False):
+                 associated: Union[ROI, None] = None, marked: bool = False,
+                 method: str = "Not Set", match: float = -1):
         """
         Constructor of ROI class
 
@@ -52,19 +56,21 @@ class ROI:
         self.length = -1
         self.associated = associated
         self.marked = marked
+        self.detection_method = method
+        self.match = match
         self.id = None
 
     def __add__(self, other):
         if isinstance(other, ROI):
-            self.add_to_area(other.area)
+            self.merge(other)
         else:
             raise AttributeError("Addition only supported for ROI class!")
 
-    def __eq__(self, other: ROI):
+    def __eq__(self, other: Union[int, ROI]):
         if isinstance(other, ROI):
             return set(self.area) == set(other.area)
-        else:
-            return False
+        elif isinstance(other, int):
+            return self.id == other
 
     def __ne__(self, other):
         if not isinstance(other, ROI):
@@ -113,6 +119,7 @@ class ROI:
         if isinstance(roi, ROI):
             if roi.ident == self.ident:
                 self.add_to_area(roi.area)
+                self.detection_method = "Merged"
                 self.id = None
                 self.dims.clear()
                 self.stats.clear()
@@ -121,7 +128,7 @@ class ROI:
                 warnings.warn(f"The ROI {hash(self)} and  "
                               f"{hash(roi)} have different channel IDs!({self.ident}, {roi.ident})")
         else:
-            raise ValueError("Not an ROI")
+            raise ValueError(f"{type(roi)} is not a ROI")
 
     def reset_stored_values(self) -> None:
         """
@@ -144,7 +151,7 @@ class ROI:
         :return: None
         """
         self.area.clear()
-        self.add_to_area(rle)
+        self.area = rle
 
     def add_to_area(self, rle):
         """
@@ -153,6 +160,8 @@ class ROI:
         :param rle: RL encoded area to add to this ROI
         :return: None
         """
+        self.detection_method = "Merged"
+        self.area = AreaAnalysis.merge_rle_areas(self.area, rle)
         self.area.extend(rle)
         self.reset_stored_values()
 
@@ -166,9 +175,9 @@ class ROI:
         # Check if the current ROI is main, else warn
         if not self.main:
             warnings.warn(f"Ellipse Parameter Calculation: ROI {hash(self)} is not marked as main")
-            return {"center": None, "major_axis": None, "minor_axis": None, "angle": None,
-                    "orientation": None, "area": None, "shape_match": None, "eccentricity": None,
-                    "roundness": None}
+            return {"center_x": None, "center_y": None, "major_axis": None, "minor_axis": None, "angle": None,
+                    "orientation_x": None, "orientation_y": None, "area": None, "shape_match": None,
+                    "eccentricity": None, "roundness": None}
         # Check if the parameters are already calculated
         if not self.ell_params:
             numba_area = numList(self.area)
@@ -177,27 +186,18 @@ class ROI:
             angle = get_orientation_angle(numba_area)
             center = get_center(numba_area)
             area = get_surface(numba_area)
-            self.ell_params["center"] = center
+            self.ell_params["center_x"] = center[1]
+            self.ell_params["center_y"] = center[0]
             self.ell_params["major_axis"] = r_maj
             self.ell_params["minor_axis"] = r_min
             self.ell_params["angle"] = - (math.degrees(angle) - 45)
-            self.ell_params["orientation"] = or_vec
+            self.ell_params["orientation_x"] = or_vec[1]
+            self.ell_params["orientation_y"] = or_vec[0]
             self.ell_params["area"] = r_min * r_maj * math.pi
             self.ell_params["shape_match"] = self.ell_params["area"] / area
             self.ell_params["eccentricity"] = get_eccentricity(numba_area)
             self.ell_params["roundness"] = get_ovality(numba_area)
         return self.ell_params
-
-    def calculate_roi_intersection(self, roi: ROI) -> float:
-        """
-        Method to calculate the intersection ratio to another ROI
-
-        :param roi: The other ROI
-        :return: The degree of intersection as float
-        """
-        max_intersection = min(len(self), len(roi))
-        intersection = set(self.area).intersection(set(roi.area))
-        return len(intersection) / max_intersection
 
     def calculate_dimensions(self) -> Dict[str, Union[int, float]]:
         """
@@ -219,7 +219,8 @@ class ROI:
                 self.dims["maxY"] = y + height
                 self.dims["width"] = width
                 self.dims["height"] = height
-                self.dims["center"] = center
+                self.dims["center_x"] = center[1]
+                self.dims["center_y"] = center[0]
                 self.dims["area"] = area
             else:
                 raise Exception(f"ROI {self.id} does not contain any points!")

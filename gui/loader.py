@@ -1,5 +1,4 @@
 import time
-import multiprocessing
 from typing import Callable, Iterable
 
 from PyQt5.QtCore import QTimer
@@ -12,7 +11,7 @@ from gui.Util import create_partial_list
 class Loader(QTimer):
 
     def __init__(self, items: Iterable, batch_size: int = 25,
-                 batch_time: int = 250, feedback: Callable = None,
+                 batch_time: int = 100, feedback: Callable = None,
                  processing: Callable = None):
         """
         Base class to implement lazy loading

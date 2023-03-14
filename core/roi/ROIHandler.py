@@ -44,6 +44,14 @@ class ROIHandler:
     def __iter__(self):
         return iter(self.rois)
 
+    def sort_roi_list(self):
+        """
+        Method to sort the internal ROI list according to channel
+
+        :return: None
+        """
+        self.rois = sorted(self.rois, key=lambda x: x.ident)
+
     def add_roi(self, roi: ROI) -> None:
         """
         Method to add a ROI to this handler
@@ -68,6 +76,17 @@ class ROIHandler:
         for roi in rois:
             self.add_roi(roi)
 
+    def get_roi_by_hash(self, hash_: int) -> Union[int, None]:
+        """
+        Method to get a ROI by its hash
+
+        :param hash_: The md5 hash of the ROI
+        :return: The found ROI if it is contained in this handler else None
+        """
+        for roi in self:
+            if roi == hash_:
+                return roi
+
     def remove_roi(self, roi: ROI, cascade: bool = False) -> None:
         """
         Method to remove a ROI from this handler
@@ -82,6 +101,18 @@ class ROIHandler:
             self.rois = [x for x in self.rois if x.associated is not roi]
         self.stats.clear()
 
+    def remove_roi_by_hash(self, hash_: int, cascade: bool = False) -> None:
+        """
+        Method to remove the ROI with the given hash
+
+        :param hash_: The md5 hash of the roi
+        :param cascade: If the roi is main, cascade can be used to delete all associated ROI
+        :return: None
+        """
+        roi = self.get_roi_by_hash(hash_)
+        if roi:
+            self.remove_roi(roi)
+
     def remove_rois(self, rois: List[ROI]) -> None:
         """
         Method to remove ROI from this handler
@@ -91,6 +122,17 @@ class ROIHandler:
         """
         for roi in rois:
             self.remove_roi(roi)
+
+    def remove_rois_by_hash(self, hashes: List[int], cascade: bool = False) -> None:
+        """
+        Method to remove rois by their hashes
+
+        :param hashes: List of ROI md5 hashes
+        :param cascade: If the roi is main, cascade can be used to delete all associated ROI
+        :return: None
+        """
+        for hash_ in hashes:
+            self.remove_roi_by_hash(hash_, cascade)
 
     def calculate_statistics(self, img: np.ndarray) -> Dict[str, Union[int, float]]:
         """
@@ -104,7 +146,9 @@ class ROIHandler:
                 "num": 0,
                 "num empty": 0,
                 "area": [],
-                "intensity": []
+                "intensity": [],
+                "method": [],
+                "match": []
             }
             sec = {}
             channels = [img[..., x] for x in range(img.shape[2])]
@@ -114,6 +158,8 @@ class ROIHandler:
                     main["num"] += 1
                     main["area"].append(temp_stat["area"])
                     main["intensity"].append(temp_stat["intensity average"])
+                    main["method"].append(temp_stat["method"])
+                    main["match"].append(temp_stat["match"])
                 else:
                     if roi.ident not in sec:
                         sec[roi.ident] = {
@@ -126,29 +172,16 @@ class ROIHandler:
                         sec[roi.ident]["num"] += 1
                         sec[roi.ident]["area"].append(temp_stat["area"])
                         sec[roi.ident]["intensity"].append(temp_stat["intensity average"])
-            sec_stat = {}
-            for key, inf in sec.items():
-                inten = inf["intensity"]
-                area = inf["area"]
-                sec_stat[key] = {
-                    "number": inf["num"],
-                    "area list": area,
-                    "area average": np.average(area),
-                    "area median": np.median(area),
-                    "area std": np.std(area),
-                    "area minimum": min(area),
-                    "area maximum": min(area),
-                    "intensity list": inten,
-                    "intensity average": np.average(inten),
-                    "intensity median": np.median(inten),
-                    "intensity std": np.std(inten),
-                    "intensity minimum": min(inten),
-                    "intensity maximum": max(inten)
-                }
+
+            sec_stat = self._calculate_secondary_statistics(sec)
             area = main["area"]
+            match = main["match"]
+            method = main["method"]
             inten = main["intensity"]
             self.stats = {
                 "number": main["num"],
+                "match": np.average(match),
+                "method": np.unique(method, return_counts=True),
                 "number stats": sec_stat,
                 "area list": area,
                 "area average": np.average(area),
@@ -162,6 +195,35 @@ class ROIHandler:
             }
         return self.stats
 
+    @staticmethod
+    def _calculate_secondary_statistics(sec: Dict) -> Dict:
+        """
+        Private method to calculate the secondary statistics
+
+        :param sec: The dict containing information about all detected foci
+        :return: The secondary statistics dict
+        """
+        sec_stat = {}
+        for key, inf in sec.items():
+            inten = inf["intensity"]
+            area = inf["area"]
+            sec_stat[key] = {
+                "number": inf["num"],
+                "area list": area,
+                "area average": np.average(area),
+                "area median": np.median(area),
+                "area std": np.std(area),
+                "area minimum": min(area),
+                "area maximum": min(area),
+                "intensity list": inten,
+                "intensity average": np.average(inten),
+                "intensity median": np.median(inten),
+                "intensity std": np.std(inten),
+                "intensity minimum": min(inten),
+                "intensity maximum": max(inten)
+            }
+        return sec_stat
+
     def get_data_as_dict(self) -> Dict[str, List[Union[str, int, float, Tuple[int, int]]]]:
         """
         Method to retrieve the stored ROI data as list
@@ -169,7 +231,7 @@ class ROIHandler:
         :return: The data as dict
         """
         tempdat = {}
-        header = ["Image Identifier", "ROI Identifier", "Center[(y, x)]", "Area [px]",
+        header = ["Image Identifier", "ROI Identifier", "Center Y", "Center X", "Area [px]",
                   "Ellipticity[%]", "Or. Angle [deg]", "Maj. Axis", "Min. Axis"]
         if self.idents:
             header.extend([f"{x} Foci" for x in self.idents if x != self.main])
@@ -185,7 +247,8 @@ class ROIHandler:
                     row = [
                         self.ident,
                         hash(roi),
-                        tempstat["center"],
+                        tempstat["center_y"],
+                        tempstat["center_x"],
                         tempstat["area"],
                         tempell["shape_match"],
                         tempell["angle"],

@@ -1,5 +1,6 @@
-import platform
 import os
+import platform
+
 from gui import Paths
 
 

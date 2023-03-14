@@ -1,0 +1,1 @@
+INSERT OR REPLACE INTO <table_name> (<columns>) VALUES (<data>)

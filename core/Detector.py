@@ -4,40 +4,22 @@ Created 09.04.2019
 """
 from __future__ import annotations
 
-import datetime
-import hashlib
-import math
-import os
 import time
 from copy import deepcopy
-from typing import Union, Dict, List, Tuple, Iterable
+from typing import Union, Dict, List, Tuple
 
 import matplotlib.pyplot as plt
-
-from detector_modules.FocusMapper import FocusMapper
-from detector_modules.NucleusMapper import NucleusMapper
-from detector_modules.ImageLoader import ImageLoader
-from detector_modules.QualityTester import QualityTester
-from detector_modules.AreaAndROIDExtractor import extract_nuclei_from_maps, extract_foci_from_maps
-
 import numpy as np
-import piexif
-from scipy import ndimage as ndi
-from scipy.ndimage import binary_fill_holes, label
-from skimage import img_as_ubyte
-from skimage import io
-from skimage.draw import disk
-from skimage.feature import canny, blob_log
-from skimage.filters import threshold_local
-from skimage.filters.rank import maximum
-from skimage.morphology import dilation
-from skimage.morphology.binary import binary_opening, binary_erosion
-from skimage.segmentation import watershed
 
-from core.JittedFunctions import eu_dist, create_circular_mask, relabel_array, imprint_data_into_channel
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
-from fcn.FCN import FCN
+from detector_modules.AreaAndROIExtractor import extract_nuclei_from_maps, extract_foci_from_maps
+from detector_modules.FCNMapper import FCNMapper
+from detector_modules.FocusMapper import FocusMapper
+from detector_modules.ImageLoader import ImageLoader
+from detector_modules.MapComparator import MapComparator
+from detector_modules.NucleusMapper import NucleusMapper
+from detector_modules.QualityTester import QualityTester
 
 
 class Detector:
@@ -59,6 +41,7 @@ class Detector:
         self.imageloader = ImageLoader()
         self.focusmapper = FocusMapper()
         self.nucleusmapper = NucleusMapper()
+        self.fcnmapper = None
         self.qualitytester = QualityTester()
 
     def analyse_image(self, path: str, settings: Dict[str, Union[List, bool]],
@@ -96,65 +79,34 @@ class Detector:
             main_channel -= 1 if not active[x] and x < main_channel else 0
         main = channels[main_channel]
         foc_channels = [channels[i] for i in range(len(channels)) if i != main_channel]
-        foc_names = [names[i] for i in range(len(names)) if i != main_channel]
-        if not settings["type"]:
-            s0 = time.time()
-            # Map nuclei
-            self.nucleusmapper.set_channels((main,))
-            self.nucleusmapper.set_settings(analysis_settings)
-            nucmap = self.nucleusmapper.map_nuclei()
-            Detector.log(f"Finished nuclei extraction {time.time() - s0:.4f}", logging)
-            # Map foci
-            self.focusmapper.set_channels(foc_channels)
-            self.focusmapper.set_settings(analysis_settings)
-            foc_maps = self.focusmapper.map_foci()
-            Detector.log(f"Finished foci extraction {time.time() - s0:.4f}", logging)
-            # Extract roi from maps
-            nuclei = extract_nuclei_from_maps(nucmap, names[settings["main"]])
-            # Extract foci
-            foci = []
-            for ind, focmap in enumerate(foc_maps):
-                foci.extend(extract_foci_from_maps(focmap, foc_names[ind], nuclei))
-            # Check the quality of extracted nuclei/foci
-            roi = nuclei + foci
-            self.qualitytester.set_channels(channels)
-            self.qualitytester.set_channel_names(names)
-            self.qualitytester.set_settings(analysis_settings)
-            self.log(f"Detected Nuclei: {len(nuclei)}", logging)
-            self.log(f"Detected Foci: {len(foci)}", logging)
-            self.qualitytester.set_roi(roi)
-            nuclei, foci = self.qualitytester.check_roi_quality()
-            print(f"Main: {len(nuclei)}")
-            print(f"Foc: {len(foci)}")
-            rois = nuclei + foci
-            """
-            # Channel thresholding
-            thresh_chan = Detector.threshold_channels(channels, main_channel, analysis_settings=analysis_settings)
-            rois = Detector.classic_roi_extraction(channels, thresh_chan, names,
-                                                   main_map=main_channel, quality_check=not ml_analysis,
-                                                   logging=logging, analysis_settings=analysis_settings)
-            """
-        else:
-            self.analyser = FCN()
-            nuclei = self.analyser.predict_image(path, self.analyser.NUCLEI, channels=(main_channel,),
-                                                 threshold=analysis_settings["fcn_certainty_nuclei"],
-                                                 logging=logging)[0]
-            # Get indices of foci channels
-            indices = [names.index(x) for x in analysis_settings["names"] if names.index(x) != main_channel]
-            foci = self.analyser.predict_image(path, self.analyser.FOCI,
-                                               channels=indices, logging=logging,
-                                               threshold=analysis_settings["fcn_certainty_foci"])
-            if main_channel > len(foci):
-                foci.append(nuclei)
-            else:
-                foci.insert(main_channel, nuclei)
-            rois = Detector.ml_roi_extraction(channels, foci, names,
-                                              main_map=main_channel,
-                                              logging=logging,
-                                              analysis_settings=analysis_settings)
+        foc_names = [analysis_settings["names"][i] for i in range(len(analysis_settings["names"])) if i != main_channel]
+        # Detect roi via image processing and machine learning
+        iproi, maps1 = self.ip_roi_extraction(main, foc_channels, names,
+                                              settings, analysis_settings, foc_names, logging)
 
+        mlroi, maps2 = self.ml_roi_extraction(maps1[0], foc_channels, names,
+                                              settings, analysis_settings, foc_names, logging)
+        rois = []
+        main_roi = [x for x in iproi if x.main]
+        for channel in foc_names:
+            # Define map Comparator
+            mapc = MapComparator(main_roi,
+                                 [x for x in iproi if not x.main and x.ident == channel],
+                                 [x for x in mlroi if not x.main and x.ident == channel],
+                                 image.shape[:2])
+            # Calculate new nucleus match
+            mapc.get_match_for_nuclei()
+            rois.extend(mapc.merge_overlapping_foci())
+        rois.extend(main_roi)
+        rois = iproi + mlroi
+        # Check for quality of roi
+        if rois:
+            qroi = self.perform_quality_check(channels, names, analysis_settings, rois)
+            print(f"QR: Removed foci: {len(rois) - len(qroi)}")
+        else:
+            qroi = []
         handler = ROIHandler(ident=imgdat["id"])
-        handler.add_rois(rois)
+        handler.add_rois(qroi)
         handler.idents = analysis_settings["names"]
         imgdat["handler"] = handler
         imgdat["names"] = analysis_settings["names"]
@@ -167,57 +119,102 @@ class Detector:
         Detector.log(f"Total analysis time: {time.time() - start: .4f}", logging)
         return imgdat
 
-    @staticmethod
-    def ml_roi_extraction(channels: Iterable[np.ndarray], bin_maps: Iterable[np.ndarray],
-                          names: Iterable[str], main_map: int = 2,
-                          logging: bool = True,
-                          analysis_settings: Dict = None) -> Iterable[ROI]:
+    def ip_roi_extraction(self,  main, foc_channels,
+                          names, settings, analysis_settings,
+                          foc_names, logging) -> Tuple[List[ROI], List[np.ndarray]]:
         """
-        Method to extract roi from ROI maps created via FCN analysis
-
-        :param channels: List of all analysed channels
-        :param bin_maps: Detection maps for all channels
-        :param names: List of names for each channel
-        :param main_map: Index of the main map
-        :param logging: Enables logging during execution
-        :param analysis_settings: The settings to use for the ROI extraction
-        :return:
+        Method to detect nuclei and foci viaimage processing
+        :param main: The channel which should contain nuclei
+        :param foc_channels: All image channel which potentially contain foci
+        :param names: The name for each channel
+        :param settings: TODO REMOVE
+        :param analysis_settings: The analysis settings to apply
+        :param foc_names: The names associated with each focus channel
+        :param logging: Decider if logging should be performed
+        :return: The extracted ROI and the used detection maps
         """
-        # TODO fix
         s0 = time.time()
-        if analysis_settings:
-            names = analysis_settings.get("names", names)
-            main_map = analysis_settings.get("main_channel", main_map)
-            logging = analysis_settings.get("logging", logging)
-        rois = []
-        markers, lab_nums = Detector.perform_labelling(bin_maps, main_map=main_map)
-        main_markers, main_nums = Detector.mark_areas(markers[main_map])
-        markers[main_map] = main_markers
-        lab_nums[main_map] = main_nums
-        # Extract nuclei
-        main = Detector.extract_roi_from_main_map(
-            main_markers,
-            main_map,
-            names
-        )
-        Detector.log(f"Finished main ROI extraction {time.time() - s0:.4f}", logging)
-        # First round of focus detection
-        s1 = time.time()
-        rois.extend(
-            Detector.extract_rois_from_map(
-                markers,
-                main_map,
-                names,
-                main
-            )
-        )
-        # Remove unassociated foci
-        rois = [x for x in rois if x.associated is not None]
-        Detector.log(f"Finished focus extraction {time.time() - s1:.4f}", logging)
-        rois.extend(main)
-        rois = [x for x in rois if x is not None and len(x) > 9]
-        return rois
+        # Map nuclei
+        self.nucleusmapper.set_channels((main,))
+        self.nucleusmapper.set_settings(analysis_settings)
+        nucmap = self.nucleusmapper.map_nuclei()
+        Detector.log(f"Finished nuclei extraction {time.time() - s0:.4f}", logging)
+        # Map foci
+        self.focusmapper.set_channels(foc_channels)
+        self.focusmapper.set_settings(analysis_settings)
+        foc_maps = self.focusmapper.map_foci(main=nucmap)
+        Detector.log(f"Finished foci extraction {time.time() - s0:.4f}", logging)
+        roi = Detector.extract_roi_from_maps(nucmap, foc_maps,
+                                             names[settings["main"]], foc_names)
+        for r in roi:
+            r.detection_method = "Image Processing"
+        foc_maps.insert(0, nucmap)
+        if roi:
+            return roi, foc_maps
+        else:
+            return [], []
 
+    def ml_roi_extraction(self, main_map: np.ndarray, foc_channels,
+                          names, settings, analysis_settings, foc_names, logging) -> Tuple[List[ROI], List[np.ndarray]]:
+        """
+        Method to detect nuclei and foci via machine learning
+        :param main_map: All channels of the image
+        :param foc_channels: All image channel which potentially contain foci
+        :param names: The name for each channel
+        :param settings: TODO REMOVE
+        :param analysis_settings: The analysis settings to apply
+        :param foc_names: The names associated with each focus channel
+        :param logging: Decider if logging should be performed
+        :return: The extracted ROI
+        """
+        s0 = time.time()
+        # Map nuclei
+        self.fcnmapper = FCNMapper()
+        self.fcnmapper.set_settings(analysis_settings)
+        # Map foci
+        self.fcnmapper.set_channels(foc_channels)
+        foc_maps = self.fcnmapper.get_marked_maps()
+        Detector.log(f"Finished foci extraction {time.time() - s0:.4f}", logging)
+        # Extract roi from maps
+        roi = Detector.extract_roi_from_maps(main_map, foc_maps, names[settings["main"]], foc_names)
+        for r in roi:
+            r.detection_method = "Machine Learning"
+        return roi, foc_maps
+
+    @staticmethod
+    def extract_roi_from_maps(main: np.ndarray, foci_maps: List[np.ndarray],
+                              main_name: str, foc_names: List[str]) -> List[ROI]:
+        """
+        Method to extract nuclei and foci from the given maps
+        :param main: Binary map for nuclei
+        :param foci_maps: List of maps for foci
+        :param main_name: Name assigned to the main channel
+        :param foc_names: List of names assigned to the foci channels
+        :return: The extracted roi
+        """
+        nuclei = extract_nuclei_from_maps(main, main_name)
+        foci = []
+        for ind, focmap in enumerate(foci_maps):
+            foci.extend(extract_foci_from_maps(focmap, foc_names[ind], nuclei))
+        return nuclei + foci
+
+    def perform_quality_check(self, channels: List[np.ndarray],
+                              names: List[str], analysis_settings: Dict, roi: List[ROI]):
+        """
+        Method to perform a quality check on the given roi
+
+        :param channels: The channels the roi were derived from
+        :param names: The names associated with each channel
+        :param analysis_settings: The analysis settings to apply
+        :param roi: The roi to check
+        :return: The checked roi
+        """
+        self.qualitytester.set_channels(channels)
+        self.qualitytester.set_channel_names(names)
+        self.qualitytester.set_settings(analysis_settings)
+        self.qualitytester.set_roi(roi)
+        nuclei, foci = self.qualitytester.check_roi_quality()
+        return nuclei + foci
 
     @staticmethod
     def log(message: str, state: bool = True):

@@ -11,8 +11,7 @@ from PyQt5.QtWidgets import QScrollArea, QVBoxLayout, QHBoxLayout, QWidget
 from skimage import io, img_as_ubyte
 from skimage.transform import resize
 
-from Definitions import Color
-from core.Detector import Detector
+from definitions.icons import Color
 from detector_modules.ImageLoader import ImageLoader
 from gui import Paths
 
@@ -75,13 +74,11 @@ def create_image_item_list_from(paths: List[str],
         ind = 1
     if sort_items:
         paths = sorted(paths, key=os.path.basename)
-    with ThreadPoolExecutor(max_workers=None) as e:
-        res = e.map(create_list_item, paths)
-        for q in res:
-            items.append(q)
-            if indicate_progress:
-                print(f"Loading: {ind}/{len(paths)}")
-                ind += 1
+    for path in paths:
+        items.append(create_list_item(path))
+        if indicate_progress:
+            print(f"Loading: {ind}/{len(paths)}")
+            ind += 1
     return items
 
 

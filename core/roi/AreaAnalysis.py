@@ -1,8 +1,91 @@
 import math
-from typing import Iterable, Tuple
+from typing import Iterable, Tuple, List
 
 import numpy as np
+from matplotlib import pyplot as plt
 from numba import njit
+
+
+def merge_rle_areas(area1: List[Tuple[int, int, int]],
+                    area2: List[Tuple[int, int, int]]) -> List[Tuple[int, int, int]]:
+    """
+    Function to merge to two run length encoded areas
+
+    :param area1: The first area
+    :param area2: The second area
+    :return: The merged area
+    """
+    # Sort both areas (row sort)
+    ar1 = sorted(area1, key=lambda x: x[0])
+    ar2 = sorted(area2, key=lambda x: x[0])
+    # Check which area is on top
+    check = ar1[0] <= ar2[0]
+    if check:
+        # If ar1 is higher or equally high
+        return merge_sorted_rle_areas(ar1, ar2)
+    else:
+        # If ar2 is higher
+        return merge_sorted_rle_areas(ar2, ar1)
+
+
+def merge_sorted_rle_areas(sort1: List[Tuple[int, int, int]],
+                           sort2: List[Tuple[int, int, int]]) -> List[Tuple[int, int, int]]:
+    """
+    Function to merge two sorted, run length encoded areas
+
+    :param sort1: The area which is high or equally high
+    :param sort2: The lower area
+    :return: The merged area
+    """
+    lines = []
+    if min([x[0] for x in sort1]) < min([x[0] for x in sort2]):
+        lines1 = sort2
+        lines2 = sort2
+    else:
+        lines1 = sort1
+        lines2 = sort2
+    start = lines1[0][0]
+    start_ind = -1
+    for ind, line in enumerate(lines2):
+        if line[0] == start:
+            start_ind = ind
+            break
+    # If a starting index was found, get potentially overlapping lines
+    if start_ind != -1:
+        # Add the lines that are not overlapping
+        l2 = lines2[start_ind:]
+        l1 = lines1[:len(l2)]
+        lines.extend(sort2[:start_ind])
+        lines.extend(sort1[len(l2):])
+        # Merge the lines that are overlapping
+        for line1, line2 in zip(l1, l2):
+            # Get amount of overlap
+            lines.append(merge_lines(line1, line2))
+    else:
+        lines = sort1 + sort2
+    return lines
+
+
+def merge_lines(line1: Tuple[int, int, int], line2: Tuple[int, int, int]) -> Tuple[int, int, int]:
+    """
+    Function to merge two run length encoded lines
+
+    :param line1: The first line
+    :param line2: The second line
+    :return: The merged line
+    """
+    # Check which of the lines is left
+    check = line1[1] < line2[1]
+    # Swap if line 2 is left
+    l1 = line1 if check else line2
+    l2 = line2 if check else line1
+    # Get the distance between start1 and start2
+    start_dist = l2[1] - l1[1]
+    # Is the second line encased by the first line?
+    if l1[1] + l1[2] > start_dist + l2[2]:
+        return l1
+    else:
+        return l1[0], l1[1], start_dist + l2[2]
 
 
 @njit(cache=True)
@@ -65,7 +148,7 @@ def convert_area_to_array(area: Iterable[Tuple[int, int, int]], channel: np.ndar
     # Get normalization factors
     minrow, mincol, rows, cols = get_bounding_box(area)
     # Create empty image
-    carea = np.zeros(shape=(rows, cols), dtype="uint8")
+    carea = np.zeros(shape=(rows, cols))
     # Iterate over area
     for ar in area:
         carea[ar[0] - minrow, ar[1] - mincol: ar[1] - mincol + ar[2]] = channel[ar[0], ar[1]: ar[1] + ar[2]]
@@ -73,7 +156,9 @@ def convert_area_to_array(area: Iterable[Tuple[int, int, int]], channel: np.ndar
 
 
 @njit(cache=True)
-def imprint_area_into_array(area: Iterable[Tuple[int, int, int]], array: np.ndarray, ident: int) -> None:
+def imprint_area_into_array(area: Iterable[Tuple[int, int, int]],
+                            array: np.ndarray,
+                            ident: int) -> None:
     """
     Method to imprint the specified area into the specified area
 
@@ -309,4 +394,4 @@ def get_eccentricity(area: Iterable[Tuple[int, int, int]]) -> float:
     if len(area) < 2:
         return -1.0
     a1, a2 = get_calculation_factors(area)
-    return a1 / a2
+    return a1 / (a2 + math.e**-12)

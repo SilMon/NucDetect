@@ -218,7 +218,7 @@ QGraphicsView{
         </widget>
        </item>
        <item>
-        <layout class="QVBoxLayout" name="verticalLayout_2" stretch="0,0">
+        <layout class="QVBoxLayout" name="verticalLayout_2" stretch="0,0,0,0">
          <item>
           <widget class="QLabel" name="label_2">
            <property name="text">
@@ -231,6 +231,9 @@ QGraphicsView{
          </item>
          <item>
           <widget class="QDoubleSpinBox" name="spb_sizeFactor">
+           <property name="toolTip">
+            <string>Changes the scaling factor for new items. 2 means a newly added item is double the size of a standard item, 0.5 means it has half the size.</string>
+           </property>
            <property name="maximum">
             <double>5.000000000000000</double>
            </property>
@@ -239,6 +242,32 @@ QGraphicsView{
            </property>
            <property name="value">
             <double>1.000000000000000</double>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="label_10">
+           <property name="text">
+            <string>Opacity</string>
+           </property>
+           <property name="alignment">
+            <set>Qt::AlignCenter</set>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QSpinBox" name="spb_opacity">
+           <property name="toolTip">
+            <string>Changes opacity of the items. The lower the value, the lower the opacity. Values between 0 (completely transparent) and 100 (completely opaque) possible.</string>
+           </property>
+           <property name="maximum">
+            <number>100</number>
+           </property>
+           <property name="value">
+            <number>100</number>
+           </property>
+           <property name="displayIntegerBase">
+            <number>10</number>
            </property>
           </widget>
          </item>
@@ -364,6 +393,29 @@ QGraphicsView{
          </property>
          <property name="toolTip">
           <string>Y coordinate of the ellipse center</string>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="0">
+        <widget class="QLabel" name="label_9">
+         <property name="text">
+          <string>Hash:</string>
+         </property>
+         <property name="alignment">
+          <set>Qt::AlignCenter</set>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QLabel" name="lbl_hash">
+         <property name="toolTip">
+          <string>The internal identifier of the given item. Is -1 if the item is newly added and not saved to the database</string>
+         </property>
+         <property name="text">
+          <string/>
+         </property>
+         <property name="alignment">
+          <set>Qt::AlignCenter</set>
          </property>
         </widget>
        </item>

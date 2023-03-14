@@ -134,7 +134,7 @@ QDialog{
       <enum>QTabWidget::Rounded</enum>
      </property>
      <property name="currentIndex">
-      <number>-1</number>
+      <number>0</number>
      </property>
      <property name="tabsClosable">
       <bool>false</bool>
@@ -142,6 +142,48 @@ QDialog{
      <property name="tabBarAutoHide">
       <bool>false</bool>
      </property>
+     <widget class="QWidget" name="prg_settings">
+      <attribute name="title">
+       <string>Program Settings</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="verticalLayout_2">
+       <item>
+        <layout class="QFormLayout" name="formLayout">
+         <item row="0" column="0">
+          <widget class="QLabel" name="label">
+           <property name="text">
+            <string>Reset Database:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <layout class="QHBoxLayout" name="horizontalLayout">
+           <item>
+            <spacer name="horizontalSpacer">
+             <property name="orientation">
+              <enum>Qt::Horizontal</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>40</width>
+               <height>20</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+           <item>
+            <widget class="QPushButton" name="btn_reset">
+             <property name="text">
+              <string>Reset</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+        </layout>
+       </item>
+      </layout>
+     </widget>
     </widget>
    </item>
    <item>

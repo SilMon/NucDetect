@@ -1,0 +1,1 @@
+UPDATE OR IGNORE <table_name> SET <set_values> WHERE <condition>

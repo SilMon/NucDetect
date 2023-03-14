@@ -3,6 +3,9 @@ from PyQt5 import QtGui
 from PyQt5.QtCore import QSize
 from PyQt5.QtGui import QIcon, QColor
 
+import Paths
+import os
+
 
 class Color:
     ITEM_ANALYSED = QColor("#5A597387")
@@ -26,7 +29,7 @@ class Icon:
         :return: QIcon
         """
         icons = {
-            "LOGO": QtGui.QIcon("logo.png"),
+            "LOGO": QtGui.QIcon(Paths.img_dir + os.sep + "logo.png"),
             "RULER": qta.icon("fa5s.ruler", color=Icon.STANDARD),
             "EYE": qta.icon("fa5.eye", color=Icon.STANDARD),
             "EYE_OFF": qta.icon("fa5.eye-slash", color=Icon.STANDARD_OFF),

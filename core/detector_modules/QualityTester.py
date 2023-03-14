@@ -1,8 +1,10 @@
+import logging
+import warnings
 from typing import Dict, Union, List, Iterable, Tuple
 
-import warnings
-from roi.ROI import ROI
 import numpy as np
+
+from roi.ROI import ROI
 
 
 class QualityTester:
@@ -43,6 +45,11 @@ class QualityTester:
         self.settings = settings
 
     def check_roi_quality(self) -> Tuple[List[ROI], List[ROI]]:
+        """
+        Method to check the quality of the saved ROI
+
+        :return: A list containg both the nuclei and foci
+        """
         # Check if channels were set
         if not self.channels:
             raise ValueError("No channels were given for quality check!")
@@ -58,14 +65,15 @@ class QualityTester:
     def check_quality(self) -> Tuple[List[ROI], List[ROI]]:
         """
         Method to check the quality of given nuclei/foci
+
         :return: The checked roi
         """
         main, foci = self.separate_roi_by_channel()
         # Check size of nuclei
         lower_bound, upper_bound = self.settings["min_main_area"], self.settings["max_main_area"]
-        main = self.check_size_boundaries(main, lower_bound, upper_bound)
+        #main = self.check_size_boundaries(main, lower_bound, upper_bound)
         print(f"Quality Check:\nNuclei Size Check: {len(main)}")
-        # Delete foci whos nucleus was deleted or which are unassociated to a nucleus
+        # Delete foci whose nucleus was deleted or which are unassociated to a nucleus
         foci = self.delete_unassociated_foci(main, foci)
         print(f"Focus Association Check: {len(foci)}")
         # Check size of foci
@@ -79,6 +87,7 @@ class QualityTester:
     def separate_roi_by_channel(self) -> Tuple[List[ROI], List[ROI]]:
         """
         Method to separate nuclei and foci from an unsorted list of roi
+
         :return: The sorted roi
         """
         main = []
@@ -93,6 +102,7 @@ class QualityTester:
     def check_size_boundaries(self, roi: List[ROI], lower_bound: int, upper_bound: int) -> List[ROI]:
         """
         Method to check if the area of a roi lies inside the specified boundaries
+
         :param roi: List of roi to check
         :param lower_bound: Lower threshold
         :param upper_bound: Upper threshold
@@ -102,9 +112,11 @@ class QualityTester:
         upper_bound *= self.settings["size_factor"]
         return [x for x in roi if lower_bound <= x.calculate_dimensions()["area"] <= upper_bound]
 
-    def delete_unassociated_foci(self, nuclei: List[ROI], foci: List[ROI]) -> List[ROI]:
+    @staticmethod
+    def delete_unassociated_foci(nuclei: List[ROI], foci: List[ROI]) -> List[ROI]:
         """
         Method to remove unassiciated foci
+
         :param nuclei: The detected nuclei
         :param foci: The detected foci
         :return: List of associated foci
@@ -119,6 +131,7 @@ class QualityTester:
     def check_intensity_boundaries(self, rois: List[ROI], lower_bound: int, upper_bound: int = None) -> List[ROI]:
         """
         Method to check if the intensity of the ROI lies in the specified boundaries
+
         :param rois: The ROI to check
         :param lower_bound: The lower boundary
         :param upper_bound: The upper boundary

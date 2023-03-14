@@ -1,0 +1,1 @@
+SELECT COUNT(<column>) FROM <table_name> WHERE <condition>

@@ -5,13 +5,15 @@ from typing import List, Iterable, Dict, Tuple
 import numpy as np
 import pyqtgraph as pg
 from PyQt5 import QtCore
-from PyQt5.QtCore import QRectF, Qt
+from PyQt5.QtCore import QRectF, Qt, QPointF
 from PyQt5.QtGui import QColor, QKeyEvent, QMouseEvent
 from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem
+from matplotlib import pyplot as plt
 from skimage.draw import ellipse
 
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
+from database.connections import Requester, Inserter
 from gui import Paths
 from gui.loader import ROIDrawerTimer
 
@@ -35,7 +37,9 @@ class EditorView(pg.GraphicsView):
         self.image = image
         self.active_channel: int = None
         self.roi: ROIHandler = roi
-        self.main_channel = roi.idents.index(roi.main)
+        self.requester = Requester()
+        self.inserter = Inserter()
+        self.main_channel = self.requester.get_main_channel(self.roi.ident)
         self.plot_item = pg.PlotItem()
         self.view = self.plot_item.getViewBox()
         self.view.setAspectLocked(True)
@@ -46,7 +50,7 @@ class EditorView(pg.GraphicsView):
         self.plot_vb = self.plot_item.vb
         # Set proxy to detect mouse movement
         self.proxy = pg.SignalProxy(self.scene().sigMouseMoved, rateLimit=45, slot=self.mouse_moved)
-        self.mpos: Tuple = None
+        self.mpos: QPointF = None
         # Activate mouse tracking for widget
         self.setMouseTracking(True)
         self.setCentralWidget(self.plot_item)
@@ -65,7 +69,7 @@ class EditorView(pg.GraphicsView):
         self.saved_values: Dict = None
         self.show_channel("Composite")
 
-    def set_changes(self, rect: QRectF, angle: float, preview: bool = True) -> None:
+    def set_changes(self, rect: QRectF, angle: float, preview: bool = False) -> None:
         """
         Method to apply the changes made by editing
 
@@ -76,6 +80,8 @@ class EditorView(pg.GraphicsView):
         :return: None
         """
         if self.selected_item:
+            if not preview:
+                self.temp_items.append(self.selected_item)
             self.selected_item.update_data(rect, angle, preview)
 
     def draw_additional_items(self, state: bool = True) -> None:
@@ -164,6 +170,7 @@ class EditorView(pg.GraphicsView):
 
         :return: None
         """
+        self.roi.sort_roi_list()
         self.loading_timer = ROIDrawerTimer(self.roi, self.plot_item,
                                             feedback=self.update_loading,
                                             processing=ROIDrawer.draw_roi)
@@ -176,6 +183,9 @@ class EditorView(pg.GraphicsView):
         """
         self.parent.ui.prg_loading.setValue(self.loading_timer.percentage * 100)
         self.items.extend(items)
+        if round(self.loading_timer.percentage * 100) >= 99:
+            for item in self.items:
+                item.setVisible(True)
 
     def get_roi_index(self, roi) -> int:
         """
@@ -212,47 +222,88 @@ class EditorView(pg.GraphicsView):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         super().mousePressEvent(event)
         if self.mode == 0 and self.active_channel != "Composite" and event.button() == Qt.LeftButton:
-            # Get click position
-            pos = self.mpos
-            if self.active_channels[self.active_channel] == self.main_channel:
-                item = NucleusItem(round(pos.x() - 75 * self.size_factor), round(pos.y() - 38 * self.size_factor),
-                                   round(150 * self.size_factor), round(76 * self.size_factor),
-                                   round(pos.x()), round(pos.y()),
-                                   0, (0, 0), self.main_channel, -1)
-                item.set_pens(
-                    pg.mkPen(color="#2A2ABB", width=3, style=QtCore.Qt.DashLine),
-                    pg.mkPen(color="#2A2ABB", width=3, style=QtCore.Qt.DashLine),
-                    ROIDrawer.MARKERS[-1]
-                )
-                item.add_to_view(self.plot_item)
-                self.parent.set_mode(2)
-                self.change_mode(1)
-                self.selected_item = item
-                item.enable_editing(True)
-                self.parent.setup_editing(item)
-            else:
-                item = FocusItem(round(pos.x() - 3.5 * self.size_factor), round(pos.y() - 3.5 * self.size_factor),
-                                 round(7 * self.size_factor), round(7 * self.size_factor),
-                                 self.active_channels[self.active_channel], -1)
-                item.set_pen(
-                    ROIDrawer.MARKERS[self.active_channels[self.active_channel]],
-                    ROIDrawer.MARKERS[-1]
-                )
-            item.changed = True
-            self.items.append(item)
-            self.temp_items.append(item)
-            # Add item to view
-            item.add_to_view(self.plot_item)
+            self.create_new_item_at_mouse_position()
+        # Set the selected item to the mouse position via middle click
+        if self.mode == 1 and self.active_channel != "Composite" and event.button() == Qt.MiddleButton:
+            # Check if an item is currently selected
+            if self.selected_item:
+                # Set the center position of the item to the mouse position
+                self.move_selected_item_to_position()
         if self.mode == 1 and self.active_channel != "Composite" and event.button() == Qt.LeftButton:
-            items = [x for x in self.scene().items(self.mapToScene(event.pos()))
-                     if isinstance(x, NucleusItem) or isinstance(x, FocusItem)]
-            items = [x for x in items if x.channel_index == self.active_channels[self.active_channel]]
-            if items:
-                if self.selected_item:
-                    self.selected_item.enable_editing(False)
-                self.selected_item = items[-1]
-                self.selected_item.enable_editing(True)
-                self.parent.setup_editing(self.selected_item)
+            self.select_item_at_mouse_position(event)
+
+    def move_selected_item_to_position(self) -> None:
+        """
+        Method to move the selected item to the specified location
+
+        :return: None
+        """
+        x = self.mpos.x()
+        y = self.mpos.y()
+        width = self.selected_item.width
+        height = self.selected_item.height
+        angle = self.selected_item.angle
+        rect = QRectF(x - width/2,
+                      y - height/2,
+                      width, height)
+        self.selected_item.update_data(
+            rect, angle, False
+        )
+        self.parent.setup_editing(self.selected_item)
+
+    def select_item_at_mouse_position(self, event: QMouseEvent) -> None:
+        """
+        Method to select the clicked item at the mouse position
+
+        :return: None
+        """
+        items = [x for x in self.scene().items(self.mapToScene(event.pos()))
+                 if isinstance(x, NucleusItem) or isinstance(x, FocusItem)]
+        items = [x for x in items if x.channel_index == self.active_channels[self.active_channel]]
+        if items:
+            if self.selected_item:
+                self.selected_item.enable_editing(False)
+            self.selected_item = items[-1]
+            self.selected_item.enable_editing(True)
+            self.parent.setup_editing(self.selected_item)
+
+    def create_new_item_at_mouse_position(self) -> None:
+        """
+        Method to create a new item at the current mouse position
+
+        :return: None
+        """
+        # Get click position
+        pos = self.mpos
+        if self.active_channel == self.main_channel:
+            item = NucleusItem(round(pos.x() - 75 * self.size_factor), round(pos.y() - 38 * self.size_factor),
+                               round(150 * self.size_factor), round(76 * self.size_factor),
+                               round(pos.x()), round(pos.y()),
+                               0, (0, 0), self.active_channels[self.main_channel], -1)
+            item.set_pens(
+                pg.mkPen(color="#2A2ABB", width=3, style=QtCore.Qt.DashLine),
+                pg.mkPen(color="#2A2ABB", width=3, style=QtCore.Qt.DashLine),
+                ROIDrawer.MARKERS[-1]
+            )
+            item.add_to_view(self.plot_item)
+            self.parent.set_mode(2)
+            self.change_mode(1)
+            self.selected_item = item
+            item.enable_editing(True)
+            self.parent.setup_editing(item)
+        else:
+            item = FocusItem(round(pos.x() - 3.5 * self.size_factor), round(pos.y() - 3.5 * self.size_factor),
+                             round(7 * self.size_factor), round(7 * self.size_factor),
+                             self.active_channels[self.active_channel], -1)
+            item.set_pen(
+                ROIDrawer.MARKERS[self.active_channels[self.active_channel]],
+                ROIDrawer.MARKERS[-1]
+            )
+        item.changed = True
+        self.items.append(item)
+        self.temp_items.append(item)
+        # Add item to view
+        item.add_to_view(self.plot_item)
 
     def mouse_moved(self, event: QMouseEvent) -> None:
         if self.pos_track:
@@ -260,27 +311,34 @@ class EditorView(pg.GraphicsView):
             if self.plot_item.sceneBoundingRect().contains(pos):
                 coord = self.plot_vb.mapSceneToView(pos)
                 self.mpos = coord
-                if self.selected_item and self.selected_item.preview:
-                    self.selected_item.reset_item()
                 self.parent.set_status(f"X: {coord.x():.2f} Y: {coord.y():.2f}")
 
-    def apply_all_changes(self) -> None:
+    def set_item_opacity(self, opacity: float) -> None:
         """
-        Method to apply all made changes and save them to the database
+        Method to set the opacity of all ROIItems
+
+        :param opacity: The opacity value [0-100]
+        :return: None
+        """
+        ROIDrawer.change_opacity(self.items, opacity)
+
+    def delete_items_in_list(self) -> None:
+        """
+        Method to delete all roi in the self.delete list
 
         :return: None
         """
-        start = time.time()
-        # Create connection to database
-        conn = sqlite3.connect(Paths.database)
-        # Create cursor to do stuff
-        curs = conn.cursor()
         # Remove deleted roi from item list
         self.items = [x for x in self.items if x.roi_id not in self.delete]
-        # Create list of tuples for sqlite3
-        sql_delete = [(x,) for x in self.delete]
         # Delete items marked for it
-        self.delete_unassociated_roi(curs, sql_delete)
+        self.delete_roi(self.delete)
+
+    def create_association_maps(self) -> List[np.ndarray]:
+        """
+        Method to get the hash association maps
+
+        :return: List of all created association maps
+        """
         # Create list of changed items to ignore during map creation
         ignore = [x.roi_id for x in self.items if x.changed]
         # Also ignore roi that were deleted
@@ -288,34 +346,46 @@ class EditorView(pg.GraphicsView):
         # Delete all items that can be ignored from ROIHandler
         self.roi.delete_rois(ignore)
         # Create a hash association maps for each channel
-        maps = self.roi.create_hash_association_maps((self.image.shape[0], self.image.shape[1]))
-        # Create list for items which will be unassociated due to data changes
+        return self.roi.create_hash_association_maps((self.image.shape[0], self.image.shape[1]))
+
+    def get_unassociated_foci(self) -> List[int]:
+        """
+        Method to get the now unassociated foci for each nucleus in the self.delete list
+
+        :return: List of focus hashes
+        """
         unassociated = []
         # Get all associated foci and add them to list of unassociated foci
-        for roi in sql_delete:
-            roi_hash = curs.execute("SELECT hash FROM roi WHERE associated=?", roi).fetchall()
+        for roi in self.delete:
+            roi_hash = self.requester.get_hashes_of_associated_foci(roi)
             if roi_hash:
-                unassociated.extend([x[0] for x in roi_hash])
-        # Change the rows of fetched foci
-        curs.executemany("UPDATE OR IGNORE roi SET associated=NULL WHERE associated=?", sql_delete)
-        print(f"A: {time.time() - start:.2f} sec")
+                unassociated.extend(roi_hash)
+        return unassociated
+
+    def process_changed_items(self, unassociated: List[int], maps: List[np.ndarray]) -> None:
+        """
+        Method to process all items that are marked as changed
+
+        :param unassociated: List of all unassociated focus hashes
+        :param maps: Association hash maps for all channels
+        :return: None
+        """
         for item in self.items:
-            istart = time.time()
             if item.changed:
+                if item not in self.temp_items:
+                    continue
                 # Check if item was added
                 if item.roi_id != -1:
                     # Delete item from database
-                    self.delete_item_from_database(curs, item.roi_id)
+                    self.delete_item_from_database(item.roi_id)
                     if isinstance(item, NucleusItem):
                         # Get hash list of associated foci
-                        hashes = [x[0] for x in curs.execute("SELECT hash FROM roi WHERE associated=?",
-                                                             (item.roi_id,)).fetchall()]
+                        hashes = self.requester.get_hashes_of_associated_foci(item.roi_id)
+                        print(item.roi_id)
                         unassociated.extend(hashes)
-                        curs.execute("UPDATE roi SET associated=? WHERE associated=?",
-                                     (None, item.roi_id))
+                        self.inserter.reset_nucleus_focus_association(item.roi_id)
                     else:
                         unassociated.append(item.roi_id)
-                print(f"\nITime 1: {time.time() - start}")
                 # Get coordinates corresponding to the item
                 rr, cc = ellipse(item.center[1], item.center[0], item.height / 2, item.width / 2,
                                  self.image.shape, np.deg2rad(-item.angle))
@@ -330,37 +400,42 @@ class EditorView(pg.GraphicsView):
                 if isinstance(item, FocusItem):
                     unassociated.append(roihash)
                 self.replace_placeholder(maps[item.channel_index], roihash)
-                print(f"ITime 2: {time.time() - start}")
-                self.write_item_to_database(curs, item, roi, rle, self.image, self.roi.ident)
+                self.write_item_to_database(item, roi, rle, self.image, self.roi.ident)
                 # Add ROI to ROIHandler
                 self.roi.rois.append(roi)
-                print(f"ITime 3: {time.time() - start}")
-        print(f"End: {time.time() - start:.2f} sec")
+
+    def apply_all_changes(self) -> None:
+        """
+        Method to apply all made changes and save them to the database
+
+        :return: None
+        """
+        self.delete_items_in_list()
+        maps = self.create_association_maps()
+        # Create list for items which will be unassociated due to data changes
+        unassociated = self.get_unassociated_foci()
+        # Change the rows of fetched foci
+        self.inserter.reset_nuclei_foci_associations(self.delete)
+        # Check for changed items
+        self.process_changed_items(unassociated, maps)
         associations = self.create_associations(self.roi.idents.index(self.roi.main), maps, unassociated)
         # Clean unassociated list
-        unassociated = [(x, ) for x in unassociated if x not in associations.keys()]
-        self.delete_unassociated_roi(curs, unassociated)
+        unassociated = [x for x in unassociated if x not in associations.keys()]
+        self.delete_roi(unassociated)
         # Create new associations
         for focus, nucleus in associations.items():
-            curs.execute("UPDATE roi SET associated=? WHERE hash=?",
-                         (int(nucleus), int(focus)))
-        # Delete erased and unassociated ROI from ROIHandler
-        self.delete.extend([x[0] for x in unassociated])
-        self.roi.rois = [x for x in self.roi if x.id not in self.delete]
+            self.inserter.associate_focus_with_nucleus(int(nucleus), int(focus))
         # Change image entry to indicate that the image was manually modified
-        curs.execute("UPDATE images SET modified=? WHERE md5=?",
-                     (1, self.roi.ident)
-                     )
-        conn.commit()
+        self.inserter.mark_image_as_modified(self.roi.ident)
+        self.inserter.commit_and_close()
 
-    @staticmethod
-    def write_item_to_database(curs: sqlite3.Cursor, item, roi: ROI,
-                               rle: List[Tuple[int, int, int]], image: np.ndarray,
+    def write_item_to_database(self, item, roi: ROI,
+                               rle: List[Tuple[int, int, int]],
+                               image: np.ndarray,
                                image_id: str) -> None:
         """
         Method to write the specified item to the database
 
-        :param curs: Cursor pointing to the database
         :param item: The item to write to the database
         :param roi: The ROI associated with the item
         :param rle: The run length encoded area of this item
@@ -369,46 +444,39 @@ class EditorView(pg.GraphicsView):
         :return: None
         """
         # Calculate statistics
+        roidat = (hash(roi), image_id, False, roi.ident,
+                  item.center[1], item.center[0], item.edit_rect.width,
+                  item.edit_rect.height, None, "manual", -1)
         stats = roi.calculate_statistics(image[..., item.channel_index])
         ellp = roi.calculate_ellipse_parameters()
+        stat_data = (hash(roi), image_id, stats["area"], stats["intensity average"],
+                     stats["intensity median"], stats["intensity maximum"], stats["intensity minimum"],
+                     stats["intensity std"], ellp["eccentricity"], ellp["roundness"],
+                     item.center[0], item.center[1], item.width / 2, item.height / 2,
+                     item.angle, ellp["area"], ellp["orientation_x"], ellp["orientation_y"],
+                     ellp["shape_match"])
         # Prepare data for SQL statement
         rle = [(hash(roi), x[0], x[1], x[2]) for x in rle]
         # Write item to database
-        curs.execute("INSERT OR IGNORE INTO roi VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                     (hash(roi), image_id, False, roi.ident,
-                      f"({item.center[1]:.0f}, {item.center[0]:.0f})", item.edit_rect.width,
-                      item.edit_rect.height, None))
-        curs.executemany("INSERT OR IGNORE INTO points VALUES (?, ?, ?, ?)",
-                         rle)
-        curs.execute("INSERT OR IGNORE INTO statistics VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                     (hash(roi), image_id, stats["area"], stats["intensity average"],
-                      stats["intensity median"], stats["intensity maximum"], stats["intensity minimum"],
-                      stats["intensity std"], ellp["eccentricity"], ellp["roundness"],
-                      f"({item.center[1]:.0f}, {item.center[0]:.0f})", item.width / 2, item.height / 2,
-                      item.angle, ellp["area"], str(ellp["orientation"]), ellp["shape_match"]))
+        self.inserter.save_roi_data_for_image(image_id, roidat, rle, stat_data)
 
-    @staticmethod
-    def delete_item_from_database(curs: sqlite3.Cursor, roihash: int) -> None:
+    def delete_item_from_database(self, roihash: int) -> None:
         """
         Method to delete the item, specified by its hash, from the database
 
-        :param curs: Cursor pointing to the database
         :param roihash: The hash of the item
         :return: None
         """
-        curs.execute("DELETE FROM roi WHERE hash=?", (roihash,))
-        curs.execute("DELETE FROM points WHERE hash=?", (roihash,))
-        curs.execute("DELETE FROM statistics WHERE hash=?", (roihash,))
+        self.inserter.delete_roi_from_database(roihash)
 
     @staticmethod
-    def create_associations(main: int, maps: Iterable[np.ndarray],
-                            unassociated: Iterable[int]) -> Dict:
+    def create_associations(main: int, maps: Iterable[np.ndarray], unassociated: List[int]) -> Dict:
         """
         Method to create associations dictionary to associate nuclei with foci
 
         :param main: Index of the main channel
-        :param maps:
-        :param unassociated:
+        :param maps: Hash maps for each channel
+        :param unassociated: List of unassociated ROI hashes
         :return: Dictionary containing the associations
         """
         # Create new associations
@@ -417,25 +485,23 @@ class EditorView(pg.GraphicsView):
             if c != main:
                 for y in range(maps[0].shape[0]):
                     for x in range(maps[0].shape[1]):
-                        if maps[c][y][x] and maps[main][y][x] and (maps[c][y][x] in unassociated):
+                        if maps[c][y][x] and maps[main][y][x]:
                             associations[maps[c][y][x]] = maps[main][y][x]
+        # Clean list
+        associations = {x: y for x, y in associations.items() if x in unassociated}
         return associations
 
-    @staticmethod
-    def delete_unassociated_roi(curs: sqlite3.Cursor, unassociated: Iterable[Tuple[int]]) -> None:
+    def delete_roi(self, unassociated: Iterable[Tuple[int]]) -> None:
         """
         Method to delete unassociated roi from the database
 
-        :param curs: Cursor pointing to the database
         :param unassociated: List of hashes from unassociated roi, prepared for executemany
         :return: None
         """
-        curs.executemany("DELETE FROM roi WHERE hash=?",
-                         unassociated)
-        curs.executemany("DELETE FROM points WHERE hash=?",
-                         unassociated)
-        curs.executemany("DELETE FROM statistics WHERE hash=?",
-                         unassociated)
+        # Remove roi from handler
+        self.roi.remove_rois_by_hash(unassociated)
+        for roi_hash in unassociated:
+            self.inserter.delete_roi_from_database(roi_hash)
 
     @staticmethod
     def replace_placeholder(map_: np.ndarray, roihash: int, placeholder: int = -1) -> None:
@@ -500,6 +566,19 @@ class ROIDrawer:
     ]
 
     @staticmethod
+    def change_opacity(items: Iterable[QGraphicsItem],
+                       opacity: float) -> None:
+        """
+        Method to change the opacity of the given items
+
+        :param items: The items to change the opacity of
+        :param opacity: New value for the opacity. [0-100]
+        :return: None
+        """
+        for item in items:
+            item.setOpacity(opacity / 100)
+    
+    @staticmethod
     def change_channel(items: Iterable[QGraphicsItem],
                        active_channel: int = 3,
                        draw_additional: bool = False) -> None:
@@ -535,19 +614,20 @@ class ROIDrawer:
         for roi in rois:
             ind = idents.index(roi.ident)
             if roi.main:
-                items.append(ROIDrawer.draw_nucleus(view, roi, ind))
+                items.append(ROIDrawer.draw_nucleus(view, roi, ind, False))
             else:
-                items.append(ROIDrawer.draw_focus(view, roi, ind))
+                items.append(ROIDrawer.draw_focus(view, roi, ind, False))
         return items
 
     @staticmethod
-    def draw_focus(view: pg.PlotItem, roi: ROI, ind) -> QGraphicsEllipseItem:
+    def draw_focus(view: pg.PlotItem, roi: ROI, ind: int, visible: bool = True) -> QGraphicsEllipseItem:
         """
         Function to draw a focus onto the given view
 
         :param view: The view to draw on
         :param roi: The focus to draw
         :param ind: The index of the roi channel
+        :param visible: Should the item be drawn visibly?
         :return: None
         """
         dims = roi.calculate_dimensions()
@@ -555,39 +635,42 @@ class ROIDrawer:
         c = dims["minX"], dims["minY"]
         d2 = dims["height"]
         d1 = dims["width"]
-        nucleus = FocusItem(c[0], c[1], d1, d2, ind, hash(roi))
-        nucleus.set_pen(pen, ROIDrawer.MARKERS[-1])
-        nucleus.add_to_view(view)
-        return nucleus
+        focus = FocusItem(c[0], c[1], d1, d2, ind, hash(roi))
+        focus.set_pen(pen, ROIDrawer.MARKERS[-1])
+        focus.setVisible(visible)
+        focus.add_to_view(view)
+        return focus
 
     @staticmethod
-    def draw_nucleus(view: pg.PlotItem, roi: ROI, ind) -> QGraphicsEllipseItem:
+    def draw_nucleus(view: pg.PlotItem, roi: ROI, ind: int, visible: bool = True) -> QGraphicsEllipseItem:
         """
         Function to draw a nucleus onto the given view
 
         :param view: The view to draw on
         :param roi: The nucleus to draw
         :param ind: The index of the roi channel
+        :param visible: Should the item be drawn visibly?
         :return: None
         """
         pen = pg.mkPen(color="#191970" if roi.auto else "#2A2ABB",
                        width=3, style=QtCore.Qt.DashLine)
         params = roi.calculate_ellipse_parameters()
-        cy, cx = params["center"][0], params["center"][1]
+        cy, cx = params["center_y"], params["center_x"]
         r1 = params["minor_axis"]
         r2 = params["major_axis"]
         angle = params["angle"]
-        ovx, ovy = params["orientation"]
-        focus = NucleusItem(cx - r2, cy - r1, r2 * 2, r1 * 2, cx, cy, angle, (ovx, ovy), ind, hash(roi))
-        focus.set_pens(
+        ovx, ovy = params["orientation_x"], params["orientation_y"]
+        nucleus = NucleusItem(cx - r2, cy - r1, r2 * 2, r1 * 2, cx, cy, angle, (ovx, ovy), ind, hash(roi))
+        nucleus.set_pens(
             pen,
             pen,
             ROIDrawer.MARKERS[-1]
         )
-        focus.is_active()
-        focus.update_indicators()
-        focus.add_to_view(view)
-        return focus
+        nucleus.is_active()
+        nucleus.update_indicators()
+        nucleus.setVisible(visible)
+        nucleus.add_to_view(view)
+        return nucleus
 
     @staticmethod
     def draw_additional_items(items: List[QGraphicsItem], draw_additional: bool = True) -> None:

@@ -1,11 +1,12 @@
-from skimage import io
-import os
-import piexif
 import datetime
 import hashlib
-import numpy as np
-
+import os
+from fractions import Fraction
 from typing import Dict, Union, List
+
+import numpy as np
+import piexif
+from skimage import io
 
 
 class ImageLoader:
@@ -29,15 +30,21 @@ class ImageLoader:
         img = ImageLoader.load_image(path)
         if file_extension in (".tiff", ".tif", ".jpg"):
             tags = piexif.load(path)
+            x_res = tags["0th"].get(piexif.ImageIFD.XResolution, (-1, -1))
+            y_res = tags["0th"].get(piexif.ImageIFD.YResolution, (-1, -1))
+            unit = tags["0th"].get(piexif.ImageIFD.ResolutionUnit, 2)
+            """
+            dt = tags["0th"].get(piexif.ImageIFD.DateTime,
+                                 datetime.datetime.fromtimestamp(os.path.getctime(path)))
+            """
             image_data = {
-                "datetime": tags["0th"].get(piexif.ImageIFD.DateTime,
-                                            datetime.datetime.fromtimestamp(os.path.getctime(path))),
+                "datetime": datetime.datetime.fromtimestamp(os.path.getctime(path)),
                 "height": tags["0th"].get(piexif.ImageIFD.ImageLength, img.shape[0]),
                 "width": tags["0th"].get(piexif.ImageIFD.ImageWidth, img.shape[1]),
-                "x_res": tags["0th"].get(piexif.ImageIFD.XResolution, -1),
-                "y_res": tags["0th"].get(piexif.ImageIFD.YResolution, -1),
+                "x_res": float(Fraction(x_res[0], x_res[1])),
+                "y_res": float(Fraction(y_res[0], y_res[1])),
                 "channels": tags["0th"].get(piexif.ImageIFD.SamplesPerPixel, 3),
-                "unit": tags["0th"].get(piexif.ImageIFD.ResolutionUnit, 2)
+                "unit": ImageLoader._convert_tag_to_unit(unit)
             }
         else:
             image_data = {
@@ -47,9 +54,27 @@ class ImageLoader:
                 "x_res": -1,
                 "y_res": -1,
                 "channels": 1 if len(img.shape) == 2 else 3,
-                "unit": 2
+                "unit": "Inch"
             }
+        # Convert extracted time stamp
+        tt = image_data["datetime"].timetuple()
+        image_data["year"] = tt.tm_year
+        image_data["month"] = tt.tm_mon
+        image_data["day"] = tt.tm_mday
+        image_data["hour"] = tt.tm_hour
+        image_data["minute"] = tt.tm_min
+        image_data["second"] = tt.tm_sec
         return image_data
+
+    @staticmethod
+    def _convert_tag_to_unit(unit: int) -> str:
+        """
+        Method to get the name of the unit from int
+
+        :param unit: The index
+        :return: The unit as string
+        """
+        return ["No Unit", "Inch", "Centimeter"][unit-1]
 
     @staticmethod
     def load_image(path: str) -> np.ndarray:
