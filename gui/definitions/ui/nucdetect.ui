@@ -165,7 +165,7 @@ QDialog{
              <string>Save the results of the analysis</string>
             </property>
             <property name="text">
-             <string>CSV</string>
+             <string>Export Data</string>
             </property>
            </widget>
           </item>

@@ -6,8 +6,10 @@ from PyQt5 import QtCore
 from PyQt5.QtCore import QRectF, Qt, QPointF
 from PyQt5.QtGui import QColor, QKeyEvent, QMouseEvent
 from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem
+from matplotlib import pyplot as plt
 from skimage.draw import ellipse
 
+from DataProcessing import create_lg_lut
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 from database.connections import Requester, Inserter
@@ -24,13 +26,24 @@ class EditorView(pg.GraphicsView):
     ]
 
     def __init__(self, image: np.ndarray, roi: ROIHandler,
-                 parent: QDialog, active_channels: List[Tuple[int, str]], size_factor: float = 1):
+                 parent: QDialog, active_channels: List[Tuple[int, str]],
+                 size_factor: float = 1, high_contrast: bool = False):
+        """
+        :param image: The background image to display
+        :param roi: All roi associated with this image
+        :param parent: The EditorDialog incorporating this view
+        :param active_channels: List containing the index of the channel and its corresponding name
+        :param size_factor: Size factor used for newly added ROI
+        :param high_contrast: If true, the channels will be shown in high contrast mode
+        """
         super(EditorView, self).__init__()
         self.parent = parent
         self.active_channels = {x[1]: x[0] for x in active_channels}
         self.size_factor = size_factor
+        self.high_contrast = high_contrast
         self.mode = -1
         self.image = image
+        self.hcimg = self.create_high_contrast_image()
         self.active_channel: int = None
         self.roi: ROIHandler = roi
         self.requester = Requester()
@@ -64,6 +77,7 @@ class EditorView(pg.GraphicsView):
         self.shift_down = False
         self.saved_values: Dict = None
         self.show_channel("Composite")
+        self.current_channel = "Composite"
 
     def set_changes(self, rect: QRectF, angle: float, preview: bool = False) -> None:
         """
@@ -97,6 +111,7 @@ class EditorView(pg.GraphicsView):
         :param channel: The name of the channel
         :return: None
         """
+        self.current_channel = channel
         if self.selected_item:
             self.selected_item.enable_editing(False)
             self.selected_item = None
@@ -108,8 +123,47 @@ class EditorView(pg.GraphicsView):
         else:
             # Check to which index the name corresponds
             index = self.active_channels[channel]
-            self.img_item.setImage(self.image[..., index])
+            if self.high_contrast:
+                self.img_item.setImage(self.hcimg[..., index])
+            else:
+                self.img_item.setImage(self.image[..., index])
         ROIDrawer.change_channel(self.items, index, self.draw_additional)
+
+    def create_high_contrast_image(self) -> np.ndarray:
+        """
+        Method to create the needed high contrast image
+
+        :return: None
+        """
+        img = np.zeros(shape=self.image.shape)
+        for c in range(img.shape[2]):
+            channel = self.image[..., c]
+            # Create a lut
+            lut = create_lg_lut(np.amax(channel))
+            # Iterate over the image
+            for y in range(img.shape[0]):
+                for x in range(img.shape[1]):
+                    img[y][x][c] = lut[channel[y][x]]
+        return img
+
+    def toggle_high_contrast_mode(self, toggle: bool):
+        """
+        Method to toggle high contrast mode
+
+        :param toggle: Toggle
+        :return: None
+        """
+        self.high_contrast = toggle
+        self.show_channel(self.current_channel)
+
+    def change_colormap(self, colormap: str) -> None:
+        """
+        Method to load the given colormap
+
+        :param colormap: Name of the colormap to load
+        :return: None
+        """
+        self.img_item.setColorMap(pg.colormap.get(colormap, source="matplotlib"))
 
     def change_mode(self, mode: int = 0) -> None:
         """

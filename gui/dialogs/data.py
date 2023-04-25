@@ -1,7 +1,11 @@
+import copy
+import csv
+import os
 import sqlite3
 from typing import List, Tuple, Dict, Any
 
 import numpy as np
+import pandas as pd
 import pyqtgraph as pg
 from PyQt5 import uic, QtCore, QtGui
 from PyQt5.QtCore import QRectF, Qt, QPoint, QPointF, QItemSelection
@@ -13,13 +17,14 @@ from skimage.draw import line
 from skimage.segmentation import watershed
 
 import Util
+from database.connections import Inserter, Requester
+from definitions.icons import Icon, Color
+from Detector import Detector
+from detector_modules import AreaAndROIExtractor
+from dialogs.GraphicsItems import EditorView
 from DataProcessing import eu_dist
 from Plots import PoissonPlotWidget
 from Util import create_image_item_list_from
-from database.connections import Inserter, Requester
-from definitions.icons import Icon, Color
-from detector_modules import AreaAndROIExtractor
-from dialogs.GraphicsItems import EditorView
 from dialogs.selection import ImageSelectionDialog
 from gui import Paths
 from loader import Loader
@@ -28,6 +33,206 @@ from roi.ROI import ROI
 from roi.ROIHandler import ROIHandler
 
 pg.setConfigOptions(imageAxisOrder='row-major')
+
+
+class DataExportDialog(QDialog):
+    __slots__ = [
+        "cur_img",
+        "disp_name",
+        "ui",
+        "req",
+        "names"
+    ]
+    STANDARD_OPTIONS = (
+        "Selected Image",
+        "All analysed Images",
+        "All defined Expriments"
+    )
+    STANDARD_HEADER = ["Image Name", "Image Identifier", "ROI Identifier", "Center Y", "Center X", "Area [px]",
+                       "Ellipticity[%]", "Or. Angle [deg]", "Maj. Axis", "Min. Axis", "match"]
+
+    def __init__(self, current_image: str, display_name: str, names: Dict = None):
+        """
+        :param current_image: md5 hash of the currently selected image
+        :param display_name: The name of the currently selected image
+        :param names: Dictionary associating the image hashes with respective file names
+        """
+        super(DataExportDialog, self).__init__()
+        self.cur_img = current_image
+        self.disp_name = display_name
+        self.req = Requester()
+        self.names = names if names else {}
+        self.ui = self.initialize_ui()
+
+    def accept(self) -> None:
+        self.save_data()
+        super().accept()
+
+    def initialize_ui(self) -> Any:
+        """
+        Method to initialize the ui of this dialog
+
+        :return: The loaded ui
+        """
+        ui = uic.loadUi(Paths.ui_save_dial, self)
+        # Set window and style
+        self.setWindowFlags(
+            self.windowFlags() |
+            QtCore.Qt.WindowSystemMenuHint |
+            QtCore.Qt.WindowMinMaxButtonsHint |
+            QtCore.Qt.Window
+        )
+        self.setWindowIcon(Icon.get_icon("LOGO"))
+        self.setWindowTitle("Data Saving Dialog")
+        self.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css"), "r").read())
+        # Connect buttons to functions
+        ui.btn_export.clicked.connect(self.accept)
+        ui.btn_cancel.clicked.connect(self.close)
+        ui.cbx_xlsx.stateChanged.connect(lambda: ui.cbx_xlsx_single.setEnabled(ui.cbx_xlsx.isChecked()))
+        # Fill the combobox
+        cbx_cont = []
+        cbx_cont.extend(DataExportDialog.STANDARD_OPTIONS)
+        cbx_cont.extend(self.req.get_all_experiments())
+        ui.cbx_choice.addItems(cbx_cont)
+        return ui
+
+    def save_data(self):
+        """
+        Method to save the selected data
+
+        :return: None
+        """
+        # Get the selection
+        selection = self.ui.cbx_choice.currentText()
+        # Save the selected image
+        if selection == DataExportDialog.STANDARD_OPTIONS[0]:  # Selected image
+            self.export_image_as_table(self.cur_img)
+        # Save all analysed images
+        elif selection == DataExportDialog.STANDARD_OPTIONS[1]:  # All analysed images
+            # Get the hashes of all images
+            img_hashes = [x[0] for x in self.req.get_all_images() if x[12]]
+            # Check if the data should be saved in one file
+            file_name = "results_all_images" if self.ui.cbx_xlsx_single.isChecked() else None
+            for ind, md5 in enumerate(img_hashes):
+                self.export_image_as_table(md5, xlsx_name=file_name)
+        # Save all defined experiments
+        elif selection == DataExportDialog.STANDARD_OPTIONS[2]:  # All defined experiments
+            # Get all defined experiments
+            exps = self.req.get_all_experiments()
+            # Check if the data should be saved in one file
+            file_name = "results_all_experiments" if self.ui.cbx_xlsx_single.isChecked() else None
+            for ind, experiment in enumerate(exps):
+                self.export_experiment_as_table(experiment, xlsx_name=file_name)
+        # Save selected experiment
+        else:  #
+            self.export_experiment_as_table(selection)
+
+    def get_image_name(self, md5: str) -> str:
+        """
+        Method to get the name of an image
+
+        :param md5: The md5 hash of the image
+        :return: The name
+        """
+        return self.names.get(md5, md5)
+
+    def export_image_as_table(self, md5: str,
+                              xlsx_name: str = None,
+                              include_header: bool = True,
+                              sheet_name: str = None) -> None:
+        """
+        Method to save the given image
+
+        :param md5: The hash of the image
+        :param xlsx_name: Optional; If given, the file will use this name
+        :param include_header: If true, the table header will also be saved
+        :param sheet_name: Name of the sheet
+        :return: None
+        """
+        # Get general table header
+        header = copy.copy(self.STANDARD_HEADER)
+        # Get the channels for this image
+        chans = self.req.get_channel_names(md5, False)
+        header.extend(chans)
+        # Get the data for the given image
+        rows = self.get_data_for_image(md5)
+        # Try to get the name of the image
+        img_name = self.get_image_name(md5)
+        self.save_table_to_disk(img_name, rows, header,
+                                include_header=include_header,
+                                sheet_name=sheet_name if sheet_name else img_name,
+                                xlsx_name=xlsx_name)
+
+    def export_experiment_as_table(self,
+                                   experiment: str,
+                                   xlsx_name: str = None,
+                                   include_header: bool = True,
+                                   sheet_name: str = None
+                                   ) -> None:
+        """
+        Method to save the given experiment
+
+        :param experiment: Name of the experiment
+        :param xlsx_name: Optional; If given, the file will have this name
+        :param include_header: If true, the table header will also be saved
+        :param sheet_name: Name of the sheet
+        :return: None
+        """
+        # Get general table header
+        header = copy.copy(self.STANDARD_HEADER)
+        # Get associated channels for the experiment
+        chans = self.req.get_channels_for_experiment(experiment)
+        header.extend(chans)
+        # Get the data for the given image
+        rows = self.req.get_table_data_for_experiment(experiment)
+        self.save_table_to_disk(experiment,
+                                rows, header, include_header=include_header,
+                                sheet_name=sheet_name if sheet_name else experiment,
+                                xlsx_name=xlsx_name)
+
+    def get_data_for_image(self, image: str) -> List[List]:
+        """
+        Method to get the data for the specific image
+
+        :param image: The md5 hash of the image
+        :return: The extracted data
+        """
+        return self.req.get_table_data_for_image(image, self.names.get(image, None))
+
+    def save_table_to_disk(self,
+                           name: str,
+                           rows: List[List],
+                           header: List = (),
+                           include_header: bool = True,
+                           xlsx_name: str = None,
+                           sheet_name: str = "Sheet 1") -> None:
+        """
+        Method to save the given table to the disk
+
+        :param name: The file name to use
+        :param rows: The rows to save
+        :param header: Optional: The header of the table
+        :param include_header: If true, the header will also be saved
+        :param xlsx_name: Optional: The file name to used for the xlsx file. If not given, name will be used
+        :param sheet_name: Optional; Name of the sheet to use. Allows to save in the same file,
+        if different sheet names are chosen
+        :return: None
+        """
+        print(rows[-1])
+        print(header)
+        # Create a pandas dataframe
+        df = pd.DataFrame(rows)
+        if self.ui.cbx_csv.isChecked():
+            df.to_csv(os.path.join(Paths.result_path, f"{name}.csv"),
+                      header=header if include_header else False, index=False)
+        if self.ui.cbx_html.isChecked():
+            df.to_html(os.path.join(Paths.result_path, f"{name}.html"),
+                       header=header if include_header else False, index=False)
+        if self.ui.cbx_xlsx.isChecked():
+            fname = name if not xlsx_name else xlsx_name
+            df.to_excel(os.path.join(Paths.result_path, f"{fname}.xlsx"),
+                        header=header if include_header else False, index=False,
+                        sheet_name=sheet_name)
 
 
 class Editor(QDialog):
@@ -80,7 +285,9 @@ class Editor(QDialog):
                             QtCore.Qt.WindowSystemMenuHint |
                             QtCore.Qt.WindowMinMaxButtonsHint |
                             QtCore.Qt.Window)
-        self.editor: EditorView = EditorView(self.image, self.roi, self, self.active_channels, self.size_factor)
+        self.editor: EditorView = EditorView(self.image, self.roi,
+                                             self, self.active_channels,
+                                             self.size_factor)
         self.ui.view.addWidget(self.editor)
         # Add icons to buttons
         self.ui.btn_view.setIcon(Icon.get_icon("EYE"))
@@ -106,6 +313,10 @@ class Editor(QDialog):
         self.ui.cbx_channel.currentIndexChanged.connect(
             lambda: self.editor.show_channel(self.ui.cbx_channel.currentText())
         )
+        self.ui.cbx_high_contrast.stateChanged.connect(self.editor.toggle_high_contrast_mode)
+        self.ui.cbx_colormap.addItems(self.get_colormaps())
+        self.ui.cbx_colormap.setCurrentText("gray")
+        self.ui.cbx_colormap.currentTextChanged.connect(self.editor.change_colormap)
         # React to Draw Ellipsis Button toggle
         self.ui.btn_show.toggled.connect(
             lambda: self.editor.draw_additional_items(self.ui.btn_show.isChecked())
@@ -131,6 +342,14 @@ class Editor(QDialog):
         self.ui.spb_opacity.valueChanged.connect(self.change_opacity)
         self.ui.btn_preview.clicked.connect(self.set_changes)
         self.ui.btn_accept.clicked.connect(self.set_changes)
+
+    def get_colormaps(self) -> List[str]:
+        """
+        Method to get a list of all available colormaps
+
+        :return: List contraining the names of all available colormaps
+        """
+        return pg.colormap.listMaps(source="matplotlib")
 
     def connect_spinboxes_to_change_function(self, connect: bool = True) -> None:
         """
@@ -1300,7 +1519,7 @@ class StatisticsDialog(QDialog):
         :param kwargs: Keyword arguments
         """
         super().__init__(*args, **kwargs)
-        self.was_initialzied = False
+        self.was_initialized = False
         self.ui = None
         self.experiment = experiment
         self.active_channels = active_channels
@@ -1318,7 +1537,7 @@ class StatisticsDialog(QDialog):
         self.initialize_ui()
         self.get_raw_data()
         self.prepare_plot()
-        self.was_initialzied = True
+        self.was_initialized = True
 
     def initialize_ui(self) -> None:
         """
@@ -1327,6 +1546,10 @@ class StatisticsDialog(QDialog):
         :return: None
         """
         self.ui = uic.loadUi(Paths.ui_stat_dial, self)
+        # Set window and style
+        self.setWindowIcon(Icon.get_icon("LOGO"))
+        self.setWindowTitle("Statistics Dialog")
+        self.setStyleSheet(open("gui/definitions/css/messagebox.css", "r").read())
         self.ui.cbx_dist.addItems(["Poisson"])
         # Bind comboboxes to listeners
         self.ui.cbx_dist.currentIndexChanged.connect(self.change_distribution)
@@ -1501,7 +1724,7 @@ class StatisticsDialog(QDialog):
         :param index: The index of the new distribution
         :return: None
         """
-        if not self.was_initialzied:
+        if not self.was_initialized:
             return
         self.current_group = self.groups[index]
         self.create_plot()
@@ -1513,7 +1736,7 @@ class StatisticsDialog(QDialog):
         :param index: The index of the new distribution
         :return: None
         """
-        if not self.was_initialzied:
+        if not self.was_initialized:
             return
         self.current_channel = self.channels[index]
         self.create_plot()
@@ -1525,7 +1748,7 @@ class StatisticsDialog(QDialog):
         :param index: The index of the new distribution
         :return: None
         """
-        if not self.was_initialzied:
+        if not self.was_initialized:
             return
         self.current_distribution = index
         self.create_plot()

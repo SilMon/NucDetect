@@ -82,10 +82,10 @@ class Detector:
         # Detect roi via image processing and machine learning
         iproi, maps1 = self.ip_roi_extraction(main, foc_channels, names,
                                               settings, analysis_settings, foc_names, logging)
-
         mlroi, maps2 = self.ml_roi_extraction(maps1[0], foc_channels, names,
                                               settings, analysis_settings, foc_names, logging)
         rois = []
+        
         main_roi = [x for x in iproi if x.main]
         for channel in foc_names:
             # Define map Comparator
@@ -97,6 +97,7 @@ class Detector:
             mapc.get_match_for_nuclei()
             rois.extend(mapc.merge_overlapping_foci())
         rois.extend(main_roi)
+
         # Check for quality of roi
         if rois:
             qroi = self.perform_quality_check(channels, names, analysis_settings, rois)

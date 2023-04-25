@@ -29,7 +29,7 @@ from core.roi.ROIHandler import ROIHandler
 from database.connections import Connector, Requester, Inserter
 from definitions.icons import Icon, Color
 from detector_modules.ImageLoader import ImageLoader
-from dialogs.data import Editor, ExperimentDialog, StatisticsDialog
+from dialogs.data import Editor, ExperimentDialog, StatisticsDialog, DataExportDialog
 from dialogs.selection import ExperimentSelectionDialog
 from dialogs.settings import AnalysisSettingsDialog, SettingsDialog
 from gui import Paths, Util
@@ -805,7 +805,7 @@ class NucDetect(QMainWindow):
             # Get all assigned images
             num_imgs = self.requester.get_number_of_associated_images_for_experiment(experiment)
             # Load data for experiment
-            rows = self.get_table_data_from_database(experiment, channels)
+            rows = self.get_table_data_from_database(experiment)
             # Sort rows according to group
             rows = sorted(rows, key=lambda x: x[1])
             self.set_experiment_status_label_text(
@@ -857,14 +857,11 @@ class NucDetect(QMainWindow):
             return
         return item_row
 
-    def get_table_data_from_database(self, experiment: str, channel_names: List[str],
-                                     cursor: sqlite3.Cursor) -> List[List[str]]:
+    def get_table_data_from_database(self, experiment: str) -> List[List[str]]:
         """
         Method to load the data of an experiment from the database
 
         :param experiment: The name of the experiment to get the data for
-        :param channel_names: Names of the active channels without the main channel
-        :param cursor: Cursor pointing to the database
         :return: List of row to created for display
         """
         # Get images associated with experiment
@@ -872,7 +869,7 @@ class NucDetect(QMainWindow):
         rows: List[List[str]] = []
         # Iterate over all images
         for img in imgs:
-            row = self.get_table_data_for_image(img, channel_names, cursor)
+            row = self.get_table_data_for_image(img)
             # Check if the image was assigned to a group
             group = self.requester.get_associated_group_for_image(img)
             for row_ in row:
@@ -912,7 +909,7 @@ class NucDetect(QMainWindow):
                    f"{float(stats[18]) * 100:.2f}", f"{float(stats[14]):.2f}",
                    f"{float(stats[12]):.2f}", f"{float(stats[13]):.2f}", f"{match:.2f}"]
             # Count available foci
-            for channel in self.requester.get_channel_names(img, False):
+            for channel in sorted(self.requester.get_channel_names(img, False)):
                 count = self.requester.count_foci_for_nucleus_and_channel(nuc, channel)
                 row.append(str(count))
             rows.append(row)
@@ -985,26 +982,11 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        save = Thread(target=self._save_results)
-        self.prg_signal.emit("Saving Results", 0, 100, "")
-        save.start()
-
-    def _save_results(self) -> None:
-        """
-        Method to export the analysis results as csv file
-
-        :return: None
-        """
-        self.prg_signal.emit("Saving Results", 50, 100, "")
-        # Create name for file
-        name = f"{self.cur_exp if self.cur_exp else self.roi_cache.ident}.csv"
-        with open(os.path.join(Paths.result_path, name), 'w', newline='') as file:
-            writer = csv.writer(file, delimiter=";",
-                                quotechar="|", quoting=csv.QUOTE_MINIMAL)
-            for row in self.data:
-                writer.writerow(row)
-        self.prg_signal.emit("Results saved -- Program ready", 100, 100, "")
-        self.unsaved_changes = False
+        code = DataExportDialog(self.cur_img["key"],
+                                self.hash_to_name.get(self.cur_img["file_name"], "Current Image"),
+                                self.hash_to_name).exec()
+        if code == QDialog.Accepted:
+            self.prg_signal.emit("Results saved -- Program ready", 100, 100, "")
 
     def on_config_change(self, config, section, key: str, value: Union[str, int, float]) -> None:
         """
@@ -1038,7 +1020,7 @@ class NucDetect(QMainWindow):
             msg.setText("No experiments were defined")
             msg.setInformativeText("Statistics can only be displayed, if images are assigned to an experiment")
             msg.setStandardButtons(QMessageBox.Ok)
-            msg.exec_()
+            msg.exec()
             return
         # Create dialog window
         stat_dialog = QDialog()

@@ -44,19 +44,22 @@ def create_training_images_from_folder(path: str, dest: str, subimage_shape: Tup
 
 
 def check_if_images_already_exist(files: List[str], dest: str,
-                                  subimage_shape: Tuple[int, int], is_label: bool = False) -> List[str]:
+                                  subimage_shape: Tuple[int, int],
+                                  is_label: bool = False, multiple_channels: bool = True) -> List[str]:
     """
-    Method to check if the given images already exist
+    Function to check if the given images already exist
+
     :param files: List of files that need to be checked
     :param dest: The folder that should be checked
     :param subimage_shape: The shape of created sub-images
     :param is_label: Should label or training images be checked
+    :param multiple_channels: Were the original images split into multiple images?
     :return: List of files that need to be created
     """
     cfiles = []
     for file in files:
         # Create path
-        f_name = f"{os.path.splitext(file)[0]}_{subimage_shape[0]}" \
+        f_name = f"{os.path.splitext(file)[0]}_{'red_' if multiple_channels else ''}{subimage_shape[0]}" \
                  f"-{subimage_shape[1]}_00{'_label' if is_label else''}.png"
         # Check if file already exists
         if not os.path.isfile(os.path.join(dest, f_name)):
@@ -68,9 +71,11 @@ def check_if_images_already_exist(files: List[str], dest: str,
 
 
 def process_image(file_path: str, subimage_shape: Tuple[int, int],
-                  dest: str, is_label: bool = False, db_path: str = "") -> str:
+                  dest: str, is_label: bool = False, db_path: str = "",
+                  separate_channels: bool = False) -> str:
     """
     Function to process a given image to use for machine learning
+
     :param file_path: The path leading to the file to load. Is ignored if is_label is True
     :param subimage_shape: The shape of the created sub-images
     :param dest: The folder to save the resulting images in
@@ -88,12 +93,23 @@ def process_image(file_path: str, subimage_shape: Tuple[int, int],
     sf_name = os.path.splitext(file_path)[0].split(os.path.sep)[-1]
     subs = extract_subimages(img, subimage_shape)
     for sind, sub in enumerate(subs):
-        # Create name for the given sub image
-        name = f"{sf_name}_{subimage_shape[0]}-{subimage_shape[1]}_{sind:02d}{'_label.png' if is_label else '.png'}"
-        # Create a file path
-        sfpath = os.path.join(dest, name)
-        # Check if sub image already exists
-        io.imsave(sfpath, sub.astype("uint8"), check_contrast=False)
+        if not separate_channels:
+            # Create name for the given sub image
+            name = f"{sf_name}_{subimage_shape[0]}-{subimage_shape[1]}_{sind:02d}{'_label.png' if is_label else '.png'}"
+            # Create a file path
+            sfpath = os.path.join(dest, name)
+            # Check if sub image already exists
+            io.imsave(sfpath, sub.astype("uint8"), check_contrast=False)
+        else:
+            channels = ("red", "green", "blue", "black", "white")
+            for channel_index in range(sind.shape[2]):
+                # Create name for the given sub image
+                name = f"{sf_name}_{channels[channel_index]}_{subimage_shape[0]}-" \
+                       f"{subimage_shape[1]}_{sind:02d}{'_label.png' if is_label else '.png'}"
+                # Create a file path
+                sfpath = os.path.join(dest, name)
+                # Check if sub image already exists
+                io.imsave(sfpath, sub.astype("uint8"), check_contrast=False)
     return f"Created training images for:\t{sf_name}" if not is_label else f"Created labels for:\t{sf_name}"
 
 
@@ -179,7 +195,7 @@ def get_label_for_image(img_hash: str, db_path: str) -> np.ndarray:
     db = sql.connect(db_path)
     crs = db.cursor()
     # Get the dimensions of the image
-    dims = tuple(crs.execute("SELECT width, height FROM images WHERE md5=?", (img_hash,)).fetchall()[0])
+    dims = tuple(crs.execute("SELECT height, width FROM images WHERE md5=?", (img_hash,)).fetchall()[0])
     # Load the channel names of the given image
     channel_names = [x[0] for x in crs.execute("SELECT name FROM channels WHERE md5=?", (img_hash,)).fetchall()]
     binmap = np.zeros(shape=(dims[0], dims[1], len(channel_names)))

@@ -218,7 +218,7 @@ QGraphicsView{
         </widget>
        </item>
        <item>
-        <layout class="QVBoxLayout" name="verticalLayout_2" stretch="0,0,0,0">
+        <layout class="QVBoxLayout" name="verticalLayout_2" stretch="0,0,0,0,0">
          <item>
           <widget class="QLabel" name="label_2">
            <property name="text">
@@ -271,6 +271,13 @@ QGraphicsView{
            </property>
           </widget>
          </item>
+         <item>
+          <widget class="QCheckBox" name="cbx_high_contrast">
+           <property name="text">
+            <string>High Contrast Mode</string>
+           </property>
+          </widget>
+         </item>
         </layout>
        </item>
        <item>
@@ -318,20 +325,27 @@ QGraphicsView{
         </widget>
        </item>
        <item>
-        <widget class="QComboBox" name="cbx_channel">
-         <property name="maximumSize">
-          <size>
-           <width>16777215</width>
-           <height>16777215</height>
-          </size>
-         </property>
-         <property name="toolTip">
-          <string>Select channel to show</string>
-         </property>
-         <property name="currentText">
-          <string/>
-         </property>
-        </widget>
+        <layout class="QVBoxLayout" name="verticalLayout_4">
+         <item>
+          <widget class="QComboBox" name="cbx_channel">
+           <property name="maximumSize">
+            <size>
+             <width>16777215</width>
+             <height>16777215</height>
+            </size>
+           </property>
+           <property name="toolTip">
+            <string>Select channel to show</string>
+           </property>
+           <property name="currentText">
+            <string/>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QComboBox" name="cbx_colormap"/>
+         </item>
+        </layout>
        </item>
       </layout>
      </item>

@@ -22,6 +22,8 @@ class Connector:
 
     def __init__(self, protected: bool = True):
         self.connection, self.cursor = self.connect_to_database(protected)
+        # Set the cache size to 50000 pages (2 GB)
+        self.cursor.execute("PRAGMA cache_size=50000;")
         # Load needed scripts
         self.commands = self.load_sql_commands()
         # Get information about the tables of the database
@@ -581,6 +583,56 @@ class Requester(DatabaseInteractor):
         """
         return self.connector.get_view_from_table(Specifiers.ALL, "points", ("hash", Specifiers.EQUALS, roi))
 
+    def get_table_data_for_image(self, image: str, name: str = None) -> List[List]:
+        """
+        Method to create a result table for the given image
+
+        :param image: The md5 hash of the image
+        :param name: Optional: The file name of the image
+        :return: The created table
+        """
+        # Get all nuclei associated with this image
+        nucs = self.get_nuclei_hashes_for_image(image)
+        rows = []
+        for nuc in nucs:
+            # Get the name of the image
+            name = name if name else "Name not available"
+            # Get the general ROI information
+            general = self.get_roi_info(nuc)
+            # Get nucleus statistics
+            stats = self.get_statistics_for_roi(nuc)
+            # Calculate overall match for this nucleus
+            match = general[10] * 100 if general[10] else 100
+            # Create row for this nucleus
+            row = [name, str(image), str(nuc), str(stats[11]), str(stats[10]), f"{stats[15]:.2f}",
+                   f"{float(stats[18]) * 100:.2f}", f"{float(stats[14]):.2f}",
+                   f"{float(stats[12]):.2f}", f"{float(stats[13]):.2f}", f"{match:.2f}"]
+            # Count the foci
+            for channel in sorted(self.get_channel_names(image, False)):
+                row.append(str(self.count_foci_for_nucleus_and_channel(nuc, channel)))
+            rows.append(row)
+        return rows
+
+    def get_table_data_for_experiment(self, experiment: str):
+        """
+        Method to create a result table for the given experiment
+
+        :param experiment: Name of the experiment
+        :return: The created table
+        """
+        # Get all images associated with the experiment
+        imgs = self.get_associated_images_for_experiment(experiment)
+        rows = []
+        # Iterate over all images
+        for img in imgs:
+            img_data = self.get_table_data_for_image(img)
+            # Check if the image was assigned to a group
+            group = self.get_associated_group_for_image(img)
+            for row in img_data:
+                row.insert(2, group)
+            rows.extend(row)
+        return rows
+
 
 class Inserter(DatabaseInteractor):
     """
@@ -607,10 +659,10 @@ class Inserter(DatabaseInteractor):
         """
         self.connector.insert_or_replace_into("images",
                                               ("md5", "year", "month", "day", "hour", "minute",
-                                              "channels", "width", "height", "x_res", "y_res",
-                                              "unit", "analysed", "settings", "experiment", "modified"),
-                                              (md5, year, month, day, hour, minute, channels, width, height,
-                                              xres, yres, res_unit, 0, -1, None, 0))
+                                               "channels", "width", "height", "x_res", "y_res",
+                                               "unit", "analysed", "settings", "experiment", "modified"),
+                                               (md5, year, month, day, hour, minute, channels, width, height,
+                                               xres, yres, res_unit, 0, -1, None, 0))
 
     def add_new_experiment(self, name: str, details: str = "", notes: str = "") -> None:
         """
@@ -701,7 +753,6 @@ class Inserter(DatabaseInteractor):
                              line_data: List,
                              stat_data: List) -> None:
         """
-        Method to save the given ROI data to the database
 
         :param roi_data: The general ROI data
         :param line_data: The ROI line data
