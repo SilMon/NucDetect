@@ -1,8 +1,10 @@
 import os
 import sqlite3
+import time
 from enum import Enum
 from typing import Tuple, Dict, List, Union, Iterable, Any
 
+from detector_modules.ImageLoader import ImageLoader
 from gui import Paths
 from roi.ROI import ROI
 
@@ -77,7 +79,7 @@ class Connector:
         :return: None
         """
         if table not in self.table_info:
-            raise ValueError("Table not in database!")
+            raise ValueError(f"Table \"{table}\" not in database!")
 
     def commit_changes(self) -> None:
         """
@@ -131,7 +133,8 @@ class Connector:
             return
         for c in ";,.():\'\"\\/<>!$§%&[]{}´`|~#*=":
             if c in param:
-                raise ValueError(f"Query rejected: Parameter contains illegal character {c}")
+                error = f"Query rejected: Parameter contains illegal character \"{c}\""
+                raise ValueError(error)
 
     def create_standard_settings(self) -> None:
         """
@@ -236,7 +239,7 @@ class Connector:
         query = self.commands["delete"].replace("<table_name>", table).replace("<condition>", where)
         self.cursor.execute(query)
 
-    def get_view_from_table(self, column: Union[str, List, Specifiers],
+    def get_view_from_table(self, column: Union[str, List, Tuple, Specifiers],
                             table: str, where: Tuple = ()) -> List[Tuple[Union[str, int, float]]]:
         """
         Method to get information from the given table
@@ -281,7 +284,7 @@ class Connector:
         """
         if isinstance(columns, Specifiers):
             return columns.value
-        return ",".join(columns) if isinstance(columns, tuple) else columns
+        return ",".join(columns) if isinstance(columns, tuple) or isinstance(columns, list) else columns
 
     @staticmethod
     def convert_set_statement(values: Iterable[Tuple[str, str]]) -> str:
@@ -382,18 +385,35 @@ class Requester(DatabaseInteractor):
         """
         return [x[0] for x in self.connector.get_view_from_table("name", "experiments")]
 
-    def get_channels_for_experiment(self, experiment: str) -> str:
+    def get_info_for_experiment(self, experiment: str) -> List[str]:
+        """
+        Method to get the details for an experiment
+
+        :param experiment: Name of the experiment
+        :return: The details and notes for the given experiment
+        """
+        details, notes = self.connector.get_view_from_table(("details", "notes"),
+                                                            "experiments",
+                                                            ("name", Specifiers.EQUALS, experiment))[0]
+        return details, notes
+
+    def get_channels_for_experiment(self, experiment: str, include_main: bool = False) -> List[str]:
         """
         Method to get the channel names associated with the given experiment
 
         :param experiment: The name of the experiment
+        :param include_main: If true, the name of the main channel will be included
         :return: The name of the channels
         """
         # Select the images corresponding to the experiment
         imgs = self.get_associated_images_for_experiment(experiment)
+        channels = [x[0] for x in self.connector.get_view_from_table("DISTINCT name", "channels",
+                                                                     ("md5", Specifiers.EQUALS, imgs[0]))]
         # Get the main channel
-        return self.connector.get_view_from_table("DISTINCT name", "channels",
-                                                  ("md5", Specifiers.EQUALS, imgs[0][0]))[0][0]
+        main = self.get_main_channel(imgs[0])
+        if not include_main:
+            channels.remove(main)
+        return channels
 
     def get_main_channel_for_experiment(self, experiment: str) -> str:
         """
@@ -403,7 +423,7 @@ class Requester(DatabaseInteractor):
         :return: The name of the main channel
         """
         # Get first associated image
-        img = self.get_associated_images_for_experiment(experiment)[0][0]
+        img = self.get_associated_images_for_experiment(experiment)[0]
         return self.get_main_channel(img)
 
     def get_associated_images_for_experiment(self, experiment: str) -> List[str]:
@@ -451,9 +471,30 @@ class Requester(DatabaseInteractor):
         info = self.connector.get_view_from_table(Specifiers.ALL, "images", ("md5", Specifiers.EQUALS, image))
         return info[0] if info else ()
 
+    def check_if_image_was_analysed(self, image: str) -> bool:
+        """
+        Method to check if the given image was analysed
+
+        :param image: The md5 hash of the image
+        :return: True if the image was analysed
+        """
+        return bool(self.connector.get_view_from_table("analysed", "images", ("md5", Specifiers.EQUALS, image))[0][0])
+
+    def check_if_image_is_registered(self, image: str) -> bool:
+        """
+        Method to check if the given image is already registred in the database
+
+        :param image: The md5 hash of the image
+        :return: True if the image was found in the database
+        """
+        return bool(self.connector.get_view_from_table("file_name",
+                                                       "encountered_names",
+                                                       ("md5", Specifiers.EQUALS, image)))
+
     def get_groups_for_experiment(self, experiment: str) -> List[str]:
         """
         Method to get all associated groups for the given experiment
+
         :param experiment: The experiment
         :return: List of all associated groups
         """
@@ -470,8 +511,8 @@ class Requester(DatabaseInteractor):
         """
         group = self.connector.get_view_from_table("name", "groups",
                                                    (("experiment", Specifiers.EQUALS, experiment),
-                                                    ("image", Specifiers.EQUALS, image)))[0]
-        return group if group else "No Group"
+                                                    ("image", Specifiers.EQUALS, image)))
+        return group[0][0] if group else "No Group"
 
     def get_nuclei_hashes_for_image(self, md5: str) -> List[int]:
         """
@@ -531,7 +572,7 @@ class Requester(DatabaseInteractor):
         """
         return self.connector.get_view_from_table(Specifiers.ALL, "channels", ("md5", Specifiers.EQUALS, image))
 
-    def get_channel_names(self, img: str,  include_main: bool = True) -> List[str]:
+    def get_channel_names(self, img: str, include_main: bool = True) -> List[str]:
         """
         Method to get the names of all active channels for the given image
 
@@ -572,7 +613,8 @@ class Requester(DatabaseInteractor):
         :param roi: The roi hash to get the statistics for
         :return: The statistics
         """
-        return self.connector.get_view_from_table(Specifiers.ALL, "statistics", ("hash", Specifiers.EQUALS, roi))[0]
+        stats = self.connector.get_view_from_table(Specifiers.ALL, "statistics", ("hash", Specifiers.EQUALS, roi))
+        return stats[0] if stats else ()
 
     def get_points_for_roi(self, roi: ROI) -> List[Tuple]:
         """
@@ -624,14 +666,28 @@ class Requester(DatabaseInteractor):
         imgs = self.get_associated_images_for_experiment(experiment)
         rows = []
         # Iterate over all images
-        for img in imgs:
-            img_data = self.get_table_data_for_image(img)
+        for ind, img in enumerate(imgs):
+            start = time.time()
+            img_name = self.get_image_filename(img)
+            img_data = self.get_table_data_for_image(img, name=img_name)
             # Check if the image was assigned to a group
-            group = self.get_associated_group_for_image(img)
+            group = self.get_associated_group_for_image(img, experiment)
             for row in img_data:
                 row.insert(2, group)
-            rows.extend(row)
+                rows.append(row)
+            print(f"{ind + 1:04d}:{len(imgs):04d}\tGot data for: {img} in {time.time() - start:.2f} secs")
         return rows
+
+    def get_image_filename(self, md5: str) -> str:
+        """
+        Method to get the file name of the given image
+
+        :param md5: The md5 hash of the image
+        :return: The associated file name
+        """
+        return self.connector.get_view_from_table("file_name",
+                                                  "encountered_names",
+                                                  ("md5", Specifiers.EQUALS, md5))[0][0]
 
 
 class Inserter(DatabaseInteractor):
@@ -661,7 +717,7 @@ class Inserter(DatabaseInteractor):
                                               ("md5", "year", "month", "day", "hour", "minute",
                                                "channels", "width", "height", "x_res", "y_res",
                                                "unit", "analysed", "settings", "experiment", "modified"),
-                                               (md5, year, month, day, hour, minute, channels, width, height,
+                                              (md5, year, month, day, hour, minute, channels, width, height,
                                                xres, yres, res_unit, 0, -1, None, 0))
 
     def add_new_experiment(self, name: str, details: str = "", notes: str = "") -> None:
@@ -921,3 +977,31 @@ class Inserter(DatabaseInteractor):
         :return: None
         """
         self.connector.delete("statistics", ("hash", Specifiers.EQUALS, ident))
+
+    def register_image_filename(self, path: str) -> None:
+        """
+        Method to add the file name to the database
+
+        :param path: The path leading to the file
+        :return: None
+        """
+        # Get the md5 hash of the image
+        md5 = ImageLoader.calculate_image_id(path)
+        # Add the file to the database
+        filename = os.path.splitext(os.path.basename(path))[0]
+        self.connector.insert_or_replace_into("encountered_names", ("md5", "file_name"), (md5, filename))
+
+    def register_image_filenames(self, paths: Union[List[str], Tuple[str]]) -> None:
+        """
+        Method to register the given files in the database
+
+        :param paths: Paths leading to the images
+        :return: None
+        """
+        # Calculate all needed values
+        vals = []
+        for path in paths:
+            md5 = ImageLoader.calculate_image_id(path)
+            filename = os.path.basename(path)
+            vals.append((md5, filename))
+        self.connector.insert_or_replace_into("encountered_names", ("md5", "file_name"), vals, True)

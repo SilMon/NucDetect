@@ -1,4 +1,10 @@
 BEGIN TRANSACTION;
+CREATE TABLE IF NOT EXISTS "encountered_names"
+(
+    "md5"       TEXT,
+    "file_name" TEXT,
+    PRIMARY KEY ("md5")
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS "channels"
 (
     "md5"    TEXT,

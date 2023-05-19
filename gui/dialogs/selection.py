@@ -45,9 +45,9 @@ class ExperimentSelectionDialog(QDialog):
         # Load available experiments
         exps = self.requester.get_all_experiments()
         # Add experiments to combo box
-        for experiment in [x[0] for x in exps]:
+        for experiment in exps:
             self.ui.cbx_exp.addItem(experiment)
-        self.on_experiment_selection_change(exps[0][0])
+        self.on_experiment_selection_change(exps[0])
         self.ui.cbx_exp.currentTextChanged.connect(self.on_experiment_selection_change)
 
     def on_experiment_selection_change(self, current_text) -> None:
@@ -63,7 +63,7 @@ class ExperimentSelectionDialog(QDialog):
         # Get main channel
         main = self.requester.get_main_channel_for_experiment(exp)
         # Clean up channels
-        channels = [x[0] for x in channels if x[0] != main]
+        channels = [x for x in channels if x != main]
         self.clear_vbox()
         self.active_channels.clear()
         # Define new VBoxLayout

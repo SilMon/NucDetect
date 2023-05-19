@@ -16,14 +16,14 @@ INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("percent_hmax", 0.05
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("local_threshold_multiplier", 8, "int");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("maximum_size_multiplier", 2, "int");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_nuclei", 0.95, "float");
-INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_foci", 0.80, "float");
+INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_foci", 0.25, "float");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("show_ellipsis", 1, "bool");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("track_mouse", 1, "bool");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_main_area", 750, "int");
-INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_foc_area", 8, "int");
+INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_foc_area", 4, "int");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_main_area", 30000, "int");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_foc_area", 280, "int");
-INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_foc_int", 0.075, "float");
+INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_foc_int", 0.055, "float");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("overlap", 0.5, "float");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("size_factor", 1, "float");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("num_threads", 8, "int");

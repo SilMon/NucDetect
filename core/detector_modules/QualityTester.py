@@ -1,9 +1,11 @@
+import os
 import warnings
 from typing import Dict, Union, List, Iterable, Tuple
-import logging
 
 import numpy as np
 
+import Paths
+#from custom_logging.custom_logging import CustomLogger
 from roi.ROI import ROI
 
 
@@ -31,6 +33,7 @@ class QualityTester:
         self.channel_names = channel_names
         self.roi = roi
         self.settings = settings
+        #self.logger = CustomLogger(os.path.join(Paths.log_path, "quality.log"))
 
     def set_channels(self, channels: List[np.ndarray]) -> None:
         self.channels = channels
@@ -72,16 +75,16 @@ class QualityTester:
         # Check size of nuclei
         lower_bound, upper_bound = self.settings["min_main_area"], self.settings["max_main_area"]
         #main = self.check_size_boundaries(main, lower_bound, upper_bound)
-        logging.info(f"Quality Check:\nNuclei Size Check: {len(main)}")
+        #self.logger.info(f"Quality Check:\nNuclei Size Check: {len(main)}")
         # Delete foci whose nucleus was deleted or which are unassociated to a nucleus
         foci = self.delete_unassociated_foci(main, foci)
-        logging.info(f"Focus Association Check: {len(foci)}")
+        #self.logger.info(f"Focus Association Check: {len(foci)}")
         # Check size of foci
         foci = self.check_size_boundaries(foci, self.settings["min_foc_area"], self.settings["max_foc_area"])
-        logging.info(f"Focus Size Check: {len(foci)}")
+        #self.logger.info(f"Focus Size Check: {len(foci)}")
         # Check foci for intensity
         foci = self.check_intensity_boundaries(foci, self.settings["min_foc_int"], 1)
-        logging.info(f"Focus Intensity Check: {len(foci)}")
+        #self.logger.info(f"Focus Intensity Check: {len(foci)}")
         return main, foci
 
     def separate_roi_by_channel(self) -> Tuple[List[ROI], List[ROI]]:

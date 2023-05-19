@@ -281,6 +281,7 @@ class PoissonPlotWidget(pg.PlotWidget):
         :param test: Either array of elements to test or one element to test
         :return: List of probabilities or the probability for the given element
         """
+        # TODO sometimes overflow error
         if isinstance(test, list) or isinstance(test, np.ndarray):
             res = []
             for el in test:

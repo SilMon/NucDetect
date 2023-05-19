@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 from typing import Iterable, Dict, List, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 from scipy.ndimage import label

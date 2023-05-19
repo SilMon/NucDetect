@@ -1,6 +1,7 @@
 import logging
 import warnings
 from typing import List, Tuple, Dict, Union
+from numba.typed import List as NumbaList
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -54,8 +55,10 @@ class MapComparator:
         :return: None
         """
         for nucleus in self.main:
-            focar1 = convert_area_to_array(nucleus.area, self.foc1_bin)
-            focar2 = convert_area_to_array(nucleus.area, self.foc2_bin)
+            # TODO convert to numba list -> Deprecation warning
+            nuc_ar = NumbaList(nucleus.area)
+            focar1 = convert_area_to_array(nuc_ar, self.foc1_bin)
+            focar2 = convert_area_to_array(nuc_ar, self.foc2_bin)
             # Create temporary map
             foc1 = (focar1 > 0).astype(int)
             foc2 = (focar2 > 0).astype(int)

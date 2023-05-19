@@ -1,8 +1,10 @@
 import datetime
+import multiprocessing
 import os
 import sqlite3
 from os.path import isfile
 from typing import List, Tuple, Union, Iterable
+from concurrent.futures import ProcessPoolExecutor
 
 from PyQt5 import QtCore
 from PyQt5.QtGui import QStandardItem, QIcon
@@ -148,6 +150,18 @@ def create_list_item(path: str) -> QStandardItem:
         return item
 
 
+def check_for_thumbnails(paths: List[str]) -> None:
+    """
+    Function to check if the given images already have a thumbnail created.
+    If not, the thumbnails will be created
+
+    :param paths: List of image paths
+    :return:None
+    """
+    for path in paths:
+        create_thumbnail(path)
+
+
 def create_thumbnail(image_path: str, size: Tuple = (75, 75)) -> str:
     """
     Function to create a thumbnail from an image
@@ -174,7 +188,7 @@ def create_thumbnail(image_path: str, size: Tuple = (75, 75)) -> str:
     # Scale image
     img = resize(img, new_shape)
     # Save the image
-    io.imsave(thumb_path, img_as_ubyte(img))
+    io.imsave(thumb_path, img_as_ubyte(img), check_contrast=False)
     return thumb_path
 
 

@@ -10,16 +10,18 @@ import time
 import traceback
 import warnings
 from concurrent.futures import ProcessPoolExecutor
+from copy import copy
 from threading import Thread
-from typing import Union, Dict, Iterable, List, Tuple
+from typing import Union, Dict, Iterable, List, Tuple, Any
 
 import PyQt5
 import numpy as np
 import pyqtgraph as pg
-from PyQt5 import QtCore, QtWidgets
+from PyQt5 import QtCore, QtWidgets, Qt
 from PyQt5 import QtGui
 from PyQt5 import uic
-from PyQt5.QtCore import QSize, pyqtSignal, QItemSelectionModel, QSortFilterProxyModel
+from PyQt5.QtCore import QSize, pyqtSignal, QItemSelectionModel, QSortFilterProxyModel, QAbstractItemModel, QModelIndex, \
+    QAbstractListModel
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QPixmap
 from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, QMessageBox
 
@@ -27,6 +29,7 @@ from core.Detector import Detector
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 from database.connections import Connector, Requester, Inserter
+from definitions import icons
 from definitions.icons import Icon, Color
 from detector_modules.ImageLoader import ImageLoader
 from dialogs.data import Editor, ExperimentDialog, StatisticsDialog, DataExportDialog
@@ -51,6 +54,11 @@ class NucDetect(QMainWindow):
     add_signal = pyqtSignal(str)
     aa_signal = pyqtSignal(int, int)
     executor = Thread()
+    STANDARD_TABLE_HEADER = ["Image Name", "Image Identifier",
+                             "ROI Identifier", "Center Y",
+                             "Center X", "Area [px]", "Ellipticity[%]",
+                             "Or. Angle [deg]", "Maj. Axis", "Min. Axis",
+                             "match"]
 
     def __init__(self):
         """
@@ -162,16 +170,18 @@ class NucDetect(QMainWindow):
         self.setWindowIcon(Icon.get_icon("LOGO"))
         self.ui.lbl_logo.setPixmap(QPixmap("definitions/images/banner.png"))
         # Initialization of the image list
-        self.img_list_model = QStandardItemModel(self.ui.list_images)
+        self.add_images_from_folder(Paths.images_path)
+        self.img_list_model = ImageListModel(self.ui.list_images, paths=self.loaded_files)
         self.ui.list_images.setModel(self.img_list_model)
         self.ui.list_images.selectionModel().selectionChanged.connect(self.on_image_selection_change)
         self.ui.list_images.setWordWrap(True)
         self.ui.list_images.setIconSize(QSize(75, 75))
+        self.ui.list_images.verticalScrollBar().valueChanged.connect(self.fetch_more_images_if_needed)
         # Initialization of the result table
         self.res_table_model = QStandardItemModel(self.ui.table_results)
-        self.res_table_model.setHorizontalHeaderLabels(["Image Identifier", "ROI Identifier", "Center[(y, x)]",
-                                                        "Area [px]", "Ellipticity[%]", "Or. Angle [deg]",
-                                                        "Maj. Axis", "Min. Axis"])
+        # Initialize the header
+        self.res_table_model.setHorizontalHeaderLabels(NucDetect.STANDARD_TABLE_HEADER)
+        # Enable sorting
         self.res_table_sort_model = TableFilterModel(self)
         self.res_table_sort_model.setSourceModel(self.res_table_model)
         self.ui.table_results.setModel(self.res_table_sort_model)
@@ -204,7 +214,6 @@ class NucDetect(QMainWindow):
         self.prg_signal.connect(self._set_progress)
         self.selec_signal.connect(self._select_next_image)
         self.add_signal.connect(self.add_item_to_list)
-        self.add_images_from_folder(Paths.images_path)
 
     def reload(self) -> None:
         """
@@ -212,7 +221,21 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
+        self.loaded_files = []
         self.add_images_from_folder(Paths.images_path, reload=True)
+        self.img_list_model.set_paths(self.loaded_files)
+
+    def fetch_more_images_if_needed(self, value: int, threshold: float = 0.75):
+        """
+        Method to check if more items need to be fetched
+
+        :param value: The current value of the scroll bar
+        :param threshold: The threshold used to determine, if more items should be fetched
+        :return: None
+        """
+        max_ = self.ui.list_images.verticalScrollBar().maximum()
+        if value > max_ * threshold:
+            self.img_list_model.fetchMore(QModelIndex())
 
     def on_image_selection_change(self) -> None:
         """
@@ -221,7 +244,7 @@ class NucDetect(QMainWindow):
         :return: None
         """
         for index in self.ui.list_images.selectionModel().selectedIndexes():
-            self.cur_img = self.img_list_model.item(index.row()).data()
+            self.cur_img = self.img_list_model.get_item_data_at_index(index.row()).data()
         if self.cur_img:
             ana = self.cur_img["analysed"]
             if ana:
@@ -229,8 +252,7 @@ class NucDetect(QMainWindow):
                 experiment = self.show_experiment_loading_warning_dialog()
                 self.prg_signal.emit(f"Loading data from database for {self.cur_img['file_name']}",
                                      0, 100, "")
-                thread = Thread(target=self.load_saved_data, args=(experiment, ))
-                thread.start()
+                self.load_saved_data(experiment)
             else:
                 self.ui.lbl_status.setText("Program ready")
                 self.res_table_model.setRowCount(0)
@@ -249,7 +271,7 @@ class NucDetect(QMainWindow):
         if not exp:
             return
         # Get number of attached images
-        num_imgs = self.requester.get_associated_images_for_experiment(exp)
+        num_imgs = len(self.requester.get_associated_images_for_experiment(exp))
         exit_code = self.open_two_choice_dialog(
             "Experiment attached!",
             "",
@@ -273,8 +295,8 @@ class NucDetect(QMainWindow):
         :return: The exit code of the dialog
         """
         msg = QMessageBox()
-        msg.setStyleSheet(open("gui/definitions/css/messagebox.css", "r").read())
-        msg.setWindowIcon(QtGui.QIcon('gui/definitions/images/logo.png'))
+        msg.setStyleSheet(open(os.path.join(Paths.css_dir, "messagebox.css"), "r").read())
+        msg.setWindowIcon(Icon.get_icon("LOGO"))
         msg.setIcon(QMessageBox.Information)
         msg.setWindowTitle(title)
         msg.setText(text)
@@ -310,10 +332,12 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        exp_dialog = ExperimentDialog(data={
-            "keys": [x[0] for x in self.reg_images],
-            "paths": [x[1] for x in self.reg_images]
-        })
+        # Create data for dialog
+        data = {"keys": [], "paths": []}
+        for path in self.loaded_files:
+            data["keys"].append(ImageLoader.calculate_image_id(path))
+            data["paths"].append(path)
+        exp_dialog = ExperimentDialog(data=data)
         code = exp_dialog.exec()
         if code == QDialog.Accepted:
             exp_dialog.accepted()
@@ -345,45 +369,45 @@ class NucDetect(QMainWindow):
         :param reload: Indicator if a reload occurs
         :return: None
         """
-        start = time.time()
         paths = []
         for t in os.walk(url):
             tpaths = [os.path.join(t[0], x) for x in t[2]]
             paths.extend([x for x in tpaths if x not in self.loaded_files])
         self.loaded_files.extend(sorted(paths, key=lambda x: os.path.basename(x)))
-        batch_size = max(len(paths) // 200, 15)
-        # Check if the list of available files is larger than 25
-        if len(self.loaded_files) > 25 and not reload:
-            self.setEnabled(False)
-            self.update_timer = Loader(self.loaded_files, feedback=self.add_image_items,
-                                       processing=create_image_item_list_from, batch_size=batch_size)
-        elif len(self.loaded_files) > 25:
-            self.setEnabled(False)
-            self.update_timer = Loader(paths, feedback=self.add_image_items,
-                                       processing=create_image_item_list_from, batch_size=batch_size)
-        else:
-            self.enable_buttons(True)
-            items = Util.create_image_item_list_from(paths, indicate_progress=True)
-            for item in items:
-                self.add_item_to_list(item)
-            print(f"Finished loading: {time.time() - start: .2f} secs\n")
+        # Add new paths to database
+        self.add_images_to_database(self.loaded_files)
+        Util.check_for_thumbnails(self.loaded_files)
 
-    def add_image_items(self, items: List[QStandardItem]) -> None:
+    def add_images_to_database(self, images: List[str]) -> None:
         """
-        Method to add loaded image items to
+        Method to add the given list of images to the database
 
-        :param items: The items to add
+        :param images: List of image paths
         :return: None
         """
-        # Indicate update in console
-        print(f"{self.update_timer.percentage * 100:.2f}% of images added to image list")
-        # Indicate update in progress bar
-        self.prg_signal.emit(f"{self.update_timer.items_loaded} images added to image list",
-                             self.update_timer.percentage * 100, 100, "")
-        for item in items:
-            self.add_item_to_list(item)
-        if not items:
-            self.setEnabled(True)
+        for image in images:
+            self.add_image_information_to_database(image)
+
+    def add_image_information_to_database(self, path: str) -> None:
+        """
+        Method to add the information about the given image to the database
+
+        :param path: The file path for this image
+        :return: None
+        """
+        # Get md5 hash of this image
+        md5 = ImageLoader.calculate_image_id(path)
+        # Check if the image is already registered
+        if self.requester.check_if_image_is_registered(md5):
+            return
+        # Get the required information
+        d = ImageLoader.get_image_data(path)
+        # Add the data to the database
+        self.inserter.add_new_image(md5, d["year"], d["month"], d["day"], d["hour"], d["day"],
+                                    d["channels"], d["width"], d["height"], d["x_res"],
+                                    d["y_res"], d["unit"])
+        self.inserter.register_image_filename(path)
+        self.connector.commit_changes()
 
     def add_item_to_list(self, item: QStandardItem) -> None:
         """
@@ -394,21 +418,11 @@ class NucDetect(QMainWindow):
         """
         if item is not None:
             path = item.data()["path"]
-            key = item.data()["key"]
-            name = item.data()["file_name"]
-            if key in self.hash_to_name.keys():
+            if path in self.loaded_files:
                 return
-            self.hash_to_name[key] = name
             self.img_list_model.appendRow(item)
-            self.reg_images.append((key, path))
-            info = self.requester.get_info_for_image(key)
-            # If the image cannot be found in the database, add it
-            if not info:
-                d = ImageLoader.get_image_data(path)
-                self.inserter.add_new_image(key, d["year"], d["month"], d["day"], d["hour"], d["day"],
-                                            d["channels"], d["width"], d["height"], d["x_res"],
-                                            d["y_res"], d["unit"])
-                self.connector.commit_changes()
+            self.loaded_files.append(path)
+            self.add_image_information_to_database(path)
 
     def remove_image_from_list(self) -> None:
         """
@@ -418,7 +432,7 @@ class NucDetect(QMainWindow):
         """
         cur_ind = self.ui.list_images.currentIndex()
         data = self.img_list_model.item(cur_ind.row()).data()
-        self.reg_images.remove((data["key"], data["path"]))
+        self.loaded_files.remove(data["path"])
         self.img_list_model.removeRow(cur_ind.row())
 
     def clear_image_list(self) -> None:
@@ -428,7 +442,7 @@ class NucDetect(QMainWindow):
         :return: None
         """
         self.img_list_model.clear()
-        self.reg_images.clear()
+        self.loaded_files.clear()
 
     def show_analysis_settings_dialog(self, show_redo_option: bool = False) -> Union[Dict, None]:
         """
@@ -503,8 +517,7 @@ class NucDetect(QMainWindow):
                 roi.calculate_ellipse_parameters()
         self.prg_signal.emit("Creating result table", maxi * 0.65, maxi, "")
         print(f"Calculation of ellipse parameters: {time.time() - s0:.4f}")
-        self.create_result_table_from_list(data["handler"])
-        print(f"Creation result table: {time.time() - s0:.4f} secs")
+
         self.prg_signal.emit("Checking database", maxi * 0.9, maxi, "")
         s1 = time.time()
 
@@ -513,6 +526,7 @@ class NucDetect(QMainWindow):
         self.prg_signal.emit(message.format(f"{time.time() - start:.2f} secs"),
                              percent, maxi, "")
         self.create_result_table_from_list(self.roi_cache)
+        print(f"Creation result table: {time.time() - s0:.4f} secs")
         self.enable_buttons()
         self.ui.list_images.setEnabled(True)
         self.reflect_item_status_changes()
@@ -543,7 +557,7 @@ class NucDetect(QMainWindow):
         """
         start_time = time.time()
         # Use all available threads except 4
-        with ProcessPoolExecutor(max_workers=multiprocessing.cpu_count() - 1) as e:
+        with ProcessPoolExecutor(max_workers=round(multiprocessing.cpu_count() * 0.25)) as e:
             self.res_table_model.setRowCount(0)
             self.res_table_model.setColumnCount(2)
             self.res_table_model.setHorizontalHeaderLabels(["Image Name", "Image Hash", "Number of ROI"])
@@ -551,10 +565,11 @@ class NucDetect(QMainWindow):
             settings["analysis_settings"]["logging"] = False
             self.prg_signal.emit("Starting multi image analysis", 0, 100, "")
             paths = []
-            for ind in range(self.img_list_model.rowCount()):
-                data = self.img_list_model.item(ind).data()
-                if not bool(data["analysed"]) or settings["re-analyse"]:
-                    paths.append(data["path"])
+            for image in self.loaded_files:
+                # Get md5 hash of file
+                md5 = ImageLoader.calculate_image_id(image)
+                if not self.requester.check_if_image_was_analysed(md5) or settings["re-analyse"]:
+                    paths.append(image)
             ind = 1
             cur_batch = 1
             curind = 0
@@ -569,15 +584,20 @@ class NucDetect(QMainWindow):
                 t_setts = [settings for _ in range(len(paths))]
                 res = e.map(self.detector.analyse_image, tpaths, t_setts)
                 maxi = len(paths)
-
                 for r in res:
                     self.prg_signal.emit(f"Analysed images: {ind}/{maxi}",
                                          ind, maxi, "")
                     self.save_rois_to_database(r, all_=True)
+                    # Get the image hash and file name
+                    name = self.requester.get_image_filename(r["handler"].ident)
+                    name_item = QStandardItem(name)
+                    ident_item = QStandardItem(r["handler"].ident)
+                    focus_item = QStandardItem(str(len(r["handler"])))
+                    name_item.setTextAlignment(QtCore.Qt.AlignCenter)
+                    ident_item.setTextAlignment(QtCore.Qt.AlignCenter)
+                    focus_item.setTextAlignment(QtCore.Qt.AlignCenter)
                     self.res_table_model.appendRow(
-                        [QStandardItem(self.hash_to_name[r["handler"].ident]),
-                         QStandardItem(r["handler"].ident),
-                         QStandardItem(str(len(r["handler"])))]
+                        [name_item, ident_item, focus_item]
                     )
                     ind += 1
                     self.ui.table_results.scrollToBottom()
@@ -600,7 +620,7 @@ class NucDetect(QMainWindow):
                                  100, "")
             # Change the status of list items to reflect that they were analysed
             for ind in range(self.img_list_model.rowCount()):
-                item = self.img_list_model.item(ind)
+                item = self.img_list_model.get_item_data_at_index(ind)
                 data = item.data()
                 data["analysed"] = True
                 item.setData(data)
@@ -780,12 +800,11 @@ class NucDetect(QMainWindow):
         # Sort channel list
         chans = sorted(chans)
         # Create header
-        header = ["Image Name", "Image Identifier", "Group", "ROI Identifier", "Center Y", "Center X", "Area [px]",
-                  "Ellipticity[%]", "Or. Angle [deg]", "Maj. Axis", "Min. Axis", "match"]
+        header = copy(NucDetect.STANDARD_TABLE_HEADER)
         header.extend(chans)
-        if not experiment:
-            header.remove("Group")
-        rows = self.prepare_main_table_rows(chans, experiment)
+        if experiment:
+            header.insert(2, "Group")
+        rows = self.prepare_main_table_rows(experiment)
         self.create_table_rows(rows)
         # Set header of table
         self.res_table_model.setHorizontalHeaderLabels(header)
@@ -793,11 +812,10 @@ class NucDetect(QMainWindow):
         header.extend(rows)
         self.data = header
 
-    def prepare_main_table_rows(self, channels: List[str], experiment: Union[str, None] = None) -> List[List[str]]:
+    def prepare_main_table_rows(self, experiment: Union[str, None] = None) -> List[List[str]]:
         """
         Method to prepare the rows of the result table on the main UI
 
-        :param channels: The name of the foci channels to show
         :param experiment: Name of the experiment to show. None if only the current image should be shown
         :return: The prepared rows
         """
@@ -869,9 +887,12 @@ class NucDetect(QMainWindow):
         rows: List[List[str]] = []
         # Iterate over all images
         for img in imgs:
+            # Check if the image is already analysed
+            if not self.requester.check_if_image_was_analysed(img):
+                continue
             row = self.get_table_data_for_image(img)
             # Check if the image was assigned to a group
-            group = self.requester.get_associated_group_for_image(img)
+            group = self.requester.get_associated_group_for_image(img, experiment)
             for row_ in row:
                 row_.insert(2, group)
             rows.extend(row)
@@ -881,39 +902,14 @@ class NucDetect(QMainWindow):
         """
         Method to get the table data for the specified image
 
-        :param img: The image to get the data for
+        :param img: The md5 hash of the image to get the data for
         :return: List of rows created for display
         """
-        rows: List[List[str]] = []
-        # Get all associated nuclei for the image
-        nucs = self.requester.get_nuclei_hashes_for_image(img)
-        nuclen = len(nucs)
-        ind = 1
         # Convert key to file name
-        name = self.hash_to_name[img]
-        # Get all information for each focus
-        for nuc in nucs:
-            self.prg_signal.emit(f"Creating table for image {name}: {ind}/{nuclen}",
-                                 (ind/nuclen) * 100, 100, "")
-            # Get general information about the nucleus
-            general = self.requester.get_roi_info(nuc)
-            # Get statistics of nucleus
-            stats = self.requester.get_statistics_for_roi(nuc)
-            """
-            hash, image, area, int_av, int_med, int_max, int_med, int_std
-            ecc, rou, ell_cent_x, ell_cent_y, ell_maj, ell_min, ell_ang, 
-            ell_ar, or_x, or_y, ellipticity
-            """
-            match = general[10] * 100 if general[10] else 100
-            row = [name, str(img), str(nuc), str(stats[11]), str(stats[10]), f"{stats[15]: .2f}",
-                   f"{float(stats[18]) * 100:.2f}", f"{float(stats[14]):.2f}",
-                   f"{float(stats[12]):.2f}", f"{float(stats[13]):.2f}", f"{match:.2f}"]
-            # Count available foci
-            for channel in sorted(self.requester.get_channel_names(img, False)):
-                count = self.requester.count_foci_for_nucleus_and_channel(nuc, channel)
-                row.append(str(count))
-            rows.append(row)
-            ind += 1
+        name = self.requester.get_image_filename(img)
+        self.prg_signal.emit(f"Creating result table for image {name}", 0, 100, "")
+        rows = self.requester.get_table_data_for_image(img, name)
+        self.prg_signal.emit(f"Creating result table for image {name}", 100, 100, "")
         return rows
 
     def set_experiment_status_label_text(self, status: str) -> None:
@@ -973,8 +969,8 @@ class NucDetect(QMainWindow):
         :return: None
         """
         self.ui.lbl_status.setText(f"{text} -- {(progress / maxi) * 100:.2f}% {symbol}")
-        self.ui.prg_bar.setMaximum(maxi)
-        self.ui.prg_bar.setValue(progress)
+        self.ui.prg_bar.setMaximum(int(maxi))
+        self.ui.prg_bar.setValue(int(progress))
 
     def save_results(self) -> None:
         """
@@ -982,9 +978,9 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        code = DataExportDialog(self.cur_img["key"],
-                                self.hash_to_name.get(self.cur_img["file_name"], "Current Image"),
-                                self.hash_to_name).exec()
+        cur = self.cur_img if self.cur_img else {}
+        code = DataExportDialog(cur.get("key", None),
+                                cur.get("file_name", None)).exec()
         if code == QDialog.Accepted:
             self.prg_signal.emit("Results saved -- Program ready", 100, 100, "")
 
@@ -1022,9 +1018,6 @@ class NucDetect(QMainWindow):
             msg.setStandardButtons(QMessageBox.Ok)
             msg.exec()
             return
-        # Create dialog window
-        stat_dialog = QDialog()
-        stat_dialog.ui = uic.loadUi(Paths.ui_stat_dial, stat_dialog)
         # Open dialog to select an experiment
         exp_sel_dial = ExperimentSelectionDialog()
         code = exp_sel_dial.exec()
@@ -1089,7 +1082,8 @@ class NucDetect(QMainWindow):
         self.cur_img["modified"] = modified
         # Save the data changes to the items data
         for index in self.ui.list_images.selectionModel().selectedIndexes():
-            item = self.img_list_model.item(index.row())
+            # TODO
+            item = self.img_list_model.get_item_data_at_index((index.row()))
             item.setData(self.cur_img)
         if analysed:
             if modified:
@@ -1105,7 +1099,7 @@ class NucDetect(QMainWindow):
         """
         model = self.ui.list_images.model()
         for index in range(model.rowCount()):
-            item = model.item(index)
+            item = model.get_item_at_index(index)
             # Get the data
             data = item.data()
             analysed, modified = Util.check_if_image_was_analysed_and_modified(data["key"])
@@ -1138,11 +1132,83 @@ class TableFilterModel(QSortFilterProxyModel):
     def lessThan(self, ind1, ind2):
         ldat = self.sourceModel().itemData(ind1)[0]
         rdat = self.sourceModel().itemData(ind2)[0]
+        # Check if text can be converted to digit
+        if ldat.isdigit():
+            return int(ldat) < int(rdat)
         if isinstance(ldat, tuple):
             if ldat[1] == rdat[1]:
                 return ldat[0] < rdat[0]
             return ldat[1] < rdat[1]
         return ldat < rdat
+
+
+class ImageListModel(QAbstractListModel):
+    """
+    Class to lazy load needed image list items
+    """
+    __slots__ = (
+        "current_index",
+        "page_size",
+        "_paths",
+        "_cache",
+    )
+
+    def __init__(self, parent=None, paths: List[str] = (), page_size: int = 10):
+        """
+        :param paths: The image paths that are the basis of the items
+        """
+        super().__init__(parent)
+        self._paths = paths
+        self.page_size = min(page_size, len(paths))
+        self.current_index = 0
+        self._cache = {}
+
+    def set_paths(self, paths: List[str]):
+        self.modelReset.emit()
+        self._paths = paths
+        self.current_index = 0
+        self._cache = {}
+
+    def canFetchMore(self, parent: QModelIndex) -> bool:
+        if parent.isValid():
+            return False
+        return self.current_index * self.page_size < len(self._paths)
+
+    def fetchMore(self, parent: QModelIndex) -> None:
+        if parent.isValid():
+            return
+        # Get the number of items to fetch
+        remainder = len(self._paths) - self.current_index
+        items_to_fetch = min(remainder, self.page_size)
+        if items_to_fetch == 0:
+            return
+        self.beginInsertRows(QModelIndex(), self.current_index, self.current_index + items_to_fetch - 1)
+        self.current_index += items_to_fetch
+        self.endInsertRows()
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        return 0 if parent.isValid() else self.current_index
+
+    def data(self, index: QModelIndex, role: int = ...) -> Any:
+        # Check if the index is valid
+        if not index.isValid():
+            return 0
+        # Check if the row is inside teh available boundaries
+        row = index.row()
+        if row > len(self._paths) or row < 0:
+            return 0
+        return self.get_item_data_at_index(row).data(role)
+
+    def get_item_data_at_index(self, index: int) -> QStandardItem:
+        """
+        Method to get the item at the specified index
+
+        :param index: The index of the item
+        :return: The item
+        """
+        if index not in self._cache:
+            self._cache[index] = Util.create_list_item(self._paths[index])
+        return self._cache[index]
 
 
 def exception_hook(exc_type, exc_value, traceback_obj) -> None:

@@ -159,7 +159,7 @@ QDialog{
           <item>
            <widget class="QPushButton" name="btn_save">
             <property name="enabled">
-             <bool>false</bool>
+             <bool>true</bool>
             </property>
             <property name="toolTip">
              <string>Save the results of the analysis</string>
@@ -380,6 +380,9 @@ QDialog{
           </property>
           <property name="locale">
            <locale language="English" country="UnitedKingdom"/>
+          </property>
+          <property name="verticalScrollBarPolicy">
+           <enum>Qt::ScrollBarAlwaysOn</enum>
           </property>
           <property name="selectionMode">
            <enum>QAbstractItemView::ExtendedSelection</enum>

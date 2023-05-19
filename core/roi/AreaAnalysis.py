@@ -144,6 +144,7 @@ def convert_area_to_array(area: Iterable[Tuple[int, int, int]], channel: np.ndar
     :param channel: The channel the area is derived from
     :return: The extracted area
     """
+    # TODO deprecation warning
     # Get normalization factors
     minrow, mincol, rows, cols = get_bounding_box(area)
     # Create empty image

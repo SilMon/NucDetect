@@ -2,7 +2,7 @@ import copy
 import csv
 import os
 import sqlite3
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Union
 
 import numpy as np
 import pandas as pd
@@ -51,17 +51,15 @@ class DataExportDialog(QDialog):
     STANDARD_HEADER = ["Image Name", "Image Identifier", "ROI Identifier", "Center Y", "Center X", "Area [px]",
                        "Ellipticity[%]", "Or. Angle [deg]", "Maj. Axis", "Min. Axis", "match"]
 
-    def __init__(self, current_image: str, display_name: str, names: Dict = None):
+    def __init__(self, current_image: Union[str, None] = None, display_name: Union[str, None] = None):
         """
-        :param current_image: md5 hash of the currently selected image
-        :param display_name: The name of the currently selected image
-        :param names: Dictionary associating the image hashes with respective file names
+        :param current_image: md5 hash of the currently selected image. None if there is no current image
+        :param display_name: The name of the currently selected image. None if there is no current image
         """
         super(DataExportDialog, self).__init__()
         self.cur_img = current_image
         self.disp_name = display_name
         self.req = Requester()
-        self.names = names if names else {}
         self.ui = self.initialize_ui()
 
     def accept(self) -> None:
@@ -91,7 +89,10 @@ class DataExportDialog(QDialog):
         ui.cbx_xlsx.stateChanged.connect(lambda: ui.cbx_xlsx_single.setEnabled(ui.cbx_xlsx.isChecked()))
         # Fill the combobox
         cbx_cont = []
-        cbx_cont.extend(DataExportDialog.STANDARD_OPTIONS)
+        if self.cur_img:
+            cbx_cont.extend(DataExportDialog.STANDARD_OPTIONS)
+        else:
+            cbx_cont.extend(DataExportDialog.STANDARD_OPTIONS[1:])
         cbx_cont.extend(self.req.get_all_experiments())
         ui.cbx_choice.addItems(cbx_cont)
         return ui
@@ -110,7 +111,7 @@ class DataExportDialog(QDialog):
         # Save all analysed images
         elif selection == DataExportDialog.STANDARD_OPTIONS[1]:  # All analysed images
             # Get the hashes of all images
-            img_hashes = [x[0] for x in self.req.get_all_images() if x[12]]
+            img_hashes = [x for x in self.req.get_all_images() if x[12]]
             # Check if the data should be saved in one file
             file_name = "results_all_images" if self.ui.cbx_xlsx_single.isChecked() else None
             for ind, md5 in enumerate(img_hashes):
@@ -157,7 +158,7 @@ class DataExportDialog(QDialog):
         # Get the data for the given image
         rows = self.get_data_for_image(md5)
         # Try to get the name of the image
-        img_name = self.get_image_name(md5)
+        img_name = self.req.get_image_filename(md5)
         self.save_table_to_disk(img_name, rows, header,
                                 include_header=include_header,
                                 sheet_name=sheet_name if sheet_name else img_name,
@@ -182,6 +183,7 @@ class DataExportDialog(QDialog):
         header = copy.copy(self.STANDARD_HEADER)
         # Get associated channels for the experiment
         chans = self.req.get_channels_for_experiment(experiment)
+        header.insert(2, "Group")
         header.extend(chans)
         # Get the data for the given image
         rows = self.req.get_table_data_for_experiment(experiment)
@@ -197,7 +199,7 @@ class DataExportDialog(QDialog):
         :param image: The md5 hash of the image
         :return: The extracted data
         """
-        return self.req.get_table_data_for_image(image, self.names.get(image, None))
+        return self.req.get_table_data_for_image(image, self.req.get_image_filename(image))
 
     def save_table_to_disk(self,
                            name: str,
@@ -218,8 +220,6 @@ class DataExportDialog(QDialog):
         if different sheet names are chosen
         :return: None
         """
-        print(rows[-1])
-        print(header)
         # Create a pandas dataframe
         df = pd.DataFrame(rows)
         if self.ui.cbx_csv.isChecked():
@@ -315,7 +315,8 @@ class Editor(QDialog):
         )
         self.ui.cbx_high_contrast.stateChanged.connect(self.editor.toggle_high_contrast_mode)
         self.ui.cbx_colormap.addItems(self.get_colormaps())
-        self.ui.cbx_colormap.setCurrentText("gray")
+        self.ui.cbx_colormap.setCurrentText("jet")
+        self.editor.change_colormap("jet")
         self.ui.cbx_colormap.currentTextChanged.connect(self.editor.change_colormap)
         # React to Draw Ellipsis Button toggle
         self.ui.btn_show.toggled.connect(
@@ -349,7 +350,7 @@ class Editor(QDialog):
 
         :return: List contraining the names of all available colormaps
         """
-        return pg.colormap.listMaps(source="matplotlib")
+        return sorted(pg.colormap.listMaps(source="matplotlib"))
 
     def connect_spinboxes_to_change_function(self, connect: bool = True) -> None:
         """
@@ -1139,8 +1140,6 @@ class ExperimentDialog(QDialog):
         # Create connection to database
         self.inserter = Inserter()
         self.requester = Requester()
-        self.connection = sqlite3.connect(Paths.database)
-        self.cursor = self.connection.cursor()
         self.load_experiments()
 
     def initialize_ui(self):
@@ -1188,7 +1187,7 @@ class ExperimentDialog(QDialog):
         dial = QInputDialog()
         dial.setWindowTitle("Add new Experiment...")
         dial.setWindowIcon(Icon.get_icon("LOGO"))
-        dial.setStyleSheet(open("inputbox.css", "r").read())
+        dial.setStyleSheet(open(os.path.join(Paths.css_dir, "inputbox.css"), "r").read())
         name, ok = QInputDialog.getText(dial, "Experiment Dialog", "Enter experiment name: ")
         if ok:
             add_item = QStandardItem()
@@ -1256,7 +1255,7 @@ class ExperimentDialog(QDialog):
             # Update data for images
             for key in data["keys"]:
                 self.inserter.update_image_experiment_association(key, data["name"])
-        self.connection.commit()
+        self.inserter.commit_and_close()
 
     def remove_images_from_experiment(self) -> None:
         """
@@ -1273,6 +1272,7 @@ class ExperimentDialog(QDialog):
             item_data = self.img_model.itemFromIndex(index).data()
             # Remove item from keys
             exp_data = exp.data()
+            # TODO also change database
             exp_keys = exp_data["keys"].remove(item_data["key"])
             exp_data["keys"] = exp_keys
             exp.setData(exp_data)
@@ -1321,13 +1321,12 @@ class ExperimentDialog(QDialog):
         """
         exps = self.requester.get_all_experiments()
         # Iterate over all experiments
-        for exp in exps:
+        for exp in sorted(exps):
             imgs = self.requester.get_associated_images_for_experiment(exp)
             # Check if all the necessary images are loaded
             if all(elem in self.data["keys"] for elem in imgs):
-                name = exp[0]
-                details = exp[1]
-                notes = exp[2]
+                name = exp
+                details, notes = self.requester.get_info_for_experiment(exp)
                 groups = {}
                 group_str = ""
                 # Get the paths corresponding to the saved keys
@@ -1511,7 +1510,7 @@ class StatisticsDialog(QDialog):
     Dialog to show statistical analysis of data
     """
 
-    def __init__(self, experiment: str, active_channels: List[str], *args, **kwargs):
+    def __init__(self, experiment: str, active_channels: Dict, *args, **kwargs):
         """
         :param experiment: The experiment to show
         :param active_channels: The channels to analyse
@@ -1548,15 +1547,13 @@ class StatisticsDialog(QDialog):
         self.ui = uic.loadUi(Paths.ui_stat_dial, self)
         # Set window and style
         self.setWindowIcon(Icon.get_icon("LOGO"))
-        self.setWindowTitle("Statistics Dialog")
-        self.setStyleSheet(open("gui/definitions/css/messagebox.css", "r").read())
+        self.setWindowTitle(f"Statistics for {self.experiment}")
+        self.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css"), "r").read())
         self.ui.cbx_dist.addItems(["Poisson"])
         # Bind comboboxes to listeners
         self.ui.cbx_dist.currentIndexChanged.connect(self.change_distribution)
         self.ui.cbx_channel.currentIndexChanged.connect(self.change_channel)
         self.ui.cbx_group.currentIndexChanged.connect(self.change_group)
-        self.setWindowTitle(f"Statistics for {self.experiment}")
-        self.setWindowIcon(QtGui.QIcon('logo.png'))
         self.setWindowFlags(self.windowFlags() |
                             QtCore.Qt.WindowSystemMenuHint |
                             QtCore.Qt.WindowMinMaxButtonsHint)
@@ -1575,19 +1572,16 @@ class StatisticsDialog(QDialog):
         for img in imgs:
             # Get associated group for image
             group = self.requester.get_associated_group_for_image(img, self.experiment)
-            self.group_keys[group].appenmd(img)
             if group in self.group_keys:
-                self.group_keys[group].append()
+                self.group_keys[group].append(img)
+            else:
+                self.group_keys[group] = [img]
         # Get the channels of the image
         channels = self.requester.get_channels_for_experiment(self.experiment)
         # Get main channel
         main = self.requester.get_main_channel_for_experiment(self.experiment)
-        # Check if accross the images multiple main channels are given
-        if len(main) > 1:
-            return
-        main = main[0][0]
         # Clean up channels
-        self.channels = [x[0] for x in channels if x[0] != main and self.active_channels[x[0]]]
+        self.channels = [x for x in channels if x != main and self.active_channels[x]]
         self.ui.cbx_channel.addItems(self.channels)
         # Select first channel as standard
         self.ui.cbx_group.addItems(self.group_keys.keys())
@@ -1624,10 +1618,10 @@ class StatisticsDialog(QDialog):
                         index = self.channels.index(channel)
                         # Get the data for this nucleus from database
                         self.group_data[group][index].append(
-                            self.requester.count_foci_for_nucleus_and_channel(nuc[0], channel)
+                            self.requester.count_foci_for_nucleus_and_channel(nuc, channel)
                         )
 
-    def prepare_plot(self) -> PoissonPlotWidget:
+    def prepare_plot(self) -> None:
         """
         Method to prepare the plot
 
@@ -1980,7 +1974,7 @@ class GroupDialog(QDialog):
         :return: None
         """
         dial = QInputDialog()
-        dial.setStyleSheet(open("inputbox.css", "r").read())
+        dial.setStyleSheet(open(os.path.join(Paths.css_dir, "inputbox.css"), "r").read())
         dial.setWindowIcon(Icon.get_icon("LOGO"))
         name, ok = QInputDialog.getText(dial, "Group Dialog", "Enter the new group: ")
         if ok:
