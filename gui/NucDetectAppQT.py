@@ -806,6 +806,8 @@ class NucDetect(QMainWindow):
             header.insert(2, "Group")
         rows = self.prepare_main_table_rows(experiment)
         self.create_table_rows(rows)
+        if rows:
+            self.res_table_model.setColumnCount(len(rows[0]))
         # Set header of table
         self.res_table_model.setHorizontalHeaderLabels(header)
         header = [header]

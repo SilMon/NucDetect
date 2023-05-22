@@ -231,7 +231,7 @@ class EditorView(pg.GraphicsView):
 
         :return: None
         """
-        self.parent.ui.prg_loading.setValue(self.loading_timer.percentage * 100)
+        self.parent.ui.prg_loading.setValue(int(self.loading_timer.percentage * 100))
         self.items.extend(items)
         if round(self.loading_timer.percentage * 100) >= 99:
             for item in self.items:

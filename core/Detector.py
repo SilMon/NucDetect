@@ -81,10 +81,8 @@ class Detector:
         analysis_settings["foci_channel_names"] = [x for x in analysis_settings["names"]
                                                    if x is not analysis_settings["main_channel_name"]]
         # Detect roi via image processing and machine learning
-        iproi, maps1 = self.ip_roi_extraction(main, foc_channels, names,
-                                              settings, analysis_settings, logging)
-        mlroi, maps2 = self.ml_roi_extraction(maps1[0], foc_channels, names,
-                                              settings, analysis_settings, logging)
+        iproi, maps1 = self.ip_roi_extraction(main, foc_channels, analysis_settings, logging)
+        mlroi, maps2 = self.ml_roi_extraction(maps1[0], foc_channels, analysis_settings, logging)
 
         rois = []
         main_roi = [x for x in iproi if x.main]
