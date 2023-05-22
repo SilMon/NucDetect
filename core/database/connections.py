@@ -891,6 +891,24 @@ class Inserter(DatabaseInteractor):
         self.connector.delete("groups", (("image", Specifiers.EQUALS, image),
                                          ("experiment", Specifiers.EQUALS, experiment)))
 
+    def remove_image_from_experiment(self, image: str) -> None:
+        """
+        Method to remove the given image from its experiment
+
+        :param image: The md5 hash of the image
+        :return: None
+        """
+        self.connector.update("images", ("experiment", Specifiers.NULL), ("md5", Specifiers.EQUALS, image))
+
+    def remove_all_images_from_experiment(self, experiment: str) -> None:
+        """
+        Method to remove all images from a given experiment
+
+        :param experiment: Name of the experiment
+        :return: None
+        """
+        self.connector.update("images", ("experiment", Specifiers.NULL), ("experiment", Specifiers.EQUALS, experiment))
+
     def update_setting(self, key: str, value: Union[str, int, float]) -> None:
         """
         Method to update the given setting in the database

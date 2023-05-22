@@ -140,9 +140,10 @@ class QualityTester:
         :param upper_bound: The upper boundary
         :return: The checked ROI
         """
-        # TODO implement properly
-        lower_bound *= 255#self.settings["max_channel_intensity"]
-        upper_bound *= 255#self.settings["max_channel_intensity"]
+        # Get the max possible value for the image
+        max_val = np.iinfo(self.channels[0])
+        lower_bound *= max_val
+        upper_bound *= max_val
         # Iterate over the given roi to check if their intensity is inside the bounds
         checked = []
         for roi in rois:

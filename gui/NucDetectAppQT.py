@@ -984,21 +984,6 @@ class NucDetect(QMainWindow):
         if code == QDialog.Accepted:
             self.prg_signal.emit("Results saved -- Program ready", 100, 100, "")
 
-    def on_config_change(self, config, section, key: str, value: Union[str, int, float]) -> None:
-        """
-        Will be called if changed occur in the program settings
-
-        :param config: The changed config
-        :param section: The section in which the change occured
-        :param key: The identifier of the changed field
-        :param value: The value of the changed field
-        :return: None
-        """
-        # TODO Implement & test
-        print(f"Config:\n{config}")
-        if section == "Analysis":
-            self.detector.settings[key] = value
-
     def show_statistics(self) -> None:
         """
         Method to open a dialog showing various statistics
@@ -1027,8 +1012,6 @@ class NucDetect(QMainWindow):
             stat_dialog = StatisticsDialog(experiment=exp,
                                            active_channels=active_channels)
             stat_dialog.exec()
-        else:
-            return
 
     def show_settings(self) -> None:
         """
@@ -1080,12 +1063,12 @@ class NucDetect(QMainWindow):
         analysed, modified = Util.check_if_image_was_analysed_and_modified(self.cur_img["key"])
         self.cur_img["analysed"] = analysed
         self.cur_img["modified"] = modified
+        item = None
         # Save the data changes to the items data
         for index in self.ui.list_images.selectionModel().selectedIndexes():
-            # TODO
             item = self.img_list_model.get_item_data_at_index((index.row()))
             item.setData(self.cur_img)
-        if analysed:
+        if analysed and item:
             if modified:
                 item.setBackground(Color.ITEM_MODIFIED)
             else:

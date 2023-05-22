@@ -97,7 +97,6 @@ class BoxPlotItem(pg.GraphicsObject):
         fill = pg.mkBrush((150, 150, 30))
         num_data = len(raw_data) if isinstance(raw_data[0], (list, tuple)) else 1
         p = QtGui.QPainter(self.picture)
-        # TODO test
         #p.scale(10, 10)
         max = -1
         # Get max y value
@@ -265,13 +264,10 @@ class PoissonPlotWidget(pg.PlotWidget):
 
         self.setToolTip("Red: Data Distribution\nBlue: Poisson Distribution\nGreen: Average")
         # Add Legend
-        # TODO
-        """
         legend = pg.LegendItem((80, 60), offset=(70, 20))
         legend.setParentItem(self.getPlotItem())
         legend.addItem(self.data_graph, f"<font size='4' color=#96961e>▮</font>{self.data_name:>10}")
         legend.addItem(self.poisson_graph, f"<font size='4' color=#96961e>▮</font>{'Poisson':>10}")
-        """
 
     def poisson(self, lam: float, test: Union[list, np.ndarray]):
         """
@@ -281,12 +277,13 @@ class PoissonPlotWidget(pg.PlotWidget):
         :param test: Either array of elements to test or one element to test
         :return: List of probabilities or the probability for the given element
         """
-        # TODO sometimes overflow error
         if isinstance(test, list) or isinstance(test, np.ndarray):
             res = []
             for el in test:
                 res.append(self.poisson(lam, el))
             return res
         else:
-            p = ((lam ** test) / math.factorial(test)) * math.exp(-lam)
-            return p
+            try:
+                return ((lam ** test) / math.factorial(test)) * math.exp(-lam)
+            except OverflowError:
+                return 0

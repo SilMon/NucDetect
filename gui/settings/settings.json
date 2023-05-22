@@ -32,6 +32,16 @@
       }
     },
     {
+      "id": "quality_check",
+      "title": "Quality Check",
+      "desc": "Activates a quality check for nuclei and foci after analysis. Might increase data fidelity. Adverse effect on performance",
+      "type": "check",
+      "value": 2,
+      "values": {
+        "tristate": 2
+      }
+    },
+    {
       "id": "logging",
       "title": "Logging",
       "desc": "Activates console logging during analysis",
@@ -58,16 +68,6 @@
     }
   ],
   "Analysis - Image Processing": [
-    {
-      "id": "quality_check",
-      "title": "Quality Check",
-      "desc": "Activates a quality check for nuclei and foci after analysis. Might increase data fidelity. Adverse effect on performance",
-      "type": "check",
-      "value": 2,
-      "values": {
-        "tristate": 2
-      }
-    },
     {
       "id": "min_sigma",
       "title": "Blob Detection - Minimum standard deviation",

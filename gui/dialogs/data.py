@@ -1272,8 +1272,8 @@ class ExperimentDialog(QDialog):
             item_data = self.img_model.itemFromIndex(index).data()
             # Remove item from keys
             exp_data = exp.data()
-            # TODO also change database
             exp_keys = exp_data["keys"].remove(item_data["key"])
+            self.inserter.remove_image_from_experiment(item_data["key"])
             exp_data["keys"] = exp_keys
             exp.setData(exp_data)
             # Remove item from model
@@ -1290,6 +1290,7 @@ class ExperimentDialog(QDialog):
         exp_data = exp.data()
         exp_data["keys"] = []
         exp.setData(exp_data)
+        self.inserter.remove_all_images_from_experiment(exp_data["name"])
         # Clear image model
         self.img_model.clear()
 
@@ -1384,34 +1385,7 @@ class ExperimentDialog(QDialog):
         # Store the current data to the deselected item
         if deselected:
             item = self.exp_model.item(deselected[0].row())
-            name = self.ui.le_name.text()
-            details = self.ui.te_details.toPlainText()
-            notes = self.ui.te_notes.toPlainText()
-            keys = []
-            img_paths = []
-            # Iterate over all images
-            for row in range(self.img_model.rowCount()):
-                # Get item
-                img_item = self.img_model.item(row)
-                # Get item data and append key
-                keys.append(img_item.data()["key"])
-                img_paths.append(img_item.data()["path"])
-            groups = item.data()["groups"]
-            item.setData(
-                {
-                    "name": name,
-                    "details": details,
-                    "notes": notes,
-                    "groups": groups,
-                    "keys": keys,
-                    "image_paths": img_paths
-                }
-            )
-            group_str = ""
-            for group in groups.keys():
-                group_str += f"{group}({len(groups[group])}) "
-            text = f"{name}\n{details[:47]}...\nGroups: {group_str}"
-            item.setText(text)
+            self.store_current_information_to_item(item)
         # Clear the image list
         self.img_model.clear()
         if selected:
@@ -1422,12 +1396,8 @@ class ExperimentDialog(QDialog):
             self.ui.te_details.setPlainText(data["details"])
             self.ui.te_notes.setPlainText(data["notes"])
             # Enable text inputs for change
-            self.ui.le_name.setEnabled(True)
-            self.ui.te_details.setEnabled(True)
-            self.ui.te_notes.setEnabled(True)
-            groups_str = ""
-            for name, keys in data["groups"].items():
-                groups_str += f"{name} ({len(keys)})"
+            self.enable_text_inputs()
+            groups_str = self.create_groups_string(data["groups"].items())
             self.ui.le_groups.setText(groups_str)
             if len(data["image_paths"]) > 25:
                 self.update_timer = Loader(data["image_paths"],
@@ -1442,19 +1412,87 @@ class ExperimentDialog(QDialog):
                 self.ui.btn_images_add.setEnabled(True)
                 self.ui.btn_remove.setEnabled(True)
         else:
-            # Clear everything if selection was cleared
-            self.ui.le_name.clear()
-            self.ui.te_details.clear()
-            self.ui.te_notes.clear()
-            self.ui.le_groups.clear()
-            # Disable text inputs until an experiment was selected
-            self.ui.le_name.setEnabled(False)
-            self.ui.te_details.setEnabled(False)
-            self.ui.te_notes.setEnabled(False)
-            # Disable buttons to prevent unnecessary input
-            self.enable_experiment_buttons(False)
-            self.ui.btn_remove.setEnabled(False)
+            self.clear_experiment_screen()
         self.enable_experiment_buttons(True)
+
+    def enable_text_inputs(self, enable: bool = True) -> None:
+        """
+        Method to enable/disable the text inputs
+
+        :param enable: If true, the text inputs will be enabled
+        :return: None
+        """
+        self.ui.le_name.setEnabled(enable)
+        self.ui.te_details.setEnabled(enable)
+        self.ui.te_notes.setEnabled(enable)
+
+    def create_groups_string(self, groups: List[str]) -> str:
+        """
+        Method to create the groups string
+
+        :param groups: A list of all groups
+        :return: The groups string
+        """
+        groups_str = ""
+        for name, keys in groups:
+            groups_str += f"{name} ({len(keys)})"
+        return groups_str
+
+
+    def store_current_information_to_item(self, item: QStandardItem) -> None:
+        """
+        Method to store the current information to the given item
+
+        :param item: The item to store the information in
+        :return: None
+        """
+        name = self.ui.le_name.text()
+        details = self.ui.te_details.toPlainText()
+        notes = self.ui.te_notes.toPlainText()
+        keys = []
+        img_paths = []
+        # Iterate over all images
+        for row in range(self.img_model.rowCount()):
+            # Get item
+            img_item = self.img_model.item(row)
+            # Get item data and append key
+            keys.append(img_item.data()["key"])
+            img_paths.append(img_item.data()["path"])
+        groups = item.data()["groups"]
+        item.setData(
+            {
+                "name": name,
+                "details": details,
+                "notes": notes,
+                "groups": groups,
+                "keys": keys,
+                "image_paths": img_paths
+            }
+        )
+        group_str = ""
+        for group in groups.keys():
+            group_str += f"{group}({len(groups[group])}) "
+        text = f"{name}\n{details[:47]}...\nGroups: {group_str}"
+        item.setText(text)
+
+    def clear_experiment_screen(self) -> None:
+        """
+        Method to restore the experiment screen
+
+        :return:None
+        """
+        # Clear everything if selection was cleared
+        self.ui.le_name.clear()
+        self.ui.te_details.clear()
+        self.ui.te_notes.clear()
+        self.ui.le_groups.clear()
+        # Disable text inputs until an experiment was selected
+        self.ui.le_name.setEnabled(False)
+        self.ui.te_details.setEnabled(False)
+        self.ui.te_notes.setEnabled(False)
+        # Disable buttons to prevent unnecessary input
+        self.enable_experiment_buttons(False)
+        self.ui.btn_remove.setEnabled(False)
 
     def enable_associated_buttons(self, enable: bool) -> None:
         """

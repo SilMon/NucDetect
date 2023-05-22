@@ -1,6 +1,7 @@
 import math
 from typing import Iterable, Tuple, List
 
+import numba
 import numpy as np
 from numba import njit
 
@@ -136,7 +137,7 @@ def convert_area_to_binary_map(area: Iterable[Tuple[int, int]]) -> np.ndarray:
 
 
 @njit(cache=True)
-def convert_area_to_array(area: Iterable[Tuple[int, int, int]], channel: np.ndarray) -> np.ndarray:
+def convert_area_to_array(area: numba.List, channel: np.ndarray) -> np.ndarray:
     """
     Function to extract the given area from the channel
 
@@ -173,7 +174,7 @@ def imprint_area_into_array(area: Iterable[Tuple[int, int, int]],
 
 
 @njit(cache=True)
-def get_bounding_box(area: Iterable[Tuple], rle=True) -> Tuple[int, int, int, int]:
+def get_bounding_box(area: numba.List, rle=True) -> Tuple[int, int, int, int]:
     """
     Function to calculate the bounding box of the given area
 
