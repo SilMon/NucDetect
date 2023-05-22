@@ -141,7 +141,7 @@ class QualityTester:
         :return: The checked ROI
         """
         # Get the max possible value for the image
-        max_val = np.iinfo(self.channels[0])
+        max_val = np.iinfo(self.channels[0].dtype).max
         lower_bound *= max_val
         upper_bound *= max_val
         # Iterate over the given roi to check if their intensity is inside the bounds
