@@ -218,4 +218,3 @@ def check_if_image_was_analysed_and_modified(md5: str) -> Tuple[bool, bool]:
     else:
         modified = False
     return analysed, modified
-

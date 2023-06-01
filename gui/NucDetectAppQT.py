@@ -163,13 +163,36 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
+        self._initialize_window()
+        # Initialization of the image list
+        self._initialize_image_list()
+        # Initialization of the result table
+        self._initialize_result_table()
+        # Addition of on click listeners
+        self._connect_buttons()
+        # Add button icons
+        self._set_button_icons()
+        self._connect_signals()
+
+    def _initialize_window(self) -> None:
+        """
+        Method to initialize the window
+
+        :return: None
+        """
         self.ui = uic.loadUi(Paths.ui_main, self)
         self.ui.setStyleSheet(open("definitions/css/main.css").read())
         # General Window Initialization
         self.setWindowTitle("NucDetect - Focus Analysis Software")
         self.setWindowIcon(Icon.get_icon("LOGO"))
         self.ui.lbl_logo.setPixmap(QPixmap("definitions/images/banner.png"))
-        # Initialization of the image list
+
+    def _initialize_image_list(self) -> None:
+        """
+        Method to initialize the image list
+
+        :return: None
+        """
         self.add_images_from_folder(Paths.images_path)
         self.img_list_model = ImageListModel(self.ui.list_images, paths=self.loaded_files)
         self.ui.list_images.setModel(self.img_list_model)
@@ -177,7 +200,13 @@ class NucDetect(QMainWindow):
         self.ui.list_images.setWordWrap(True)
         self.ui.list_images.setIconSize(QSize(75, 75))
         self.ui.list_images.verticalScrollBar().valueChanged.connect(self.fetch_more_images_if_needed)
-        # Initialization of the result table
+
+    def _initialize_result_table(self) -> None:
+        """
+        Method to initialize the result table
+
+        :return: None
+        """
         self.res_table_model = QStandardItemModel(self.ui.table_results)
         # Initialize the header
         self.res_table_model.setHorizontalHeaderLabels(NucDetect.STANDARD_TABLE_HEADER)
@@ -186,7 +215,13 @@ class NucDetect(QMainWindow):
         self.res_table_sort_model.setSourceModel(self.res_table_model)
         self.ui.table_results.setModel(self.res_table_sort_model)
         self.ui.table_results.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        # Addition of on click listeners
+
+    def _connect_buttons(self) -> None:
+        """
+        Method to connect the buttons to their respective functions
+
+        :return: None
+        """
         self.ui.btn_load.clicked.connect(self._show_loading_dialog)
         self.ui.btn_experiments.clicked.connect(self.show_experiment_dialog)
         self.ui.btn_save.clicked.connect(self.save_results)
@@ -198,7 +233,13 @@ class NucDetect(QMainWindow):
         self.ui.btn_delete_from_list.clicked.connect(self.remove_image_from_list)
         self.ui.btn_clear_list.clicked.connect(self.clear_image_list)
         self.ui.btn_reload.clicked.connect(self.reload)
-        # Add button icons
+
+    def _set_button_icons(self) -> None:
+        """
+        Method to give the buttons their respective icons
+
+        :return: None
+        """
         self.ui.btn_load.setIcon(Icon.get_icon("FOLDER_OPEN"))
         self.ui.btn_experiments.setIcon(Icon.get_icon("FLASK"))
         self.ui.btn_save.setIcon(Icon.get_icon("SAVE"))
@@ -210,10 +251,18 @@ class NucDetect(QMainWindow):
         self.ui.btn_delete_from_list.setIcon(Icon.get_icon("TIMES"))
         self.ui.btn_clear_list.setIcon(Icon.get_icon("TRASH_ALT"))
         self.ui.btn_reload.setIcon(Icon.get_icon("SYNC"))
+
+    def _connect_signals(self) -> None:
+        """
+        Method to connect the used signals
+
+        :return: None
+        """
         # Create signal for thread-safe gui updates
         self.prg_signal.connect(self._set_progress)
         self.selec_signal.connect(self._select_next_image)
         self.add_signal.connect(self.add_item_to_list)
+
 
     def reload(self) -> None:
         """
@@ -376,7 +425,6 @@ class NucDetect(QMainWindow):
         self.loaded_files.extend(sorted(paths, key=lambda x: os.path.basename(x)))
         # Add new paths to database
         self.add_images_to_database(self.loaded_files)
-        Util.check_for_thumbnails(self.loaded_files)
 
     def add_images_to_database(self, images: List[str]) -> None:
         """
@@ -736,9 +784,8 @@ class NucDetect(QMainWindow):
         for entry in entries:
             self.prg_signal.emit(f"Loading ROI:  {ind}/{max_}",
                                  ind, max_, "")
-
             temproi = ROI(channel=entry[3], main=entry[8] is None,
-                          auto=bool(entry[2]), associated=entry[7], method=entry[8], match=entry[9])
+                          auto=bool(entry[2]), associated=entry[8], method=entry[9], match=entry[10])
             stats = self.requester.get_statistics_for_roi(entry[0])
             temproi.stats = dict(zip(statkeys, stats[2:10]))
             if temproi.main:
@@ -1234,7 +1281,16 @@ def main() -> None:
         pixmap = QPixmap("definitions/images/banner_norm.png")
         splash = QSplashScreen(pixmap)
         splash.show()
-        splash.showMessage("Loading...")
+        splash.showMessage("Checking for thumbnails...")
+        print("Check files for thumbnails...")
+        for root, dirs, files in os.walk(Paths.images_path):
+            # Number of detected files
+            num = len(files)
+            for ind, file in enumerate(files):
+                msg = f"{ind + 1: 04d}:{num: 04d} checked..."
+                print(msg)
+                splash.showMessage(msg)
+                Util.create_thumbnail(os.path.join(root, file))
         main_win = NucDetect()
         splash.finish(main_win)
         main_win.show()

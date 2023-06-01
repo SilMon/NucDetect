@@ -602,8 +602,15 @@ class EditorView(pg.GraphicsView):
 class ROIDrawer:
 
     __slots__ = ()
-
-    MARKERS = [
+    MARKERS = {
+        "invisible": pg.mkPen(color=(0, 0, 0, 0)),
+        "image processing": pg.mkPen(color="r", width=3),
+        "machine learning": pg.mkPen(color="g", width=3),
+        "merged": pg.mkPen(color="m", width=3),
+        "nucleus": pg.mkPen(color="y", width=3),
+        "removed": pg.mkPen(color="w", width=3)
+    }
+    """MARKERS = [
         pg.mkPen(color="r", width=3),  # Red
         pg.mkPen(color="g", width=3),  # Green
         pg.mkPen(color="b", width=3),  # Blue
@@ -613,7 +620,7 @@ class ROIDrawer:
         pg.mkPen(color="k", width=3),  # Black
         pg.mkPen(color="w", width=3),  # White
         pg.mkPen(color=(0, 0, 0, 0))  # Invisible
-    ]
+    ]"""
 
     @staticmethod
     def change_opacity(items: Iterable[QGraphicsItem],
@@ -681,12 +688,12 @@ class ROIDrawer:
         :return: None
         """
         dims = roi.calculate_dimensions()
-        pen = ROIDrawer.MARKERS[ind]
+        pen = ROIDrawer.MARKERS[roi.detection_method.lower()]
         c = dims["minX"], dims["minY"]
         d2 = dims["height"]
         d1 = dims["width"]
-        focus = FocusItem(c[0], c[1], d1, d2, ind, hash(roi))
-        focus.set_pen(pen, ROIDrawer.MARKERS[-1])
+        focus = FocusItem(c[0], c[1], d1, d2, ind, hash(roi), method=roi.detection_method)
+        focus.set_pen(pen, ROIDrawer.MARKERS["invisible"])
         focus.setVisible(visible)
         focus.add_to_view(view)
         return focus
@@ -714,7 +721,7 @@ class ROIDrawer:
         nucleus.set_pens(
             pen,
             pen,
-            ROIDrawer.MARKERS[-1]
+            ROIDrawer.MARKERS["invisible"]
         )
         nucleus.is_active()
         nucleus.update_indicators()
@@ -770,7 +777,7 @@ class EditingRectangle(QGraphicsRectItem):
         :return:  None
         """
         self.pen = pg.mkPen(color="#bdff00", width=3, style=QtCore.Qt.DashLine)
-        self.ipen = ROIDrawer.MARKERS[-1]
+        self.ipen = ROIDrawer.MARKERS["invisible"]
         self.setPen(self.pen)
 
     def activate(self, enable: bool = True) -> None:
@@ -796,6 +803,7 @@ class ROIItem(QGraphicsEllipseItem):
         "width",
         "height",
         "angle",
+        "method"
         "channel_index",
         "roi_id",
         "orientation",
@@ -807,7 +815,7 @@ class ROIItem(QGraphicsEllipseItem):
         "ipen"
     ]
 
-    def __init__(self, x: int, y: int, width: int, height: float, index: int, roi_ident: int):
+    def __init__(self, x: int, y: int, width: int, height: float, index: int, roi_ident: int, method: str = "IP"):
         super().__init__(x, y, width, height)
         self.preview = False
         self.changed = False
@@ -820,6 +828,7 @@ class ROIItem(QGraphicsEllipseItem):
         self.angle = 0
         self.channel_index = index
         self.roi_id = roi_ident
+        self.method = method
         self.pen: pg.mkPen = None
         self.ipen: pg.mkPen = None
         self.main_color = None

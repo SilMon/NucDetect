@@ -83,7 +83,8 @@ class Detector:
         # Detect roi via image processing and machine learning
         iproi, maps1 = self.ip_roi_extraction(main, foc_channels, analysis_settings, logging)
         mlroi, maps2 = self.ml_roi_extraction(maps1[0], foc_channels, analysis_settings, logging)
-
+        print(f"Detected IP ROI: {len(iproi)}")
+        print(f"Detected ML ROI: {len(mlroi)}")
         rois = []
         main_roi = [x for x in iproi if x.main]
         for channel in analysis_settings["foci_channel_names"]:

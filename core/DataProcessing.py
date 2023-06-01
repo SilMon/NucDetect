@@ -1,5 +1,5 @@
 import math
-from typing import Iterable, Tuple, Union
+from typing import Iterable, Tuple, Union, List
 
 import numpy as np
 from numba import njit
@@ -7,7 +7,7 @@ from numba.typed import List as nList
 
 
 @njit(cache=True)
-def create_lg_lut(m: int) -> Iterable[int]:
+def create_lg_lut(m: int) -> List[int]:
     """
     Function to create a little_gauss lookup table for the given m values
 

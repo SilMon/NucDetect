@@ -75,16 +75,16 @@ class QualityTester:
         # Check size of nuclei
         lower_bound, upper_bound = self.settings["min_main_area"], self.settings["max_main_area"]
         #main = self.check_size_boundaries(main, lower_bound, upper_bound)
-        #self.logger.info(f"Quality Check:\nNuclei Size Check: {len(main)}")
+        print(f"Quality Check:\nNuclei Size Check: {len(main)}")
         # Delete foci whose nucleus was deleted or which are unassociated to a nucleus
         foci = self.delete_unassociated_foci(main, foci)
-        #self.logger.info(f"Focus Association Check: {len(foci)}")
+        print(f"Focus Association Check: {len(foci)}")
         # Check size of foci
         foci = self.check_size_boundaries(foci, self.settings["min_foc_area"], self.settings["max_foc_area"])
-        #self.logger.info(f"Focus Size Check: {len(foci)}")
+        print(f"Focus Size Check: {len(foci)}")
         # Check foci for intensity
         foci = self.check_intensity_boundaries(foci, self.settings["min_foc_int"], 1)
-        #self.logger.info(f"Focus Intensity Check: {len(foci)}")
+        print(f"Focus Intensity Check: {len(foci)}")
         return main, foci
 
     def separate_roi_by_channel(self) -> Tuple[List[ROI], List[ROI]]:

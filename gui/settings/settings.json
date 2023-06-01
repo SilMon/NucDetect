@@ -216,7 +216,7 @@
       "title": "Detection Certainty",
       "desc": "Minimum required detection certainty in percent for nucleus detection",
       "type": "decspin",
-      "value": 0.99,
+      "value": 0.65,
       "values": {
         "min": 0.01,
         "max": 1,
@@ -229,7 +229,7 @@
     {
       "id": "fcn_certainty_foci",
       "title": "Detection Certainty",
-      "desc": "Minimum required detection certainty in percent for nucleus detection",
+      "desc": "Minimum required detection certainty in percent for focus detection",
       "type": "decspin",
       "value": 0.25,
       "values": {
@@ -337,7 +337,7 @@
       "title": "Minimal Focus Intensity",
       "desc": "Minimal brightness a focus should have in %max. intensity",
       "type": "decspin",
-      "value": 0.15,
+      "value": 0.05,
       "values": {
         "min": 0.01,
         "max": 1,

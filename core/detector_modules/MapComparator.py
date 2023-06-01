@@ -55,7 +55,6 @@ class MapComparator:
         :return: None
         """
         for nucleus in self.main:
-            # TODO convert to numba list -> Deprecation warning
             nuc_ar = NumbaList(nucleus.area)
             focar1 = convert_area_to_array(nuc_ar, self.foc1_bin)
             focar2 = convert_area_to_array(nuc_ar, self.foc2_bin)
@@ -136,7 +135,7 @@ class MapComparator:
                         foc1.detection_method = "Merged"
             else:
                 warnings.warn(f"Focus with hash {key} not found!")
-        logging.info(f"Channel: {channel}\t{len(match)} matching foci found and merged")
+        print(f"Channel: {channel}\t{len(match)} matching foci found and merged")
         return roi
 
     @staticmethod
@@ -183,6 +182,7 @@ class MapComparator:
     def check_for_u_turn(lines: List[Tuple[int, int, int]]) -> List[Tuple[int, int, int]]:
         """
         Method to check if the given list of lines contains lines within the same row
+
         :param lines: The lines to test
         :return: The tested list of lines
         """
