@@ -1291,6 +1291,7 @@ def main() -> None:
                 print(msg)
                 splash.showMessage(msg)
                 Util.create_thumbnail(os.path.join(root, file))
+        #os.system('cls' if os.name == 'nt' else 'clear')
         main_win = NucDetect()
         splash.finish(main_win)
         main_win.show()

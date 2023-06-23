@@ -5,7 +5,7 @@ import numpy as np
 from skimage.draw import disk
 from skimage.feature import blob_log
 
-from DataProcessing import create_lg_lut
+from DataProcessing import create_lg_lut, automatic_whitebalance
 from detector_modules.AreaMapper import AreaMapper
 
 
@@ -63,12 +63,15 @@ class FocusMapper(AreaMapper):
         return foci_maps
 
     @staticmethod
-    def preprocess_channel(channel: np.ndarray, main: np.ndarray = None) -> np.ndarray:
+    def preprocess_channel(channel: np.ndarray,
+                           main: np.ndarray = None,
+                           adjust_color_balance: bool = True) -> np.ndarray:
         """
         Method to prepare a channel for focus detection
 
         :param channel: The channel to pre-process
         :param main: Binary map of the main channel
+        :param adjust_color_balance: Should the image be scaled to use the full range of values?
         :return: The pre-processed channel
         """
         # Get lut for processing
@@ -79,7 +82,7 @@ class FocusMapper(AreaMapper):
                 for x in range(channel.shape[1]):
                     if not main[y][x]:
                         channel[y][x] = 0
-        img = channel
+        img = channel if not adjust_color_balance else automatic_whitebalance(channel)
         lut = create_lg_lut(np.amax(img))
         # Create empty accumulator map
         acc = np.empty(shape=channel.shape)

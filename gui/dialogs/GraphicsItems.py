@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsEllipseItem, QGraph
 from matplotlib import pyplot as plt
 from skimage.draw import ellipse
 
-from DataProcessing import create_lg_lut
+from DataProcessing import create_lg_lut, automatic_whitebalance, automatic_colorbalance
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 from database.connections import Requester, Inserter
@@ -27,7 +27,7 @@ class EditorView(pg.GraphicsView):
 
     def __init__(self, image: np.ndarray, roi: ROIHandler,
                  parent: QDialog, active_channels: List[Tuple[int, str]],
-                 size_factor: float = 1, high_contrast: bool = False):
+                 size_factor: float = 1, high_contrast: bool = False, adjust_whitebalance: bool = True):
         """
         :param image: The background image to display
         :param roi: All roi associated with this image
@@ -41,9 +41,12 @@ class EditorView(pg.GraphicsView):
         self.active_channels = {x[1]: x[0] for x in active_channels}
         self.size_factor = size_factor
         self.high_contrast = high_contrast
+        self.adjust_whitebalance = adjust_whitebalance
         self.mode = -1
         self.image = image
+        self.image_adj = automatic_colorbalance(self.image)
         self.hcimg = self.create_high_contrast_image()
+        self.hcimg_adj = automatic_colorbalance(self.hcimg)
         self.active_channel: int = None
         self.roi: ROIHandler = roi
         self.requester = Requester()
@@ -118,15 +121,17 @@ class EditorView(pg.GraphicsView):
             self.parent.enable_editing_widgets(False)
         self.active_channel = channel
         if channel == "Composite":
-            self.img_item.setImage(self.image)
+            self.img_item.setImage(self.image if not self.adjust_whitebalance else self.image_adj)
             index = self.image.shape[2]
         else:
             # Check to which index the name corresponds
             index = self.active_channels[channel]
             if self.high_contrast:
-                self.img_item.setImage(self.hcimg[..., index])
+                self.img_item.setImage(self.hcimg[..., index] if
+                                       not self.adjust_whitebalance else self.hcimg_adj[..., index])
             else:
-                self.img_item.setImage(self.image[..., index])
+                self.img_item.setImage(self.image[..., index] if
+                                       not self.adjust_whitebalance else self.image_adj[..., index])
         ROIDrawer.change_channel(self.items, index, self.draw_additional)
 
     def create_high_contrast_image(self) -> np.ndarray:

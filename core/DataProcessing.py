@@ -20,7 +20,7 @@ def create_lg_lut(m: int) -> List[int]:
 @njit(cache=True)
 def little_gauss(n: int) -> int:
     """
-    Function to calculate the the sum of all numbers between 0 and n
+    Function to calculate the sum of all numbers between 0 and n
 
     :param n: The number to calculate the sum for
     :return: The sum
@@ -57,7 +57,23 @@ def get_region_outlines(binary_map: np.ndarray) -> np.ndarray:
     return contours
 
 
-@njit(cache=True)
+def automatic_colorbalance(image: np.ndarray, cutoff: float = 0.05) -> np.ndarray:
+    """
+    Function to perform automatic white balance for an image
+
+    :param image: The image to balance
+    :param cutoff: The amount of pixels to go into saturation
+    :return: The balanced image
+    """
+    image = image.copy()
+    if len(image.shape) > 2:
+        for c in range(image.shape[2]):
+            image[..., c] = automatic_whitebalance(image[..., c], cutoff)
+    else:
+        image = automatic_whitebalance(image, cutoff)
+    return image
+
+
 def automatic_whitebalance(image: np.ndarray, cutoff: float = 0.05) -> np.ndarray:
     """
     Function to perform automatic white balance for an image
@@ -68,27 +84,40 @@ def automatic_whitebalance(image: np.ndarray, cutoff: float = 0.05) -> np.ndarra
     """
     # Create copy of image
     image = image.copy()
+    if "float" not in str(image.dtype):
+        image = image.copy()
+    else:
+        # Convert image to uint TODO
+        image = (((image - np.amin(image)) / np.amax(image)) * 255).astype("uint8")
+    imgmin, imgmax = np.iinfo(image.dtype).min, np.iinfo(image.dtype).max
+    amin, amax = imgmin, imgmax
     # Calculate histogram of image
-    hist = np.histogram(image, bins=256)
+    hist = np.histogram(image, bins=imgmax + 1)
     # Calculate pixel threshold
     thresh = cutoff * image.shape[0] * image.shape[1]
-    # Iterate over histogram to get min and max
-    amin, amax = 0, 255
     # Counts of pixels
     cmin, cmax = 0, 0
     for ind in range(len(hist[0])):
         cmin += hist[0][ind]
-        cmax += hist[0][255 - ind]
+        cmax += hist[0][imgmax - 1 - ind]
         if cmin <= thresh:
             amin += 1
         if cmax <= thresh:
             amax -= 1
     # Calculate balance ratio
-    ratio = 255 / (amax - amin)
-    # Create iterator for image
-    with np.nditer(image, op_flags=['readwrite']) as it:
-        for x in it:
-            x[...] = ratio * x
+    ratio = (imgmax - imgmin) / (amax - amin)
+    # Create a lookup table for pixel values
+    lut = []
+    for val in range(imgmax):
+        lut.append(imgmin + (val - amin) * ratio)
+    for y in range(image.shape[0]):
+        for x in range(image.shape[1]):
+            if image[y][x] <= amin:
+                image[y][x] = imgmin
+            elif image[y][x] >= amax:
+                image[y][x] = imgmax
+            else:
+                image[y][x] = lut[image[y][x]]
     return image
 
 

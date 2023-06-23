@@ -9,6 +9,7 @@ from scipy.ndimage import label
 from skimage.morphology import binary_erosion
 from tensorflow.python.keras import models
 
+from DataProcessing import automatic_whitebalance
 from detector_modules.AreaMapper import AreaMapper
 from fcn.FCN import FCN
 
@@ -80,16 +81,18 @@ class FCNMapper(AreaMapper):
         pmaps = self.map_channels()
         return self.threshold_maps(pmaps)
 
-    def map_channels(self) -> List[np.ndarray]:
+    def map_channels(self, adjust_white_balance: bool = True) -> List[np.ndarray]:
         """
         Method to map the given channels
 
+        :param adjust_white_balance: Should the channels be scaled to use the full possible intensity range?
         :return: The prediction maps
         """
         prediction_maps = []
         for channel in self.channels:
             # Split channel images into tiles
-            tiles = self.extract_subimages(channel, (256, 256))
+            tiles = self.extract_subimages(channel if not adjust_white_balance else automatic_whitebalance(channel),
+                                           (256, 256))
             # Predict the individual tiles
             ptiles = self.predict_tiles(tiles, self.model)
             # Merge prediction maps

@@ -22,7 +22,7 @@ INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("track_mouse", 1, "b
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_main_area", 750, "int");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_foc_area", 4, "int");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_main_area", 30000, "int");
-INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_foc_area", 280, "int");
+INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_foc_area", 15, "int");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_foc_int", 0.055, "float");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("overlap", 0.5, "float");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("size_factor", 1, "float");
