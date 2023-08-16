@@ -181,11 +181,11 @@ class NucDetect(QMainWindow):
         :return: None
         """
         self.ui = uic.loadUi(Paths.ui_main, self)
-        self.ui.setStyleSheet(open("definitions/css/main.css").read())
+        self.ui.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css")).read())
         # General Window Initialization
         self.setWindowTitle("NucDetect - Focus Analysis Software")
         self.setWindowIcon(Icon.get_icon("LOGO"))
-        self.ui.lbl_logo.setPixmap(QPixmap("definitions/images/banner.png"))
+        self.ui.lbl_logo.setPixmap(QPixmap(os.path.join(Paths.logo_dir, "banner.png")))
 
     def _initialize_image_list(self) -> None:
         """
@@ -1260,8 +1260,8 @@ def exception_hook(exc_type, exc_value, traceback_obj) -> None:
     print(text)
     msg = QMessageBox()
     msg.setIcon(QMessageBox.Critical)
-    msg.setWindowIcon(QtGui.QIcon('definitions/images/logo.png'))
-    msg.setStyleSheet(open("definitions/css/messagebox.css", "r").read())
+    msg.setWindowIcon(QtGui.QIcon(os.path.join(Paths.images_path, "logo.png")))
+    msg.setStyleSheet(open(os.path.join(Paths.css_dir, "messagebox.css"), "r").read())
     msg.setText(text)
     msg.setInformativeText(info)
     msg.setWindowTitle(title)
@@ -1278,20 +1278,26 @@ def main() -> None:
         warnings.filterwarnings("ignore")
         sys.excepthook = exception_hook
         app = QtWidgets.QApplication(sys.argv)
-        pixmap = QPixmap("definitions/images/banner_norm.png")
+        pixmap = QPixmap(os.path.join(Paths.logo_dir, "banner_norm.png"))
         splash = QSplashScreen(pixmap)
         splash.show()
         splash.showMessage("Checking for thumbnails...")
         print("Check files for thumbnails...")
+        # Count number of available images
+        total = 0
         for root, dirs, files in os.walk(Paths.images_path):
-            # Number of detected files
-            num = len(files)
-            for ind, file in enumerate(files):
-                msg = f"{ind + 1: 04d}:{num: 04d} checked..."
+            total += len(files)
+        file_index = 1
+        for root, dirs, files in os.walk(Paths.images_path):
+            for file in files:
+                msg = f"{file_index: 04d}:{total: 04d} checked..."
+                os.system('cls' if os.name == 'nt' else 'clear')
                 print(msg)
                 splash.showMessage(msg)
                 Util.create_thumbnail(os.path.join(root, file))
-        #os.system('cls' if os.name == 'nt' else 'clear')
+                file_index += 1
+        os.system('cls' if os.name == 'nt' else 'clear')
+        print("All files checked for thumbnails, starting...")
         main_win = NucDetect()
         splash.finish(main_win)
         main_win.show()

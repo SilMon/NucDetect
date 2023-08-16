@@ -14,55 +14,7 @@
    <string>MainWindow</string>
   </property>
   <property name="styleSheet">
-   <string notr="true">QPushButton{
-	color: White;
-	background-color: rgba(22, 42, 75 , 255);
-	border: none;
-	font-size: 14px;
- 	text-align: center;
-     display: inline-block;
-	min-height: 25;
-	min-width: 40;
-}
-
-QPushButton:hover{
-	background-color:  rgba(15, 35, 68 , 255);
-}
-
-QPushButton:pressed{
-	background-color:  rgba(8, 28, 61 , 255);
-}
-
-QPushButton:disabled{
-	background-color:  rgba(40, 60, 100 , 255);
-}
-
-QTableView, QListView{
-	color: White;
-	background-color: rgba(77, 77, 77, 128)
-}
-
-QLabel{
-	color:White;
-}
-
-QProgressBar {
-	color: White;
-    border: 1px solid grey;
-    background-color: rgb(10, 60, 110);
- }
-
- QProgressBar::chunk {
-     background-color: rgba(77, 77, 77, 128);
- }
-
-QMainWindow{
-	background-color: rgb(0, 51, 102);
-}
-
-QDialog{
-	background-color: rgb(0, 51, 102);
-}</string>
+   <string notr="true"/>
   </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QVBoxLayout" name="verticalLayout_3">
@@ -109,8 +61,8 @@ QDialog{
            <widget class="QPushButton" name="btn_load">
             <property name="minimumSize">
              <size>
-              <width>40</width>
-              <height>25</height>
+              <width>0</width>
+              <height>0</height>
              </size>
             </property>
             <property name="maximumSize">
@@ -428,8 +380,8 @@ QDialog{
             </property>
             <property name="minimumSize">
              <size>
-              <width>40</width>
-              <height>25</height>
+              <width>0</width>
+              <height>0</height>
              </size>
             </property>
             <property name="maximumSize">
@@ -450,8 +402,8 @@ QDialog{
            <widget class="QPushButton" name="btn_analyse_all">
             <property name="minimumSize">
              <size>
-              <width>40</width>
-              <height>25</height>
+              <width>0</width>
+              <height>0</height>
              </size>
             </property>
             <property name="maximumSize">
@@ -478,8 +430,8 @@ QDialog{
             </property>
             <property name="minimumSize">
              <size>
-              <width>40</width>
-              <height>25</height>
+              <width>0</width>
+              <height>0</height>
              </size>
             </property>
             <property name="maximumSize">
@@ -500,8 +452,8 @@ QDialog{
            <widget class="QPushButton" name="btn_clear_list">
             <property name="minimumSize">
              <size>
-              <width>40</width>
-              <height>25</height>
+              <width>0</width>
+              <height>0</height>
              </size>
             </property>
             <property name="maximumSize">

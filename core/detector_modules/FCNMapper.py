@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 from typing import Iterable, Dict, List, Tuple
 
@@ -9,6 +10,7 @@ from scipy.ndimage import label
 from skimage.morphology import binary_erosion
 from tensorflow.python.keras import models
 
+import Paths
 from DataProcessing import automatic_whitebalance
 from detector_modules.AreaMapper import AreaMapper
 from fcn.FCN import FCN
@@ -60,8 +62,8 @@ class FCNMapper(AreaMapper):
         Method to load the ML models
         :return: None
         """
-        path: Path = FCN.script_dir / "detector.h5"
-        model = models.load_model(path.resolve())
+        path = os.path.join(Paths.model_dir, "detector.h5")
+        model = models.load_model(path)
         logging.info("Models loaded")
         return model
 

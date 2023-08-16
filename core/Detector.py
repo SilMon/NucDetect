@@ -87,15 +87,6 @@ class Detector:
         print(f"Detected ML ROI: {len(mlroi)}")
         rois = []
         main_roi = [x for x in iproi if x.main]
-        # TODO
-        for ind, binmap in enumerate(maps2):
-            plt.title(f"{ind}: ML")
-            plt.imshow(binmap)
-            plt.show()
-        for ind, binmap in enumerate(maps1):
-            plt.title(f"{ind}: IP")
-            plt.imshow(binmap)
-            plt.show()
         for channel in analysis_settings["foci_channel_names"]:
             # Define map Comparator
             mapc = MapComparator(main_roi,

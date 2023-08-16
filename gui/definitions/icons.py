@@ -30,7 +30,7 @@ class Icon:
         :return: QIcon
         """
         icons = {
-            "LOGO": QtGui.QIcon(Paths.img_dir + os.sep + "logo.png"),
+            "LOGO": QtGui.QIcon(Paths.logo_dir + os.sep + "logo.png"),
             "RULER": qta.icon("fa5s.ruler", color=Icon.STANDARD),
             "EYE": qta.icon("fa5.eye", color=Icon.STANDARD),
             "EYE_OFF": qta.icon("fa5.eye-slash", color=Icon.STANDARD_OFF),

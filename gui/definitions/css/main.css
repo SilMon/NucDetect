@@ -16,9 +16,8 @@ QPushButton{
 	border: none;
 	font-size: 14px;
  	text-align: center;
-    display: inline-block;
-	min-height: 25;
-	min-width: 40;
+	min-height: 25px;
+	min-width: 40px;
 }
 
 QPushButton:hover{

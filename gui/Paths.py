@@ -1,12 +1,27 @@
-import copy
 import os
-import sys
 
-gen = copy.copy(sys.path[1])
-gui = copy.copy(sys.path[0])
+
+def get_main_folder_path() -> str:
+    """
+    Function to get the main folder of the project
+
+    :return: The path to the folder
+    """
+    # Get the current file path
+    fp = __file__
+    # Split the path and find NucDetect folder
+    while os.path.split(fp)[1] != "NucDetect":
+        fp = os.path.split(fp)[0]
+    return fp
+
+
+gen = get_main_folder_path()
+gui = os.path.join(gen, "gui")
+
 nuc_detect_dir = os.path.join(os.path.expanduser("~"), "NucDetect")
 script_dir = os.path.join(gui, "definitions", "ui")
-img_dir = os.path.join(gui, "definitions", "images")
+logo_dir = os.path.join(gui, "definitions", "images")
+model_dir = os.path.join(gen, "fcn", "model")
 css_dir = os.path.join(gui, "definitions", "css")
 sql_dir = os.path.join(gen, "core", "database", "scripts")
 log_path = os.path.join(gen, "logs")
