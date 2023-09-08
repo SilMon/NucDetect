@@ -149,7 +149,7 @@ class Detector:
         if roi:
             return roi, foc_maps
         else:
-            return [], []
+            return [], [np.zeros(shape=nucmap.shape) for _ in range(len(foc_maps) + 1)]
 
     def ml_roi_extraction(self, main_map: np.ndarray, foc_channels,
                           analysis_settings, logging) -> Tuple[List[ROI], List[np.ndarray]]:

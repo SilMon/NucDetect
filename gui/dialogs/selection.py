@@ -157,7 +157,7 @@ class ImageSelectionDialog(QDialog):
         """
         for img in items:
             self.img_model.appendRow(img)
-        self.prg_bar.setValue(self.update_timer.percentage * 100)
+        self.prg_bar.setValue(int(self.update_timer.percentage * 100))
         if not items:
             # Enable image list
             self.ui.lv_images.setEnabled(True)

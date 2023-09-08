@@ -8,6 +8,7 @@ import numpy as np
 import tensorflow as tf
 from scipy.ndimage import label
 from skimage.morphology import binary_erosion
+from skimage.transform import resize
 from tensorflow.python.keras import models
 
 import Paths
@@ -92,13 +93,17 @@ class FCNMapper(AreaMapper):
         """
         prediction_maps = []
         for channel in self.channels:
+            orig_shape = channel.shape
+            # Resize the channel to match the training size
+            channel = resize(channel, output_shape=(1024, 1024), preserve_range=True, anti_aliasing=True)
             # Split channel images into tiles
             tiles = self.extract_subimages(channel if not adjust_white_balance else automatic_whitebalance(channel),
                                            (256, 256))
             # Predict the individual tiles
             ptiles = self.predict_tiles(tiles, self.model)
             # Merge prediction maps
-            pred_map = self.merge_prediction_tiles(ptiles, channel.shape)
+            pred_map = resize(self.merge_prediction_tiles(ptiles, channel.shape), output_shape=orig_shape,
+                              preserve_range=True, anti_aliasing=True)
             prediction_maps.append(pred_map)
         return prediction_maps
 

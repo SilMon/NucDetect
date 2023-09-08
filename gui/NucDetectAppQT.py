@@ -6,11 +6,13 @@ import os
 import shutil
 import sqlite3
 import sys
+import threading
 import time
 import traceback
 import warnings
 from concurrent.futures import ProcessPoolExecutor
 from copy import copy
+from functools import partial
 from threading import Thread
 from typing import Union, Dict, Iterable, List, Tuple, Any
 
@@ -21,7 +23,7 @@ from PyQt5 import QtCore, QtWidgets, Qt
 from PyQt5 import QtGui
 from PyQt5 import uic
 from PyQt5.QtCore import QSize, pyqtSignal, QItemSelectionModel, QSortFilterProxyModel, QAbstractItemModel, QModelIndex, \
-    QAbstractListModel
+    QAbstractListModel, QTimer
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QPixmap
 from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, QMessageBox
 
@@ -54,6 +56,7 @@ class NucDetect(QMainWindow):
     add_signal = pyqtSignal(str)
     aa_signal = pyqtSignal(int, int)
     executor = Thread()
+    check_timer = QTimer()
     STANDARD_TABLE_HEADER = ["Image Name", "Image Identifier",
                              "ROI Identifier", "Center Y",
                              "Center X", "Area [px]", "Ellipticity[%]",
@@ -263,7 +266,6 @@ class NucDetect(QMainWindow):
         self.selec_signal.connect(self._select_next_image)
         self.add_signal.connect(self.add_item_to_list)
 
-
     def reload(self) -> None:
         """
         Method to reload the images folder
@@ -365,6 +367,20 @@ class NucDetect(QMainWindow):
         # Disable Buttons and list during loading
         self.enable_buttons(state=False)
         self.ui.list_images.setEnabled(False)
+        load_thread = threading.Thread(target=self._load_saved_data,
+                                       args=(experiment,),
+                                       daemon=True)
+        load_thread.start()
+
+    def _load_saved_data(self, experiment: str) -> None:
+        """
+        Private method to load the experiment data concurrently
+
+        :param experiment: Name of the experiment
+        :return: None
+        """
+        self.prg_signal.emit(f"Loading data from database for {self.cur_img['file_name']}, please wait...",
+                             0, 100, "")
         # Load saved data from databank
         self.roi_cache = self.load_rois_from_database(self.cur_img["key"])
         # Create the result table from loaded data
@@ -374,6 +390,9 @@ class NucDetect(QMainWindow):
         self.enable_buttons()
         self.prg_signal.emit(f"Data loaded from database for {self.cur_img['file_name']}",
                              100, 100, "")
+        self.enable_buttons(state=True)
+        self.ui.list_images.setEnabled(True)
+
 
     def show_experiment_dialog(self) -> None:
         """
@@ -592,7 +611,7 @@ class NucDetect(QMainWindow):
         settings = self.show_analysis_settings_dialog(show_redo_option=True)
         if not settings:
             return
-        thread = Thread(target=self._analyze_all, args=(settings, ))
+        thread = Thread(target=self._analyze_all, args=(settings,))
         thread.start()
 
     def _analyze_all(self, settings: Dict[str, Union[int, float, str, Iterable]], batch_size: int = 20) -> None:
@@ -1028,10 +1047,45 @@ class NucDetect(QMainWindow):
         :return: None
         """
         cur = self.cur_img if self.cur_img else {}
-        code = DataExportDialog(cur.get("key", None),
-                                cur.get("file_name", None)).exec()
+        dial = DataExportDialog(cur.get("key", None),
+                                cur.get("file_name", None))
+        code = dial.exec()
         if code == QDialog.Accepted:
-            self.prg_signal.emit("Results saved -- Program ready", 100, 100, "")
+            self.check_timer.setInterval(500)
+            start_time = time.time()
+            self.check_timer.timeout.connect(
+                partial(self.check_for_running_threads,
+                        dial.threads,
+                        "Background tasks executing, please wait...",
+                        start_time)
+            )
+
+    def check_for_running_threads(self,
+                                  threads: List[threading.Thread],
+                                  display_msg: str = "",
+                                  starting_time: int = None) -> None:
+        """
+        Function to keep the program locked until all given threads are finished
+
+        :param threads: List of threads to check
+        :param display_msg: The message to display in the progress bar
+        :param starting_time: The time this function was called
+        :return:None
+        """
+        time_string = ""
+        if starting_time:
+            current_runtime = time.time() - starting_time
+            time_string = f"Runtime: {current_runtime/1000: .2f} sec"
+        msg = display_msg + "Current " + time_string
+        if [x for x in threads if x.is_alive()]:
+            self.enable_buttons(False)
+            print(msg)
+            self.prg_signal.emit(msg,
+                                 0, 100, "")
+        else:
+            self.enable_buttons(True)
+            self.prg_signal.emit(f"Background tasks finished {time_string}",
+                                 0, 100, "")
 
     def show_statistics(self) -> None:
         """
@@ -1045,7 +1099,7 @@ class NucDetect(QMainWindow):
             msg = QMessageBox()
             msg.setWindowIcon(Icon.get_icon("LOGO"))
             msg.setIcon(QMessageBox.Information)
-            msg.setStyleSheet(open("gui/definitions/css/messagebox.css", "r").read())
+            msg.setStyleSheet(open(os.path.join(Paths.css_dir, "messagebox.css"), "r").read())
             msg.setWindowTitle("Warning")
             msg.setText("No experiments were defined")
             msg.setInformativeText("Statistics can only be displayed, if images are assigned to an experiment")

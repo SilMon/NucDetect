@@ -93,13 +93,24 @@ def automatic_whitebalance(image: np.ndarray, cutoff: float = 0.05) -> np.ndarra
     amin, amax = imgmin, imgmax
     # Calculate histogram of image
     hist = np.histogram(image, bins=imgmax + 1)
+    # Suppress shadows
+    shadow_index = 0
+    index_number = 0
+    pixel_number = 0.3 * image.shape[0] * image.shape[1]
+    for ind, val in enumerate(hist[0]):
+        index_number += val
+        if index_number > pixel_number:
+            shadow_index = ind + 1
+            break
+    cut_hist = hist[0][shadow_index:]
+    total_pixels = np.sum(cut_hist)
     # Calculate pixel threshold
-    thresh = cutoff * image.shape[0] * image.shape[1]
+    thresh = cutoff * total_pixels
     # Counts of pixels
     cmin, cmax = 0, 0
-    for ind in range(len(hist[0])):
-        cmin += hist[0][ind]
-        cmax += hist[0][imgmax - 1 - ind]
+    for ind in range(len(cut_hist)):
+        cmin += cut_hist[ind]
+        cmax += cut_hist[len(cut_hist) - 1 - ind]
         if cmin <= thresh:
             amin += 1
         if cmax <= thresh:

@@ -1,3 +1,4 @@
+import threading
 from typing import List, Iterable, Dict, Tuple
 
 import numpy as np
@@ -27,7 +28,7 @@ class EditorView(pg.GraphicsView):
 
     def __init__(self, image: np.ndarray, roi: ROIHandler,
                  parent: QDialog, active_channels: List[Tuple[int, str]],
-                 size_factor: float = 1, high_contrast: bool = False, adjust_whitebalance: bool = True):
+                 size_factor: float = 1, high_contrast: bool = False, adjust_whitebalance: bool = False):
         """
         :param image: The background image to display
         :param roi: All roi associated with this image
@@ -44,9 +45,9 @@ class EditorView(pg.GraphicsView):
         self.adjust_whitebalance = adjust_whitebalance
         self.mode = -1
         self.image = image
-        self.image_adj = automatic_colorbalance(self.image)
-        self.hcimg = self.create_high_contrast_image()
-        self.hcimg_adj = automatic_colorbalance(self.hcimg)
+        self.image_adj = None
+        self.hcimg = None
+        self.hcimg_adj = None
         self.active_channel: int = None
         self.roi: ROIHandler = roi
         self.requester = Requester()
@@ -81,6 +82,16 @@ class EditorView(pg.GraphicsView):
         self.saved_values: Dict = None
         self.show_channel("Composite")
         self.current_channel = "Composite"
+        self.initialize_wb_and_hc()
+
+    def initialize_wb_and_hc(self) -> None:
+        """
+        Method to initialize the high-contrast and white balanced mode
+
+        :return: None
+        """
+        init_thread = threading.Thread(target=self.calculate_hc_and_wb_images, daemon=True)
+        init_thread.start()
 
     def set_changes(self, rect: QRectF, angle: float, preview: bool = False) -> None:
         """
@@ -134,6 +145,18 @@ class EditorView(pg.GraphicsView):
                                        not self.adjust_whitebalance else self.image_adj[..., index])
         ROIDrawer.change_channel(self.items, index, self.draw_additional)
 
+    def calculate_hc_and_wb_images(self):
+        """
+        Method used for concurrency
+
+        :return: None
+        """
+        self.image_adj = automatic_colorbalance(self.image)
+        self.hcimg = self.create_high_contrast_image()
+        self.hcimg_adj = automatic_colorbalance(self.hcimg)
+        self.parent.enable_white_balance_mode()
+        self.parent.enable_high_contrast_mode()
+
     def create_high_contrast_image(self) -> np.ndarray:
         """
         Method to create the needed high contrast image
@@ -151,7 +174,7 @@ class EditorView(pg.GraphicsView):
                     img[y][x][c] = lut[channel[y][x]]
         return img
 
-    def toggle_high_contrast_mode(self, toggle: bool):
+    def toggle_high_contrast_mode(self, toggle: bool) -> None:
         """
         Method to toggle high contrast mode
 
@@ -159,6 +182,16 @@ class EditorView(pg.GraphicsView):
         :return: None
         """
         self.high_contrast = toggle
+        self.show_channel(self.current_channel)
+
+    def toggle_adjust_white_balance(self, toggle: bool) -> None:
+        """
+        Method to toggle automatic white balance mode
+
+        :param toggle: Toggle
+        :return: None
+        """
+        self.adjust_whitebalance = toggle
         self.show_channel(self.current_channel)
 
     def change_colormap(self, colormap: str) -> None:

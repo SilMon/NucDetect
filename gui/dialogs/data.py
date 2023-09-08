@@ -2,6 +2,7 @@ import copy
 import csv
 import os
 import sqlite3
+import threading
 from typing import List, Tuple, Dict, Any, Union
 
 import numpy as np
@@ -41,7 +42,8 @@ class DataExportDialog(QDialog):
         "disp_name",
         "ui",
         "req",
-        "names"
+        "names",
+        "threads"
     ]
     STANDARD_OPTIONS = (
         "Selected Image",
@@ -57,9 +59,10 @@ class DataExportDialog(QDialog):
         :param display_name: The name of the currently selected image. None if there is no current image
         """
         super(DataExportDialog, self).__init__()
+        self.threads: List[threading.Thread] = []
         self.cur_img = current_image
         self.disp_name = display_name
-        self.req = Requester()
+        self.req = Requester(protected=False)
         self.ui = self.initialize_ui()
 
     def accept(self) -> None:
@@ -125,7 +128,7 @@ class DataExportDialog(QDialog):
             for ind, experiment in enumerate(exps):
                 self.export_experiment_as_table(experiment, xlsx_name=file_name)
         # Save selected experiment
-        else:  #
+        else:
             self.export_experiment_as_table(selection)
 
     def get_image_name(self, md5: str) -> str:
@@ -143,6 +146,26 @@ class DataExportDialog(QDialog):
                               sheet_name: str = None) -> None:
         """
         Method to save the given image
+
+        :param md5: The hash of the image
+        :param xlsx_name: Optional; If given, the file will use this name
+        :param include_header: If true, the table header will also be saved
+        :param sheet_name: Name of the sheet
+        :return: The thread used for export
+        """
+        export_thread = threading.Thread(target=self._export_image_as_table,
+                                         args=(md5, xlsx_name, include_header, sheet_name),
+                                         daemon=True)
+        export_thread.start()
+        self.threads = [x for x in self.threads if x.is_alive()]
+        self.threads.append(export_thread)
+
+    def _export_image_as_table(self, md5: str,
+                               xlsx_name: str = None,
+                               include_header: bool = True,
+                               sheet_name: str = None) -> None:
+        """
+        Private method to concurrently fetch the image data and save the table
 
         :param md5: The hash of the image
         :param xlsx_name: Optional; If given, the file will use this name
@@ -172,6 +195,28 @@ class DataExportDialog(QDialog):
                                    ) -> None:
         """
         Method to save the given experiment
+
+        :param experiment: Name of the experiment
+        :param xlsx_name: Optional; If given, the file will have this name
+        :param include_header: If true, the table header will also be saved
+        :param sheet_name: Name of the sheet
+        :return: The thread used for export
+        """
+        export_thread = threading.Thread(target=self._export_experiment_as_table,
+                                         args=(experiment, xlsx_name, include_header, sheet_name),
+                                         daemon=True)
+        export_thread.start()
+        self.threads = [x for x in self.threads if x.is_alive()]
+        self.threads.append(export_thread)
+
+    def _export_experiment_as_table(self,
+                                    experiment: str,
+                                    xlsx_name: str = None,
+                                    include_header: bool = True,
+                                    sheet_name: str = None
+                                    ) -> None:
+        """
+        Private method to concurrently fetch the experiment data and save the table
 
         :param experiment: Name of the experiment
         :param xlsx_name: Optional; If given, the file will have this name
@@ -279,6 +324,8 @@ class Editor(QDialog):
         :return: None
         """
         self.ui = uic.loadUi(Paths.ui_editor_dial, self)
+        # Load css file
+        self.ui.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css")).read())
         self.setWindowTitle(f"Modification Dialog for {self.img_name}")
         self.setWindowIcon(Icon.get_icon("LOGO"))
         self.setWindowFlags(self.windowFlags() |
@@ -314,6 +361,7 @@ class Editor(QDialog):
             lambda: self.editor.show_channel(self.ui.cbx_channel.currentText())
         )
         self.ui.cbx_high_contrast.stateChanged.connect(self.editor.toggle_high_contrast_mode)
+        self.ui.cbx_white_balance.stateChanged.connect(self.editor.toggle_adjust_white_balance)
         self.ui.cbx_colormap.addItems(self.get_colormaps())
         self.ui.cbx_colormap.setCurrentText("jet")
         self.editor.change_colormap("jet")
@@ -343,6 +391,22 @@ class Editor(QDialog):
         self.ui.spb_opacity.valueChanged.connect(self.change_opacity)
         self.ui.btn_preview.clicked.connect(self.set_changes)
         self.ui.btn_accept.clicked.connect(self.set_changes)
+
+    def enable_white_balance_mode(self) -> None:
+        """
+        Method to enable white balance mode
+
+        :return: None
+        """
+        self.ui.cbx_white_balance.setEnabled(True)
+
+    def enable_high_contrast_mode(self) -> None:
+        """
+        Method to enable high contrast mode
+
+        :return: None
+        """
+        self.ui.cbx_high_contrast.setEnabled(True)
 
     def get_colormaps(self) -> List[str]:
         """
@@ -1514,7 +1578,7 @@ class ExperimentDialog(QDialog):
         """
         for item in items:
             self.img_model.appendRow(item)
-        self.ui.prg_images.setValue(self.update_timer.percentage * 100)
+        self.ui.prg_images.setValue(int(self.update_timer.percentage * 100))
         if not items:
             # Enable buttons for input
             self.enable_experiment_buttons()
@@ -1893,7 +1957,7 @@ class GroupDialog(QDialog):
         """
         for img in items:
             self.img_model.appendRow(img)
-        self.prg_bar.setValue(self.update_timer.percentage * 100)
+        self.prg_bar.setValue(int(self.update_timer.percentage * 100))
         if not items:
             self.setEnabled(True)
 

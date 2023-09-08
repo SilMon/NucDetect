@@ -1,6 +1,7 @@
 import warnings
 from typing import Iterable, Tuple, Dict, List
 
+import matplotlib.pyplot as plt
 import numpy as np
 from skimage.draw import disk
 from skimage.feature import blob_log
@@ -124,12 +125,15 @@ class FocusMapper(AreaMapper):
         """
         # Get needed variables
         mmpd = settings["dots_per_micron"]
+        # TODO fix conversion via mmpd
         min_sigma = settings["min_sigma"]
         max_sigma = settings["max_sigma"]
         num_sigma = settings["num_sigma"]
         acc_thresh = settings["acc_thresh"]
         overlap = settings["overlap"]
-        return blob_log(acc_map, min_sigma=max(1, min_sigma * mmpd), max_sigma=max(1, max_sigma * mmpd),
+        return blob_log(acc_map,
+                        min_sigma=max(1, min_sigma * mmpd),
+                        max_sigma=max(1, max_sigma * mmpd),
                         num_sigma=num_sigma, threshold=acc_thresh, overlap=overlap)
 
     @staticmethod

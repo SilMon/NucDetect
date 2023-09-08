@@ -1,4 +1,5 @@
 import json
+import os
 from typing import Dict, Union, List
 
 import pyqtgraph as pg
@@ -66,6 +67,8 @@ class AnalysisSettingsDialog(QDialog):
         """
         # Load UI definition
         self.ui = uic.loadUi(Paths.ui_analysis_settings_dial, self)
+        # Load css file
+        self.ui.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css")).read())
         self.setWindowIcon(Icon.get_icon("LOGO"))
         self.setWindowTitle("Analysis Settings")
         # Check if single image analysis or multi image analysis is performed
@@ -145,6 +148,8 @@ class SettingsDialog(QDialog):
 
     def _initialize_ui(self) -> None:
         self.ui = uic.loadUi(Paths.ui_settings_dial, self)
+        # Load css file
+        self.ui.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css")).read())
         self.setWindowTitle("Settings Dialog")
         self.setWindowIcon(Icon.get_icon("LOGO"))
 
