@@ -1,7 +1,6 @@
 import warnings
 from typing import Iterable, Tuple, Dict, List
 
-import matplotlib.pyplot as plt
 import numpy as np
 from skimage.draw import disk
 from skimage.feature import blob_log

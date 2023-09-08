@@ -131,7 +131,7 @@ class Connector:
         """
         if isinstance(param, Specifiers) or not isinstance(param, str):
             return
-        for c in ";,():\'\"\\/<>!$§%&[]{}´`|~#*=": # TODO Add point back
+        for c in ".;,():\'\"\\/<>!$§%&[]{}´`|~#*=":
             if c in param:
                 error = f"Query rejected: Parameter contains illegal character \"{c}\""
                 raise ValueError(error)

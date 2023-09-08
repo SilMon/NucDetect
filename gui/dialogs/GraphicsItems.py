@@ -7,10 +7,9 @@ from PyQt5 import QtCore
 from PyQt5.QtCore import QRectF, Qt, QPointF
 from PyQt5.QtGui import QColor, QKeyEvent, QMouseEvent
 from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem
-from matplotlib import pyplot as plt
 from skimage.draw import ellipse
 
-from DataProcessing import create_lg_lut, automatic_whitebalance, automatic_colorbalance
+from DataProcessing import create_lg_lut, automatic_colorbalance
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 from database.connections import Requester, Inserter

@@ -1,5 +1,6 @@
-import PyInstaller.__main__
 import shutil
+
+import PyInstaller.__main__
 
 if __name__ == "__main__":
     # Clear the dist folder

@@ -1,10 +1,8 @@
-import logging
 import warnings
 from typing import List, Tuple, Dict, Union
-from numba.typed import List as NumbaList
 
-import matplotlib.pyplot as plt
 import numpy as np
+from numba.typed import List as NumbaList
 
 from roi.AreaAnalysis import imprint_area_into_array, convert_area_to_array
 from roi.ROI import ROI

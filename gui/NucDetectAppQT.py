@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import csv
 import multiprocessing
 import os
 import shutil
-import sqlite3
 import sys
 import threading
 import time
@@ -19,10 +17,10 @@ from typing import Union, Dict, Iterable, List, Tuple, Any
 import PyQt5
 import numpy as np
 import pyqtgraph as pg
-from PyQt5 import QtCore, QtWidgets, Qt
+from PyQt5 import QtCore, QtWidgets
 from PyQt5 import QtGui
 from PyQt5 import uic
-from PyQt5.QtCore import QSize, pyqtSignal, QItemSelectionModel, QSortFilterProxyModel, QAbstractItemModel, QModelIndex, \
+from PyQt5.QtCore import QSize, pyqtSignal, QItemSelectionModel, QSortFilterProxyModel, QModelIndex, \
     QAbstractListModel, QTimer
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QPixmap
 from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, QMessageBox
@@ -31,15 +29,12 @@ from core.Detector import Detector
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 from database.connections import Connector, Requester, Inserter
-from definitions import icons
 from definitions.icons import Icon, Color
 from detector_modules.ImageLoader import ImageLoader
 from dialogs.data import Editor, ExperimentDialog, StatisticsDialog, DataExportDialog
 from dialogs.selection import ExperimentSelectionDialog
 from dialogs.settings import AnalysisSettingsDialog, SettingsDialog
 from gui import Paths, Util
-from gui.Util import create_image_item_list_from
-from gui.loader import Loader
 
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, False)
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, False)

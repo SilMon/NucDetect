@@ -8,11 +8,8 @@ import time
 from copy import deepcopy
 from typing import Union, Dict, List, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 
-from core.roi.ROI import ROI
-from core.roi.ROIHandler import ROIHandler
 from core.detector_modules.AreaAndROIExtractor import extract_nuclei_from_maps, extract_foci_from_maps
 from core.detector_modules.FCNMapper import FCNMapper
 from core.detector_modules.FocusMapper import FocusMapper
@@ -20,6 +17,8 @@ from core.detector_modules.ImageLoader import ImageLoader
 from core.detector_modules.MapComparator import MapComparator
 from core.detector_modules.NucleusMapper import NucleusMapper
 from core.detector_modules.QualityTester import QualityTester
+from core.roi.ROI import ROI
+from core.roi.ROIHandler import ROIHandler
 
 
 class Detector:

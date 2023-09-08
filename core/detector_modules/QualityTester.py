@@ -1,11 +1,9 @@
-import os
 import warnings
 from typing import Dict, Union, List, Iterable, Tuple
 
 import numpy as np
 
-import Paths
-#from custom_logging.custom_logging import CustomLogger
+# from custom_logging.custom_logging import CustomLogger
 from roi.ROI import ROI
 
 

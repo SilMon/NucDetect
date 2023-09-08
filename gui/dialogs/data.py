@@ -1,5 +1,4 @@
 import copy
-import csv
 import os
 import sqlite3
 import threading
@@ -18,14 +17,13 @@ from skimage.draw import line
 from skimage.segmentation import watershed
 
 import Util
-from database.connections import Inserter, Requester
-from definitions.icons import Icon, Color
-from Detector import Detector
-from detector_modules import AreaAndROIExtractor
-from dialogs.GraphicsItems import EditorView
 from DataProcessing import eu_dist
 from Plots import PoissonPlotWidget
 from Util import create_image_item_list_from
+from database.connections import Inserter, Requester
+from definitions.icons import Icon, Color
+from detector_modules import AreaAndROIExtractor
+from dialogs.GraphicsItems import EditorView
 from dialogs.selection import ImageSelectionDialog
 from gui import Paths
 from loader import Loader

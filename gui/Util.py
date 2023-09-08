@@ -1,10 +1,8 @@
 import datetime
-import multiprocessing
 import os
 import sqlite3
 from os.path import isfile
 from typing import List, Tuple, Union, Iterable
-from concurrent.futures import ProcessPoolExecutor
 
 from PyQt5 import QtCore
 from PyQt5.QtGui import QStandardItem, QIcon

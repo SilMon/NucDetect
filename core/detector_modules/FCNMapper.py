@@ -3,7 +3,6 @@ import os
 from pathlib import Path
 from typing import Iterable, Dict, List, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 from scipy.ndimage import label
@@ -14,7 +13,6 @@ from tensorflow.python.keras import models
 import Paths
 from DataProcessing import automatic_whitebalance
 from detector_modules.AreaMapper import AreaMapper
-from fcn.FCN import FCN
 
 
 class FCNMapper(AreaMapper):
