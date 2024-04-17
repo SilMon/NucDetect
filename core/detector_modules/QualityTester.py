@@ -1,9 +1,8 @@
+import time
 import warnings
 from typing import Dict, Union, List, Iterable, Tuple
 
 import numpy as np
-
-# from custom_logging.custom_logging import CustomLogger
 from roi.ROI import ROI
 
 
@@ -19,10 +18,11 @@ class QualityTester:
         "min_nucleus_int_perc": .8,
         "min_foc_area": 5,
         "max_foc_area": 270,
-        "min_foc_int": .2,
+        "min_foc_int": .33,
         "cutoff": .03,
         "size_factor": 1.0,
         "logging": False,
+        "log": []
     }
 
     def __init__(self, channels: List[np.ndarray] = None, channel_names: List[str] = None,
@@ -31,7 +31,7 @@ class QualityTester:
         self.channel_names = channel_names
         self.roi = roi
         self.settings = settings
-        #self.logger = CustomLogger(os.path.join(Paths.log_path, "quality.log"))
+
 
     def set_channels(self, channels: List[np.ndarray]) -> None:
         self.channels = channels
@@ -61,6 +61,7 @@ class QualityTester:
         if not self.settings:
             self.settings = self.STANDARD_SETTINGS
             warnings.warn("No settings found, standard settings used for focus mapping")
+        self.log = self.settings["log"]
         return self.check_quality()
 
     def check_quality(self) -> Tuple[List[ROI], List[ROI]]:
@@ -72,17 +73,19 @@ class QualityTester:
         main, foci = self.separate_roi_by_channel()
         # Check size of nuclei
         lower_bound, upper_bound = self.settings["min_main_area"], self.settings["max_main_area"]
-        #main = self.check_size_boundaries(main, lower_bound, upper_bound)
-        print(f"Quality Check:\nNuclei Size Check: {len(main)}")
+        main = self.check_size_boundaries(main, lower_bound, upper_bound)
+        self.log("Quality Check:")
+        self.log(f"Nuclei Size Check: {len(main)}")
         # Delete foci whose nucleus was deleted or which are unassociated to a nucleus
+        self.log(f"Foci to check: {len(foci)}")
         foci = self.delete_unassociated_foci(main, foci)
-        print(f"Focus Association Check: {len(foci)}")
+        self.log(f"Focus Association Check: {len(foci)}")
         # Check size of foci
         foci = self.check_size_boundaries(foci, self.settings["min_foc_area"], self.settings["max_foc_area"])
-        print(f"Focus Size Check: {len(foci)}")
+        self.log(f"Focus Size Check: {len(foci)}")
         # Check foci for intensity
-        foci = self.check_intensity_boundaries(foci, self.settings["min_foc_int"], 1)
-        print(f"Focus Intensity Check: {len(foci)}")
+        foci = self.check_intensity_boundaries(foci, main, self.settings["min_foc_int"], 1)
+        self.log(f"Focus Intensity Check: {len(foci)}")
         return main, foci
 
     def separate_roi_by_channel(self) -> Tuple[List[ROI], List[ROI]]:
@@ -129,27 +132,89 @@ class QualityTester:
                 checked_foci.append(focus)
         return checked_foci
 
-    def check_intensity_boundaries(self, rois: List[ROI], lower_bound: int, upper_bound: int = None) -> List[ROI]:
+    def check_intensity_boundaries(self,
+                                   foci: List[ROI],
+                                   nuclei: List[ROI],
+                                   lower_bound: float,
+                                   upper_bound: float = None) -> List[ROI]:
         """
         Method to check if the intensity of the ROI lies in the specified boundaries
 
-        :param rois: The ROI to check
-        :param lower_bound: The lower boundary
-        :param upper_bound: The upper boundary
+        :param foci: The foci to check
+        :param nuclei: The associated nuclei
+        :param lower_bound: The lower boundary as percent of image max
+        :param upper_bound: The upper boundary as percent of image max
         :return: The checked ROI
         """
         # Get the max possible value for the image
+        """
         max_val = np.iinfo(self.channels[0].dtype).max
         lower_bound *= max_val
         upper_bound *= max_val
+        """
         # Iterate over the given roi to check if their intensity is inside the bounds
         checked = []
-        for roi in rois:
+        names = self.channel_names[:len(self.channels)]
+        values = {x: {"Channel": self.channels[names.index(x)],
+                      "Lower": np.amin(self.channels[names.index(x)]) +
+                               np.amax(self.channels[names.index(x)]) * lower_bound,
+                      "Upper": np.amax(self.channels[names.index(x)]) * upper_bound,
+                      "Max. Val": np.iinfo(self.channels[names.index(x)].dtype).max}
+                  for x in names}
+        removed = 0
+        nuc_hashes = [hash(x) for x in nuclei]
+        cnum = 0
+        for roi in foci:
             # Get the corresponding channel
-            channel = self.channels[self.channel_names.index(roi.ident)]
+            channel = values[roi.ident]["Channel"]
+            lower = values[roi.ident]["Lower"]
+            upper = values[roi.ident]["Upper"]
+            max_val = values[roi.ident]["Max. Val"]
+            # Get associated nucleus
+            nuc = nuclei[nuc_hashes.index(hash(roi.associated))]
             # Calculate average intensity
             intensity = roi.calculate_statistics(channel)["intensity average"]
-            if lower_bound <= intensity <= upper_bound:
-                checked.append(roi)
+            std = roi.calculate_statistics(channel)["intensity std"]
+            dims = roi.calculate_dimensions()
+            fcy, fcx = dims["center_y"], dims["center_x"]
+            # Approximation of radius
+            fr = max((dims["maxX"] - dims["minX"]) // 2, dims["maxY"] - dims["minY"])
+            arr = 3
+            if fcy < fr + arr or fcx < fr + arr:
+                continue
+            # Get area around center
+            area = channel[fcy - fr - arr: fcy + fr + arr,
+                           fcx - fr - arr: fcx + fr + arr]
+            # Get mask
+            mask = np.ones(shape=area.shape)
+            # Get area shape
+            acy, acx = area.shape
+            acy = acy // 2
+            acx = acx // 2
+
+            # Set focus area to zero
+            mask[acy - fr: acy + fr,
+                 acx - fr: acx + fr] = 0
+            # Calculate the average of the surrounding area
+            avg = 0
+            num = 0
+            for y in range(mask.shape[0]):
+                for x in range(mask.shape[1]):
+                    if mask[y][x]:
+                        avg += area[y][x]
+                        num += 1
+            if avg == 0 or num == 0:
+                removed += 1
+                continue
+            avg /= num
+            if lower <= intensity <= upper:
+                # Get average intensity of nucleus area on channel
+                if intensity >= max(avg + max_val * 0.03, min(max_val, int(avg * 1.1))):
+                    cnum += 1
+                    checked.append(roi)
+                else:
+                    removed += 1
+            else:
+                removed += 1
         return checked
 

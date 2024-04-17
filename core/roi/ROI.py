@@ -14,6 +14,7 @@ from numba.typed import List as numList
 
 from core.roi.AreaAnalysis import get_bounding_box, get_center, get_surface, get_ellipse_radii, get_orientation_angle, \
     get_orientation_vector, get_eccentricity, get_ovality
+from roi import AreaAnalysis
 
 
 class ROI:
@@ -151,6 +152,7 @@ class ROI:
         """
         self.area.clear()
         self.area = rle
+        self.reset_stored_values()
 
     def add_to_area(self, rle):
         """
@@ -163,6 +165,16 @@ class ROI:
         self.area = AreaAnalysis.merge_rle_areas(self.area, rle)
         self.area.extend(rle)
         self.reset_stored_values()
+
+    def is_valid(self) -> bool:
+        """
+        Method to check if the roi contains valid data
+
+        :return: True, if the roi is valid
+        """
+        if self.area:
+            return True
+        return False
 
     def calculate_ellipse_parameters(self) -> Union[Dict[str, Union[int, float, Tuple, None]]]:
         """

@@ -1,0 +1,68 @@
+QTabWidget::pane {
+    border-top: 2px solid #007acc;
+}
+
+QTabWidget::tab-bar {
+    alignment: center;
+}
+
+QTabBar::tab {
+    padding: 8px 16px;
+}
+
+QLabel{
+    color: white;
+}
+
+QTabBar::pane, QTabBar::tab-bar, QTabBar::tab{
+    color: white;
+    background-color: rgba(22, 42, 75 , 255);
+    border-right: 2px solid #007acc;
+    border-left: 2px solid #007acc;
+}
+
+QWidget#SettingsTabWidget, QDialog, QScrollArea{
+    color: white;
+    background-color: rgb(0, 51, 102);
+    border: none;
+}
+
+QLineEdit, QCheckBox, QTextEdit, QSpinBox, QDoubleSpinBox {
+    color: rgba(22, 42, 75 , 255);
+    background-color: white;
+}
+
+QTabBar::tab:selected {
+    color: white;
+    background-color: #007acc;
+}
+
+QPushButton{
+	color: White;
+	background-color: rgba(22, 42, 75 , 255);
+    width: auto;
+    height: auto;
+    padding: 5px;
+    margin: 5px;
+	border: none;
+	font-size: 14px;
+ 	text-align: center;
+    min-height: fit-content;
+    min-width: fit-content;
+}
+
+QPushButton:hover{
+	background-color:  rgba(15, 35, 68 , 255);
+}
+
+QPushButton:pressed{
+	background-color:  rgba(8, 28, 61 , 255);
+}
+
+QPushButton:disabled{
+	background-color:  rgba(40, 60, 100 , 255);
+}
+
+QPushButton:checked{
+	background-color:  rgba(8, 28, 61 , 255);
+}

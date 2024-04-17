@@ -52,7 +52,7 @@ class SettingsShowWidget(SettingsWidget):
 
 class SettingsText(SettingsWidget):
     """
-    Class to show an text input in the settings
+    Class to show a text input in the settings
     """
 
     def __init__(self, _id, value, parent=None, title="", desc="", callback=None):

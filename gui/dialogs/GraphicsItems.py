@@ -368,9 +368,9 @@ class EditorView(pg.GraphicsView):
                                round(pos.x()), round(pos.y()),
                                0, (0, 0), self.active_channels[self.main_channel], -1)
             item.set_pens(
-                pg.mkPen(color="#2A2ABB", width=3, style=QtCore.Qt.DashLine),
-                pg.mkPen(color="#2A2ABB", width=3, style=QtCore.Qt.DashLine),
-                ROIDrawer.MARKERS[-1]
+                ROIDrawer.MARKERS["nucleus_manual"],
+                ROIDrawer.MARKERS["nucleus_manual"],
+                ROIDrawer.MARKERS["invisible"]
             )
             item.add_to_view(self.plot_item)
             self.parent.set_mode(2)
@@ -383,8 +383,8 @@ class EditorView(pg.GraphicsView):
                              round(7 * self.size_factor), round(7 * self.size_factor),
                              self.active_channels[self.active_channel], -1)
             item.set_pen(
-                ROIDrawer.MARKERS[self.active_channels[self.active_channel]],
-                ROIDrawer.MARKERS[-1]
+                ROIDrawer.MARKERS["manual"],
+                ROIDrawer.MARKERS["invisible"]
             )
         item.changed = True
         self.items.append(item)
@@ -530,6 +530,9 @@ class EditorView(pg.GraphicsView):
         :param image_id: The id of the image
         :return: None
         """
+        # Check if the roi is valid
+        if not roi.is_valid():
+            return
         # Calculate statistics
         roidat = (hash(roi), image_id, False, roi.ident,
                   item.center[1], item.center[0], item.edit_rect.width,
@@ -644,7 +647,9 @@ class ROIDrawer:
         "image processing": pg.mkPen(color="r", width=3),
         "machine learning": pg.mkPen(color="g", width=3),
         "merged": pg.mkPen(color="m", width=3),
-        "nucleus": pg.mkPen(color="y", width=3),
+        "manual": pg.mkPen(color="b", width=3),
+        "nucleus_auto": pg.mkPen(color="#b36920", width=3, style=QtCore.Qt.DashLine),
+        "nucleus_manual": pg.mkPen(color="#d67c22", width=3, style=QtCore.Qt.DashLine),
         "removed": pg.mkPen(color="w", width=3)
     }
     """MARKERS = [
@@ -731,7 +736,7 @@ class ROIDrawer:
         d1 = dims["width"]
         focus = FocusItem(c[0], c[1], d1, d2, ind, hash(roi), method=roi.detection_method)
         focus.set_pen(pen, ROIDrawer.MARKERS["invisible"])
-        focus.setVisible(visible)
+        focus.setVisible(visible if roi.detection_method != "removed" else False)
         focus.add_to_view(view)
         return focus
 
@@ -746,8 +751,7 @@ class ROIDrawer:
         :param visible: Should the item be drawn visibly?
         :return: None
         """
-        pen = pg.mkPen(color="#191970" if roi.auto else "#2A2ABB",
-                       width=3, style=QtCore.Qt.DashLine)
+        pen = ROIDrawer.MARKERS["nucleus_auto"] if roi.auto else ROIDrawer.MARKERS["nucleus_manual"]
         params = roi.calculate_ellipse_parameters()
         cy, cx = params["center_y"], params["center_x"]
         r1 = params["minor_axis"]

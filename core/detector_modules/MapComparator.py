@@ -1,6 +1,8 @@
+import time
 import warnings
 from typing import List, Tuple, Dict, Union
 
+import matplotlib.pyplot as plt
 import numpy as np
 from numba.typed import List as NumbaList
 
@@ -15,20 +17,24 @@ class MapComparator:
         "foc1_bin",
         "foci2",
         "foc2_bin",
-        "img_shape"
+        "img_shape",
+        "log"
     ]
 
-    def __init__(self, main: List[ROI], foci1: List[ROI], foci2: List[ROI], img_shape: Tuple[int, int]):
+    def __init__(self, main: List[ROI], foci1: List[ROI], foci2: List[ROI], img_shape: Tuple[int, int], log_function):
         """
         :param main: List of all detected nuclei
         :param foci1: List of all detected foci for method 1
         :param foci2: List of all detected foci for method 2
         :param img_shape: The shape (height, width) of the image the ROI are derived from
+        :param log_function: Function to log
         """
         self.main: List[ROI] = main
         self.foci1: List[ROI] = foci1
         self.foci2: List[ROI] = foci2
         self.img_shape: Tuple[int, int] = img_shape
+        self.log = log_function
+        self.log("Map Comparator:")
         self.foc1_bin, self.foc2_bin = self.create_hash_maps_for_foci()
 
     def create_hash_maps_for_foci(self) -> Tuple[np.ndarray, np.ndarray]:
@@ -95,6 +101,7 @@ class MapComparator:
 
         :return: The cleaned list of foci and the percentage of overlap between
         """
+        start = time.time()
         overlap = self.create_overlap_dict(self.foc1_bin, self.foc2_bin)
         # Get a list of all potential ROI
         roi = self.foci1 + self.foci2
@@ -133,7 +140,7 @@ class MapComparator:
                         foc1.detection_method = "Merged"
             else:
                 warnings.warn(f"Focus with hash {key} not found!")
-        print(f"Channel: {channel}\t{len(match)} matching foci found and merged")
+        self.log(f"Channel: {channel}\t{len(match)} matching foci found and merged in {start-time.time(): .3f} secs")
         return roi
 
     @staticmethod

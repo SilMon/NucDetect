@@ -231,7 +231,8 @@ class DataExportDialog(QDialog):
         # Get the data for the given image
         rows = self.req.get_table_data_for_experiment(experiment)
         self.save_table_to_disk(experiment,
-                                rows, header, include_header=include_header,
+                                rows, header,
+                                include_header=include_header,
                                 sheet_name=sheet_name if sheet_name else experiment,
                                 xlsx_name=xlsx_name)
 
@@ -514,10 +515,10 @@ class Editor(QDialog):
         :return: None
         """
         self.connect_spinboxes_to_change_function(False)
-        self.ui.spb_x.setValue(item.center[0])
-        self.ui.spb_y.setValue(item.center[1])
-        self.ui.spb_width.setValue(item.width)
-        self.ui.spb_height.setValue(item.height)
+        self.ui.spb_x.setValue(int(item.center[0]))
+        self.ui.spb_y.setValue(int(item.center[1]))
+        self.ui.spb_width.setValue(int(item.width))
+        self.ui.spb_height.setValue(int(item.height))
         self.ui.spb_angle.setValue(item.angle)
         self.connect_spinboxes_to_change_function()
         self.ui.btn_preview.setEnabled(False)
@@ -1500,7 +1501,6 @@ class ExperimentDialog(QDialog):
             groups_str += f"{name} ({len(keys)})"
         return groups_str
 
-
     def store_current_information_to_item(self, item: QStandardItem) -> None:
         """
         Method to store the current information to the given item
@@ -2058,8 +2058,8 @@ class GroupDialog(QDialog):
                     self.img_model.appendRow(
                         item
                     )
-                self.ui.btn_add_images.setEnabled(True)
-                self.ui.btn_remove.setEnabled(True)
+            self.ui.btn_add_images.setEnabled(True)
+            self.ui.btn_remove.setEnabled(True)
         else:
             self.ui.btn_add_images.setEnabled(False)
             self.ui.btn_clear_images.setEnabled(False)

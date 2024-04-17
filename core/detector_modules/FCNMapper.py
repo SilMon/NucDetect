@@ -3,10 +3,11 @@ import os
 from pathlib import Path
 from typing import Iterable, Dict, List, Tuple
 
+import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
-from scipy.ndimage import label
-from skimage.morphology import binary_erosion
+from scipy.ndimage import label, binary_fill_holes
+from skimage.morphology import binary_erosion, binary_opening
 from skimage.transform import resize
 from tensorflow.python.keras import models
 
@@ -212,10 +213,13 @@ class FCNMapper(AreaMapper):
         if len(prediction_maps) > 1:
             bin_maps = []
             for pmap in prediction_maps:
-                bin_maps.append(label(pmap >= self.settings["fcn_certainty_foci"])[0])
+                bmap = binary_fill_holes(pmap >= self.settings["fcn_certainty_foci"])
+                #bmap = binary_opening(bmap, footprint=np.ones(shape=(3, 3)))
+                bmap = label(bmap)[0]
+                bin_maps.append(bmap)
             return bin_maps
         else:
-            return label(binary_erosion(prediction_maps[0] >= self.settings["fcn_certainty_nuclei"],
+            return label(binary_opening(prediction_maps[0] >= self.settings["fcn_certainty_nuclei"],
                                         footprint=np.ones(shape=(5, 5))))[0]
 
 

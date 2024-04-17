@@ -1,7 +1,9 @@
 import warnings
+from math import sqrt
 from typing import Iterable, Tuple, Dict, List
 
 import numpy as np
+from matplotlib import pyplot as plt
 from skimage.draw import disk
 from skimage.feature import blob_log
 
@@ -44,18 +46,19 @@ class FocusMapper(AreaMapper):
             warnings.warn("No settings found, standard settings used for focus mapping")
         return self.map_foci()
 
-    def map_foci(self, main: np.ndarray = None) -> List[np.ndarray]:
+    def map_foci(self, main: np.ndarray = None, main_map: np.ndarray = None) -> List[np.ndarray]:
         """
         Method to detect foci
 
-        :param main: The binary main map, optional
+        :param main: The channel containing the nucleus
+        :param main_map: The binary main map
         :return: The foci detection maps
         """
         foci_maps = []
         # Detect foci on each channel
-        ind = 0
         for channel in self.channels:
-            pchannel = channel if not self.settings["use_pre-processing"] else self.preprocess_channel(channel, main)
+            pchannel = channel if not self.settings["use_pre-processing"]\
+                else self.preprocess_channel(channel, main, main_map)
             # Detect foci on preprocessed channel
             foci = self.detect_foci_on_acc_map(self.settings, pchannel)
             # Create foci map and append
@@ -65,31 +68,29 @@ class FocusMapper(AreaMapper):
     @staticmethod
     def preprocess_channel(channel: np.ndarray,
                            main: np.ndarray = None,
+                           main_map: np.ndarray = None,
                            adjust_color_balance: bool = True) -> np.ndarray:
         """
         Method to prepare a channel for focus detection
 
         :param channel: The channel to pre-process
-        :param main: Binary map of the main channel
+        :param main: The channel containing the nuclei
+        :param main_map: Binary map of the main channel
         :param adjust_color_balance: Should the image be scaled to use the full range of values?
         :return: The pre-processed channel
         """
         # Get lut for processing
-        if main is None:
+        if main is None or main_map is None:
             warnings.warn("No main map given, increase in processing time expected!")
         else:
+            img = channel if not adjust_color_balance else automatic_whitebalance(channel)
+            lut = create_lg_lut(np.amax(img))
+            # Create empty accumulator map
+            acc = np.empty(shape=channel.shape)
             for y in range(channel.shape[0]):
                 for x in range(channel.shape[1]):
-                    if not main[y][x]:
-                        channel[y][x] = 0
-        img = channel if not adjust_color_balance else automatic_whitebalance(channel)
-        lut = create_lg_lut(np.amax(img))
-        # Create empty accumulator map
-        acc = np.empty(shape=channel.shape)
-        for y in range(channel.shape[0]):
-            for x in range(channel.shape[1]):
-                acc[y][x] = lut[img[y][x]]
-        return acc
+                    acc[y][x] = lut[img[y][x]]
+            return acc
 
     @staticmethod
     def check_for_preprocessing(main: np.ndarray, channel: np.ndarray) -> Tuple[bool, bool]:
@@ -130,13 +131,14 @@ class FocusMapper(AreaMapper):
         num_sigma = settings["num_sigma"]
         acc_thresh = settings["acc_thresh"]
         overlap = settings["overlap"]
+        # TODO fix
         return blob_log(acc_map,
-                        min_sigma=max(1, min_sigma * mmpd),
-                        max_sigma=max(1, max_sigma * mmpd),
+                        min_sigma=min_sigma,
+                        max_sigma=max_sigma,
                         num_sigma=num_sigma, threshold=acc_thresh, overlap=overlap)
 
     @staticmethod
-    def create_foci_map(shape: Iterable[int], foci: Iterable) -> np.ndarray:
+    def create_foci_map(shape: Tuple[int], foci: Iterable) -> np.ndarray:
         """
         Method to create a binary foci map for the given foci
 
@@ -145,12 +147,14 @@ class FocusMapper(AreaMapper):
         :return: The created foci map
         """
         # Create empty map
-        bin_map = np.zeros(shape=shape)
+        bin_map = np.zeros(shape=shape,
+                           dtype=np.uint32)
+        tsq = sqrt(2)
         # Iterate over the given foci
         for ind, focus in enumerate(foci):
             # Extract variables
             y, x, r = focus
             # Draw focus into the foci map
-            rr, cc = disk((y, x), r, shape=shape)
-            bin_map[rr, cc] = ind
+            rr, cc = disk((y, x), r * tsq, shape=shape)
+            bin_map[rr, cc] = ind + 1
         return bin_map

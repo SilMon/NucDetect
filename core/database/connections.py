@@ -12,8 +12,10 @@ from roi.ROI import ROI
 class Specifiers(Enum):
     ALL = "*"
     IS = "IS"
+    ISNOT = "IS NOT"
     NULL = "NULL"
     EQUALS = "="
+    NOTEQUALS = "!="
     GREATER = ">"
     GREATEREQUALS = ">="
     LESSER = "<"
@@ -239,6 +241,24 @@ class Connector:
         query = self.commands["delete"].replace("<table_name>", table).replace("<condition>", where)
         self.cursor.execute(query)
 
+    def reset_database(self) -> None:
+        """
+        Method to reset the database
+
+        :return: None
+        """
+        self.cursor.executescript(self.commands["reset_database"])
+        self.connection.commit()
+
+    def reset_analysis_data(self) -> None:
+        """
+        Method to reset the analysis data
+
+        :return: None
+        """
+        self.cursor.executescript(self.commands["reset_analysis_data"])
+        self.connection.commit()
+
     def get_view_from_table(self, column: Union[str, List, Tuple, Specifiers],
                             table: str, where: Tuple = ()) -> List[Tuple[Union[str, int, float]]]:
         """
@@ -433,8 +453,13 @@ class Requester(DatabaseInteractor):
         :param experiment: The name of the experiment
         :return: List of the associated image hashes
         """
-        return [x[0] for x in self.connector.get_view_from_table("md5", "images", ("experiment", Specifiers.EQUALS,
-                                                                                   experiment))]
+        imgs = self.connector.get_view_from_table("image", "groups",
+                                                  ("experiment", Specifiers.EQUALS,
+                                                   experiment))
+        if not imgs:
+            imgs = self.connector.get_view_from_table("md5", "images",
+                                                      ("experiment", Specifiers.EQUALS, experiment))
+        return [x[0] for x in imgs]
 
     def get_number_of_associated_images_for_experiment(self, experiment: str) -> int:
         """
@@ -533,7 +558,8 @@ class Requester(DatabaseInteractor):
         :return: List of all focus hashes
         """
         return [x[0] for x in self.connector.get_view_from_table("hash", "roi",
-                                                                 ("associated", Specifiers.EQUALS, nucleus))]
+                                                                 (("associated", Specifiers.EQUALS, nucleus),
+                                                                  ))]
 
     def count_foci_for_nucleus_and_channel(self, nucleus: int, channel: str) -> int:
         """
@@ -543,8 +569,9 @@ class Requester(DatabaseInteractor):
         :param channel:The name of the channel
         :return: The number of associated foci
         """
-        return self.connector.count_instances("hash", "roi", (("associated", Specifiers.EQUALS, nucleus),
-                                                              ("channel", Specifiers.EQUALS, channel)))
+        return self.connector.count_instances("hash", "roi", (
+            ("associated", Specifiers.EQUALS, nucleus), ("channel", Specifiers.EQUALS, channel),
+            ("detection_method", Specifiers.NOTEQUALS, "Removed")))
 
     def get_modified_images(self) -> List[str]:
         """
@@ -594,8 +621,9 @@ class Requester(DatabaseInteractor):
         :param image: The md5 hash of the image
         :return: The name of the main channel
         """
-        return self.connector.get_view_from_table("name", "channels", (("md5", Specifiers.EQUALS, image),
-                                                                       ("main", Specifiers.EQUALS, 1)))[0][0]
+        return self.connector.get_view_from_table("name", "channels",
+                                                  (("md5", Specifiers.EQUALS, image),
+                                                   ("main", Specifiers.EQUALS, 1)))[0][0]
 
     def get_roi_info(self, roi: int) -> Tuple:
         """
@@ -604,7 +632,8 @@ class Requester(DatabaseInteractor):
         :param roi: The md5 hash of the roi
         :return: The retrieved information
         """
-        return self.connector.get_view_from_table(Specifiers.ALL, "roi", ("hash", Specifiers.EQUALS, roi))[0]
+        return self.connector.get_view_from_table(Specifiers.ALL, "roi",
+                                                  ("hash", Specifiers.EQUALS, roi))[0]
 
     def get_statistics_for_roi(self, roi: int) -> Tuple:
         """
@@ -685,9 +714,10 @@ class Requester(DatabaseInteractor):
         :param md5: The md5 hash of the image
         :return: The associated file name
         """
-        return self.connector.get_view_from_table("file_name",
+        data = self.connector.get_view_from_table("file_name",
                                                   "encountered_names",
-                                                  ("md5", Specifiers.EQUALS, md5))[0][0]
+                                                  ("md5", Specifiers.EQUALS, md5))
+        return data[0][0] if data else ""
 
 
 class Inserter(DatabaseInteractor):
@@ -946,7 +976,8 @@ class Inserter(DatabaseInteractor):
         :param nucleus: Hash of the nucleus
         :return: None
         """
-        self.connector.update("roi", ("associated", Specifiers.NULL), ("associated", Specifiers.EQUALS, nucleus))
+        self.connector.update("roi", ("associated", Specifiers.NULL),
+                              ("associated", Specifiers.EQUALS, nucleus))
 
     def reset_nuclei_foci_associations(self, nuclei: Tuple[int]) -> None:
         """
@@ -995,6 +1026,22 @@ class Inserter(DatabaseInteractor):
         :return: None
         """
         self.connector.delete("statistics", ("hash", Specifiers.EQUALS, ident))
+
+    def reset_database(self) -> None:
+        """
+        Method to reset the database
+
+        :return: None
+        """
+        self.connector.reset_database()
+
+    def reset_analysis_data(self) -> None:
+        """
+        Method to reset the analysis data
+
+        :return: None
+        """
+        self.connector.reset_analysis_data()
 
     def register_image_filename(self, path: str) -> None:
         """

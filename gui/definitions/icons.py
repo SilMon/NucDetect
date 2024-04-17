@@ -13,6 +13,7 @@ class Color:
     ITEM_MODIFIED = QColor("#5A8c9ea3")
     BRIGHT_RED = QColor(222, 23, 56)
     LIGHT_BLUE = QColor(47, 167, 212)
+    STANDARD = QColor()
     INVISIBLE = QColor(0, 0, 0, 0)
 
 
@@ -60,7 +61,8 @@ class Icon:
             "MAGIC": qta.icon("fa5s.magic", color=Icon.HIGHLIGHT),
             "LOCK": qta.icon("fa5s.lock", color=Icon.STANDARD),
             "UNDO": qta.icon("fa5s.undo", color=Icon.STANDARD),
-            "IMAGE": qta.icon("fa5s.image", color=Icon.STANDARD)
+            "IMAGE": qta.icon("fa5s.image", color=Icon.STANDARD),
+            "SEARCH": qta.icon("fa5s.search", color=Icon.STANDARD)
         }
         return icons.get(ident, QIcon())
 

@@ -1,6 +1,7 @@
 from typing import List, Tuple, Dict, Iterable
 
 import numpy as np
+from matplotlib import pyplot as plt
 from numba.typed import List as nList
 
 from roi.AreaAnalysis import imprint_area_into_array

@@ -3,8 +3,8 @@ import os
 from typing import Dict, Union, List
 
 import pyqtgraph as pg
-from PyQt5 import uic
-from PyQt5.QtWidgets import QDialog, QWidget, QScrollArea, QSizePolicy, QVBoxLayout
+from PyQt5 import uic, QtCore
+from PyQt5.QtWidgets import QDialog, QWidget, QScrollArea, QSizePolicy, QVBoxLayout, QMessageBox
 
 import Paths
 from definitions.icons import Icon
@@ -54,6 +54,7 @@ class AnalysisSettingsDialog(QDialog):
             ],
             "main": abs(self.ui.main_channel_btn_group.checkedId()) - 2,
             "analysis_settings": {
+                "method": self.ui.detection_method_btn_group.checkedButton().text().lower(),
                 "size_factor": int(self.ui.objective_selection_group.checkedButton().text()[:-1]) / 63.0,
                 "dots_per_micron": self.spbx_mmpd.value()
             }
@@ -137,21 +138,90 @@ class SettingsDialog(QDialog):
     Class to display a settings window, dynamically generated from a JSON file
     """
 
-    def __init__(self, parent: QWidget = None):
+    def __init__(self, inserter, parent: QWidget = None):
         super(SettingsDialog, self).__init__(parent)
         self.data = {}
         self.changed = {}
         self.ui = None
         self.json = None
         self.url = None
+        self.inserter = inserter
         self._initialize_ui()
 
     def _initialize_ui(self) -> None:
         self.ui = uic.loadUi(Paths.ui_settings_dial, self)
         # Load css file
-        self.ui.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css")).read())
-        self.setWindowTitle("Settings Dialog")
+        self.setWindowFlags(
+            self.windowFlags() |
+            QtCore.Qt.WindowSystemMenuHint |
+            QtCore.Qt.WindowMinMaxButtonsHint |
+            QtCore.Qt.Window
+        )
         self.setWindowIcon(Icon.get_icon("LOGO"))
+        self.setWindowTitle("Settings")
+        self.setStyleSheet(open(os.path.join(Paths.css_dir, "settings.css"), "r").read())
+        self.setModal(True)
+        self.ui.btn_reset_db.clicked.connect(self.reset_database)
+        self.ui.btn_reset_an.clicked.connect(self.reset_analysis_data)
+        self.ui.btn_reset_log.clicked.connect(self.reset_log_file)
+        # TODO implement program settings and chosen presets
+
+    def accept(self):
+        # Update the database to reflect the changes made
+        for key, value in self.changed.items():
+            self.inserter.update_setting(key, value[0])
+        self.inserter.commit()
+        # Save the menu to JSON
+        self.save_menu_settings()
+        self.close()
+
+    def show_warning_dialog(self, msg: str):
+        """
+        Method to show a warning dialog
+
+        :param msg: The message to display
+        :return: The code returned by the dialog
+        """
+        msbbox = QMessageBox()
+        msbbox.setIcon(QMessageBox.Warning)
+        msbbox.setWindowIcon(Icon.get_icon("LOGO"))
+        msbbox.setStyleSheet(open(os.path.join(Paths.css_dir, "messagebox.css"), "r").read())
+        msbbox.addButton(QMessageBox.Yes)
+        msbbox.addButton(QMessageBox.No)
+        msbbox.setWindowTitle("Warning: Permanent removal of stored data imminent")
+        msbbox.setText(msg)
+        return msbbox.exec()
+
+    def reset_database(self) -> None:
+        """
+        Method to reset the database
+
+        :return: None
+        """
+        if self.show_warning_dialog("This action will erase all saved data. Are you sure?") == QMessageBox.Yes:
+            print("Database erased")
+            self.inserter.reset_database()
+
+    def reset_analysis_data(self) -> None:
+        """
+        Method to reset the analysis data
+
+        :return: None
+        """
+        if self.show_warning_dialog("This action will erase all analysis data. Are you sure?") == QMessageBox.Yes:
+            print("Analysis data erased")
+            self.inserter.reset_analysis_data()
+
+    def reset_log_file(self) -> None:
+        """
+        Method to reset the log file
+
+        :return: None
+        """
+        if self.show_warning_dialog("This action will erase all saved logs. Are you sure?") == QMessageBox.Yes:
+            print("Log file erased")
+            with open(Paths.log_path, "w") as log_file:
+                log_file.write("")
 
     def initialize_from_file(self, url: str) -> None:
         """
@@ -187,6 +257,7 @@ class SettingsDialog(QDialog):
                 QSizePolicy.Expanding,
                 QSizePolicy.Expanding
             )
+            kernel.setObjectName("SettingsTabWidget")
             layout = QVBoxLayout()
             kernel.setLayout(layout)
             layout.setObjectName("base")
