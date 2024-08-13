@@ -1,4 +1,3 @@
-import logging
 import os
 from pathlib import Path
 from typing import Iterable, Dict, List, Tuple
@@ -7,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 from scipy.ndimage import label, binary_fill_holes
-from skimage.morphology import binary_erosion, binary_opening
+from skimage.morphology import binary_erosion, binary_opening, binary_closing
 from skimage.transform import resize
 from tensorflow.python.keras import models
 
@@ -64,7 +63,6 @@ class FCNMapper(AreaMapper):
         """
         path = os.path.join(Paths.model_dir, "detector.h5")
         model = models.load_model(path)
-        logging.info("Models loaded")
         return model
 
     def get_marked_maps(self) -> List[np.ndarray]:
@@ -79,7 +77,6 @@ class FCNMapper(AreaMapper):
         # Check if setting were given
         if not self.settings:
             self.settings = self.STANDARD_SETTING
-            logging.warning("No settings found, standard settings used.")
         pmaps = self.map_channels()
         return self.threshold_maps(pmaps)
 
@@ -214,7 +211,7 @@ class FCNMapper(AreaMapper):
             bin_maps = []
             for pmap in prediction_maps:
                 bmap = binary_fill_holes(pmap >= self.settings["fcn_certainty_foci"])
-                #bmap = binary_opening(bmap, footprint=np.ones(shape=(3, 3)))
+                #bmap = binary_opening(bmap, footprint=np.ones(shape=(5, 5)))
                 bmap = label(bmap)[0]
                 bin_maps.append(bmap)
             return bin_maps

@@ -46,8 +46,8 @@ class Detector:
         self.fcnmapper = None
         self.qualitytester = QualityTester()
 
-    def analyse_images(self, images: List[str], settings: Dict[str, Union[List, bool]]) ->\
-                                                List[Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]]:
+    def analyse_images(self, images: List[str], settings: Dict[str, Union[List, bool]]) -> \
+            List[Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]]:
         """
         Method to analyse a list of images
 
@@ -65,7 +65,7 @@ class Detector:
         return results
 
     def analyse_image(self, path: str,
-                      settings: Dict[str, Union[List, bool]], save_log: bool = True) ->\
+                      settings: Dict[str, Union[List, bool]], save_log: bool = True) -> \
             Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]:
         """
         Method to extract rois from the image given by path
@@ -115,16 +115,23 @@ class Detector:
             self.add_log_message(f"Detected ML ROI: {len(mlroi)}")
         rois = []
         if detection_method == "combined":
+            # Merge the foci for each channel
+            foci = []
             for channel in analysis_settings["foci_channel_names"]:
                 # Define map Comparator
                 mapc = MapComparator(main_roi,
-                                     [x for x in iproi if not x.main and x.ident == channel],
-                                     [x for x in mlroi if not x.main and x.ident == channel],
+                                     maps1[analysis_settings["foci_channel_names"].index(channel)],
+                                     [x for x in iproi if x.ident == channel],
+                                     maps2[analysis_settings["foci_channel_names"].index(channel)],
+                                     [x for x in mlroi if x.ident == channel],
                                      image.shape[:2],
                                      self.add_log_message)
-                # Calculate new nucleus match
-                mapc.get_match_for_nuclei()
-                rois.extend(mapc.merge_overlapping_foci())
+                foci.append(mapc.merge_overlapping_foci())
+            # Add all foci
+            for x in foci:
+                rois.extend(x)
+            # Check the foci for co-localisation
+            MapComparator.get_match_for_nuclei(main_roi, foci)
         elif detection_method == "image processing":
             rois.extend(iproi)
         else:
@@ -172,6 +179,8 @@ class Detector:
         self.nucleusmapper.set_settings(analysis_settings)
         nucmap = self.nucleusmapper.map_nuclei()
         nuclei = extract_nuclei_from_maps(nucmap, main_name)
+        for nucleus in nuclei:
+            nucleus.detection_method = "Nucleus Detection"
         self.add_log_message(f"Finished nuclei extraction {time.time() - s0:.4f}")
         return nucmap, nuclei
 
@@ -241,7 +250,7 @@ class Detector:
         foci = []
         for ind, focmap in enumerate(foci_maps):
             foci.extend(extract_foci_from_maps(focmap, foc_names[ind], nuclei))
-        return nuclei + foci
+        return foci
 
     def perform_quality_check(self, channels: List[np.ndarray],
                               names: List[str], analysis_settings: Dict, roi: List[ROI]):
@@ -285,8 +294,8 @@ class Detector:
             for img in self.analysis_log["Analysed Images"]:
                 lf.write(f"{' ' * 4}{img}\n")
                 for msg in self.analysis_log["Messages"][img]:
-                    lf.write(f"{' '*8}{msg}\n")
-            lf.write("#"*20 + "\n")
+                    lf.write(f"{' ' * 8}{msg}\n")
+            lf.write("#" * 20 + "\n")
 
     def clear_log(self) -> None:
         """

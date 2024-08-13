@@ -133,15 +133,104 @@ def automatic_whitebalance(image: np.ndarray, cutoff: float = 0.05) -> np.ndarra
 
 
 @njit(cache=True)
-def eu_dist(p1: Tuple[int, int], p2: Tuple[int, int]) -> float:
+def euclidean_distance(p1: Tuple[int, int], p2: Tuple[int, int]) -> float:
     """
-    Function to calculate the euclidean distance between two two dimensional points
+    Function to calculate the Euclidean distance between two two-dimensional points
 
     :param p1: The first point
     :param p2: The second point
     :return: The distance as float
     """
     return math.sqrt(((p2[0] - p1[0]) ** 2) + ((p2[1] - p1[1]) ** 2))
+
+
+@njit(cache=True)
+def get_circle_area(d: int) -> float:
+    """
+    Function to calculate the area of a circle
+
+    :param d: The diameter of the circle
+    :return: The area of the circle as float
+    """
+    return math.pi * (d / 2) ** 2
+
+
+@njit(cache=True)
+def calculate_overlap_between_two_circles(c1: Tuple[int, int, int, int], c2: Tuple[int, int, int, int]) -> float:
+    """
+    Function to calculate the overlap between two circles
+    Adapted from:   https://stackoverflow.com/questions/4247889/area-of-intersection-between-two-circles
+                    http://mathworld.wolfram.com/Circle-CircleIntersection.html
+
+    :param c1: The center, diameter and identifier of the first circle
+    :param c2: The center, diameter and identifier of the second circle
+    :return: The overlapping area between both circles, as float
+    """
+    center_1 = (c1[0], c1[1])
+    center_2 = (c2[0], c2[1])
+    radius_1 = c1[2] / 2
+    radius_2 = c2[2] / 2
+    dist = euclidean_distance(center_1, center_2)
+    # Check if both circles overlap at all
+    if dist > radius_1 + radius_2:
+        return 0
+    # Check if one circle is inside the other
+    if dist <= abs(radius_1 - radius_2):
+        # Check for circle 2
+        if radius_1 >= radius_2:
+            return get_circle_area(c2[2])
+        # Check for circle 1
+        else:
+            return get_circle_area(c1[2])
+    # If the circles overlap and do not encapsulate each other, calculate the overlap
+    # Swap if radius_2 is larger than radius_1
+    rs = min(radius_1, radius_2)
+    rl = max(radius_1, radius_2)
+    # calculate part1
+    part1 = rs * rs * math.acos(
+        (dist * dist + rs * rs - rl * rl) / (2 * dist * rs)
+    )
+    # calculate part2
+    part2 = rl * rl * math.acos(
+        (dist * dist + rl * rl - rs * rs) / (2 * dist * rl)
+    )
+    # calculate part3
+    part3 = 0.5 * math.sqrt(
+        (-dist + rs + rl) * (dist + rs - rl) * (dist - rs + rl) * (dist + rs + rl)
+    )
+    return part1 + part2 - part3
+
+
+def check_if_two_circles_overlap(c1: Tuple[int, int, int, int], c2: Tuple[int, int, int, int]) -> bool:
+    """
+    Method to check if the two given circles overlap
+
+    :param c1: The center, diameter and identifier of the first circle
+    :param c2: The center, diameter and identifier of the second circle
+    :return: True, if both circles are overlapping else False
+    """
+    return euclidean_distance((c1[0], c1[1]), (c2[0], c2[1])) <= abs(c1[2] / 2 - c2[2] / 2)
+        
+
+def calculate_overlap_between_two_circles_as_percentage(c1: Tuple[int, int, int, int],
+                                                        c2: Tuple[int, int, int, int]) -> float:
+    """
+    Function to calculate the overlap between two circles as a percentage of the total area
+
+    :param c1: The center and diameter of the first circle
+    :param c2: The center and diameter of the second circle
+    :return: The overlapping area between both circles, as float
+    """
+    # Calculate the areas of  the circles
+    area_1 = get_circle_area(c1[2])
+    area_2 = get_circle_area(c2[2])
+    # Calculate the overlapping area between both circles
+    overlapping_area = calculate_overlap_between_two_circles(c1, c2)
+    if overlapping_area == 0:
+        return 0
+    else:
+        # Get the total area
+        return overlapping_area / (area_1 + area_2 - overlapping_area)
 
 
 def create_circular_mask(h: Union[int, float], w: Union[int, float],
@@ -196,7 +285,7 @@ def get_major_axis(points: nList) -> Tuple[Tuple[int, int], Tuple[int, int]]:
         point1 = points[r1]
         for r2 in range(r1, len(points)):
             point2 = points[r2]
-            dist = eu_dist(point1, point2)
+            dist = euclidean_distance(point1, point2)
             if dist > max_d:
                 p0 = point1
                 p1 = point2

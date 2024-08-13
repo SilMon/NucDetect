@@ -87,114 +87,35 @@
        </property>
       </widget>
      </item>
-     <item row="3" column="0">
-      <widget class="QLabel" name="label_12">
-       <property name="toolTip">
-        <string>Determines the detection boundaries of the analysis. Standard: 63x</string>
-       </property>
-       <property name="text">
-        <string>Preset:</string>
-       </property>
-      </widget>
-     </item>
-     <item row="3" column="1">
-      <layout class="QHBoxLayout" name="horizontalLayout_10">
+     <item row="2" column="1">
+      <layout class="QHBoxLayout" name="horizontalLayout_12">
        <item>
-        <widget class="QPushButton" name="btn_10x">
-         <property name="toolTip">
-          <string>10x Objective</string>
-         </property>
+        <widget class="QCheckBox" name="cbx_smoothing">
          <property name="text">
-          <string>10x</string>
+          <string>Smoothing</string>
          </property>
-         <property name="checkable">
-          <bool>true</bool>
-         </property>
-         <attribute name="buttonGroup">
-          <string notr="true">objective_selection_group</string>
-         </attribute>
         </widget>
        </item>
        <item>
-        <widget class="QPushButton" name="btn_20x">
-         <property name="toolTip">
-          <string>20x Objective</string>
-         </property>
+        <widget class="QCheckBox" name="cbx_preproc">
          <property name="text">
-          <string>20x</string>
-         </property>
-         <property name="checkable">
-          <bool>true</bool>
-         </property>
-         <attribute name="buttonGroup">
-          <string notr="true">objective_selection_group</string>
-         </attribute>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="btn_40x">
-         <property name="toolTip">
-          <string>40x Objective</string>
-         </property>
-         <property name="text">
-          <string>40x</string>
-         </property>
-         <property name="checkable">
-          <bool>true</bool>
+          <string>Contrast Enhancement</string>
          </property>
          <property name="checked">
           <bool>false</bool>
          </property>
-         <attribute name="buttonGroup">
-          <string notr="true">objective_selection_group</string>
-         </attribute>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="btn_63x">
-         <property name="toolTip">
-          <string>63x Objective</string>
-         </property>
-         <property name="text">
-          <string>63x</string>
-         </property>
-         <property name="checkable">
-          <bool>true</bool>
-         </property>
-         <property name="checked">
-          <bool>true</bool>
-         </property>
-         <attribute name="buttonGroup">
-          <string notr="true">objective_selection_group</string>
-         </attribute>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="btn_100x">
-         <property name="toolTip">
-          <string>100x Objective</string>
-         </property>
-         <property name="text">
-          <string>100x</string>
-         </property>
-         <property name="checkable">
-          <bool>true</bool>
-         </property>
-         <attribute name="buttonGroup">
-          <string notr="true">objective_selection_group</string>
-         </attribute>
         </widget>
        </item>
       </layout>
      </item>
-     <item row="4" column="0">
+     <item row="3" column="0">
       <widget class="QLabel" name="label_11">
        <property name="text">
         <string>Dots per micron:</string>
        </property>
       </widget>
      </item>
-     <item row="4" column="1">
+     <item row="3" column="1">
       <widget class="QDoubleSpinBox" name="spbx_mmpd">
        <property name="toolTip">
         <string>Standard value (1.3938) assumes a 1024x1024 image at 630 magnification</string>
@@ -210,7 +131,7 @@
        </property>
       </widget>
      </item>
-     <item row="5" column="1">
+     <item row="4" column="1">
       <widget class="QLabel" name="label_9">
        <property name="text">
         <string>Experiment Details</string>
@@ -220,14 +141,14 @@
        </property>
       </widget>
      </item>
-     <item row="6" column="0">
+     <item row="5" column="0">
       <widget class="QLabel" name="label">
        <property name="text">
         <string>Name</string>
        </property>
       </widget>
      </item>
-     <item row="6" column="1">
+     <item row="5" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_7">
        <item>
         <widget class="QLineEdit" name="le_name">
@@ -254,14 +175,14 @@
        </item>
       </layout>
      </item>
-     <item row="7" column="0">
+     <item row="6" column="0">
       <widget class="QLabel" name="label_8">
        <property name="text">
         <string>Details</string>
        </property>
       </widget>
      </item>
-     <item row="7" column="1">
+     <item row="6" column="1">
       <widget class="QPlainTextEdit" name="pte_details">
        <property name="enabled">
         <bool>false</bool>
@@ -274,14 +195,14 @@
        </property>
       </widget>
      </item>
-     <item row="8" column="0">
+     <item row="7" column="0">
       <widget class="QLabel" name="label_10">
        <property name="text">
         <string>Notes</string>
        </property>
       </widget>
      </item>
-     <item row="8" column="1">
+     <item row="7" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_8">
        <item>
         <widget class="QPlainTextEdit" name="pte_notes">
@@ -298,14 +219,14 @@
        </item>
       </layout>
      </item>
-     <item row="9" column="0">
+     <item row="8" column="0">
       <widget class="Line" name="line">
        <property name="orientation">
         <enum>Qt::Horizontal</enum>
        </property>
       </widget>
      </item>
-     <item row="9" column="1">
+     <item row="8" column="1">
       <widget class="QLabel" name="label_7">
        <property name="text">
         <string>Active Channels</string>
@@ -315,14 +236,14 @@
        </property>
       </widget>
      </item>
-     <item row="11" column="0">
+     <item row="10" column="0">
       <widget class="QLabel" name="label_2">
        <property name="text">
         <string>Channel 1</string>
        </property>
       </widget>
      </item>
-     <item row="11" column="1">
+     <item row="10" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_2">
        <item>
         <widget class="QLineEdit" name="le_one">
@@ -362,14 +283,14 @@
        </item>
       </layout>
      </item>
-     <item row="12" column="0">
+     <item row="11" column="0">
       <widget class="QLabel" name="label_3">
        <property name="text">
         <string>Channel 2</string>
        </property>
       </widget>
      </item>
-     <item row="12" column="1">
+     <item row="11" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_3">
        <item>
         <widget class="QLineEdit" name="le_two">
@@ -412,14 +333,14 @@
        </item>
       </layout>
      </item>
-     <item row="13" column="0">
+     <item row="12" column="0">
       <widget class="QLabel" name="label_4">
        <property name="text">
         <string>Channel 3</string>
        </property>
       </widget>
      </item>
-     <item row="13" column="1">
+     <item row="12" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_4">
        <item>
         <widget class="QLineEdit" name="le_three">
@@ -462,14 +383,14 @@
        </item>
       </layout>
      </item>
-     <item row="14" column="0">
+     <item row="13" column="0">
       <widget class="QLabel" name="label_5">
        <property name="text">
         <string>Channel 4</string>
        </property>
       </widget>
      </item>
-     <item row="14" column="1">
+     <item row="13" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_5">
        <item>
         <widget class="QLineEdit" name="le_four">
@@ -512,14 +433,14 @@
        </item>
       </layout>
      </item>
-     <item row="15" column="0">
+     <item row="14" column="0">
       <widget class="QLabel" name="label_6">
        <property name="text">
         <string>Channel 5</string>
        </property>
       </widget>
      </item>
-     <item row="15" column="1">
+     <item row="14" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_6">
        <item>
         <widget class="QLineEdit" name="le_five">
@@ -557,27 +478,6 @@
          </property>
          <property name="text">
           <string/>
-         </property>
-        </widget>
-       </item>
-      </layout>
-     </item>
-     <item row="2" column="1">
-      <layout class="QHBoxLayout" name="horizontalLayout_12">
-       <item>
-        <widget class="QCheckBox" name="cbx_smoothing">
-         <property name="text">
-          <string>Smoothing</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QCheckBox" name="cbx_preproc">
-         <property name="text">
-          <string>Contrast Enhancement</string>
-         </property>
-         <property name="checked">
-          <bool>false</bool>
          </property>
         </widget>
        </item>

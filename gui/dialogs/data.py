@@ -17,7 +17,7 @@ from skimage.draw import line
 from skimage.segmentation import watershed
 
 import Util
-from DataProcessing import eu_dist
+from DataProcessing import euclidean_distance
 from Plots import PoissonPlotWidget
 from Util import create_image_item_list_from
 from database.connections import Inserter, Requester
@@ -174,7 +174,7 @@ class DataExportDialog(QDialog):
         # Get general table header
         header = copy.copy(self.STANDARD_HEADER)
         # Get the channels for this image
-        chans = self.req.get_channel_names(md5, False)
+        chans = sorted(self.req.get_channel_names(md5, False))
         header.extend(chans)
         # Get the data for the given image
         rows = self.get_data_for_image(md5)
@@ -825,7 +825,7 @@ class AutoEdit(QDialog):
         nearest_center = None
         for index2 in range(index + 1, len(centers), 1):
             center2 = centers[index2]
-            dist = eu_dist(center, center2)
+            dist = euclidean_distance(center, center2)
             if dist < smallest_dist:
                 smallest_dist = dist
                 nearest_center = center2
@@ -884,7 +884,7 @@ class AutoEdit(QDialog):
                     if left[0] >= edm.shape[0] or left[1] >= edm.shape[1] or edm[left[0]][left[1]] == 0:
                         left_brake = left
                 counter += 1
-            cur_dist = eu_dist(left_brake, right_brake)
+            cur_dist = euclidean_distance(left_brake, right_brake)
             if max_distance > cur_dist:
                 max_distance = cur_dist
                 brakes = left, right

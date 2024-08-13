@@ -5,9 +5,9 @@ with open("README.md", "r", encoding="UTF-8") as fh:
 
 setuptools.setup(
     name="NucDetect",
-    version="0.19",
-    description=("Module to identify intranuclear proteins on basis of "
-                 "fluorescence images."),
+    version="0.20.0",
+    description=("Module to quantify intranuclear foci on basis of "
+                 "immunofluorescence images."),
     author="Romano Weiss",
     url="https://github.com/SilMon/NucDetect",
     long_description=long_description,

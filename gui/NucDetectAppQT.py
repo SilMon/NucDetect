@@ -107,19 +107,27 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        if not os.path.isdir(Paths.thumb_path):
-            os.makedirs(Paths.thumb_path)
+        # Create the NucDetect folder
         if not os.path.isdir(Paths.nuc_detect_dir):
             os.makedirs(Paths.nuc_detect_dir)
+        # Create the thumbnail folder
+        if not os.path.isdir(Paths.thumb_path):
+            os.makedirs(Paths.thumb_path)
+        # Create the results folder
         if not os.path.isdir(Paths.result_path):
             os.makedirs(Paths.result_path)
+        # Create the images folder
         if not os.path.isdir(Paths.images_path):
             os.makedirs(Paths.images_path)
             shutil.copy2(os.path.join(os.pardir, "demo.tif"), os.path.join(Paths.images_path, "demo.tif"))
+        # Create the log folder
+        if not os.path.isdir(Paths.log_dir_path):
+            os.makedirs(Paths.log_dir_path)
 
     def load_settings(self) -> Dict:
         """
         Method to load the saved Settings
+
         :return: None
         """
         settings_sql = self.requester.get_all_settings()
@@ -232,9 +240,6 @@ class NucDetect(QMainWindow):
         self.ui.btn_delete_from_list.clicked.connect(self.remove_image_from_list)
         self.ui.btn_clear_list.clicked.connect(self.clear_image_list)
         self.ui.btn_reload.clicked.connect(self.reload)
-        # TODO
-        #self.ui.btn_search.clicked.connect()
-        #self.ui.btn_clear_search.clicked.connect()
 
     def _set_button_icons(self) -> None:
         """
@@ -244,8 +249,6 @@ class NucDetect(QMainWindow):
         """
         self.ui.btn_load.setIcon(Icon.get_icon("FOLDER_OPEN"))
         self.ui.btn_experiments.setIcon(Icon.get_icon("FLASK"))
-        self.ui.btn_search.setIcon(Icon.get_icon("SEARCH"))
-        self.ui.btn_clear_search.setIcon(Icon.get_icon("TRASH_ALT"))
         self.ui.btn_save.setIcon(Icon.get_icon("SAVE"))
         self.ui.btn_statistics.setIcon(Icon.get_icon("CHART_BAR"))
         self.ui.btn_settings.setIcon(Icon.get_icon("COGS"))
@@ -441,6 +444,13 @@ class NucDetect(QMainWindow):
         for t in os.walk(url):
             tpaths = [os.path.join(t[0], x) for x in t[2]]
             paths.extend([x for x in tpaths if x not in self.loaded_files])
+        # If no images where found, open a file dialog to add images
+        if not paths:
+            files = str(QFileDialog.getExistingDirectory(self, "Select Directory to load images from"))
+            # Walk the folder to find all files inside it
+            for t in os.walk(files):
+                tpaths = [os.path.join(t[0], x) for x in t[2]]
+                paths.extend([x for x in tpaths if x not in self.loaded_files])
         self.loaded_files.extend(sorted(paths, key=lambda x: os.path.basename(x)))
         # Add new paths to database
         self.add_images_to_database(self.loaded_files)
@@ -1154,7 +1164,7 @@ class NucDetect(QMainWindow):
         :return: None
         """
         sett = SettingsDialog(self.inserter)
-        sett.initialize_from_file(os.path.join(os.getcwd(), "settings/settings.json"))
+        sett.initialize_from_file(os.path.join(Paths.settings_path, "settings.json"))
         code = sett.exec()
         if code == QDialog.Accepted:
             if sett.changed:

@@ -55,7 +55,6 @@ class AnalysisSettingsDialog(QDialog):
             "main": abs(self.ui.main_channel_btn_group.checkedId()) - 2,
             "analysis_settings": {
                 "method": self.ui.detection_method_btn_group.checkedButton().text().lower(),
-                "size_factor": int(self.ui.objective_selection_group.checkedButton().text()[:-1]) / 63.0,
                 "dots_per_micron": self.spbx_mmpd.value()
             }
         }
@@ -107,8 +106,6 @@ class AnalysisSettingsDialog(QDialog):
             channel_names[name].setEnabled(True)
             channel_names[name].setText(names[name])
         channel_main[self.settings["main_channel"]].setChecked(True)
-        # Bind objective buttons to change the microns per dot
-        self.ui.objective_selection_group.buttonClicked.connect(self.change_microns_per_dot)
         # Bind checkboxes for individual channels to the corresponding text edit
         self.ui.cbx_one.toggled.connect(self.ui.le_one.setEnabled)
         self.ui.cbx_one.toggled.connect(self.ui.rbtn_one.setEnabled)
@@ -120,18 +117,6 @@ class AnalysisSettingsDialog(QDialog):
         self.ui.cbx_four.toggled.connect(self.ui.rbtn_four.setEnabled)
         self.ui.cbx_five.toggled.connect(self.ui.le_five.setEnabled)
         self.ui.cbx_five.toggled.connect(self.ui.rbtn_five.setEnabled)
-
-    def change_microns_per_dot(self) -> None:
-        """
-        Method to change the microns per dot
-
-        :return: None
-        """
-        # Get the value of the check button
-        val_65 = 1.39376616
-        val = 63 / int(self.ui.objective_selection_group.checkedButton().text()[:-1])
-        self.ui.spbx_mmpd.setValue(val * val_65)
-
 
 class SettingsDialog(QDialog):
     """

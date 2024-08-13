@@ -76,7 +76,7 @@ class NucleusMapper(AreaMapper):
     @staticmethod
     def calculate_edm_and_normalize(bin_map: np.ndarray) -> np.ndarray:
         """
-        Method to calculate the euclidean distance map (EDM) of the given binary map and normalize it
+        Method to calculate the Euclidean distance map (EDM) of the given binary map and normalize it
 
         :param bin_map: The binary map to calculate the EDM from
         :return: The EDM
@@ -148,7 +148,7 @@ class NucleusMapper(AreaMapper):
                                        mask: np.ndarray, line: bool) -> np.ndarray:
         """
         Method to perform watershed segmentation on the given mask
-        :param edm: The euclidean distance map of the map
+        :param edm: The Euclidean distance map of the map
         :param cmask: A map marking all centers
         :param mask: The binary map to segment
         :param line: Toggle to draw a line between segmented areas

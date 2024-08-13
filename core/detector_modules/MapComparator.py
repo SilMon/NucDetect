@@ -7,6 +7,7 @@ import numpy as np
 from numba.typed import List as NumbaList
 
 from roi.AreaAnalysis import imprint_area_into_array, convert_area_to_array
+from DataProcessing import calculate_overlap_between_two_circles_as_percentage, check_if_two_circles_overlap
 from roi.ROI import ROI
 
 
@@ -14,307 +15,310 @@ class MapComparator:
     __slots__ = [
         "main",
         "foci1",
-        "foc1_bin",
+        "foci1_map",
         "foci2",
-        "foc2_bin",
+        "foci2_map",
         "img_shape",
         "log"
     ]
 
-    def __init__(self, main: List[ROI], foci1: List[ROI], foci2: List[ROI], img_shape: Tuple[int, int], log_function):
+    def __init__(self,
+                 main: List[ROI],
+                 foci1_map: np.ndarray,
+                 foci1: List[ROI],
+                 foci2_map: np.ndarray,
+                 foci2: List[ROI],
+                 img_shape: Tuple[int, int], log_function):
         """
         :param main: List of all detected nuclei
+        :param foci1_map: Map contain all detected foci of method 1 as numerical identifiers
         :param foci1: List of all detected foci for method 1
+        :param foci2_map: Map contain all detected foci of method 2 as numerical identifiers
         :param foci2: List of all detected foci for method 2
         :param img_shape: The shape (height, width) of the image the ROI are derived from
         :param log_function: Function to log
         """
         self.main: List[ROI] = main
+        # IP foci
+        self.foci1_map: np.ndarray = foci1_map
         self.foci1: List[ROI] = foci1
+        # ML foci
+        self.foci2_map: np.ndarray = foci2_map
         self.foci2: List[ROI] = foci2
         self.img_shape: Tuple[int, int] = img_shape
         self.log = log_function
         self.log("Map Comparator:")
-        self.foc1_bin, self.foc2_bin = self.create_hash_maps_for_foci()
-
-    def create_hash_maps_for_foci(self) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Method to get the hash maps for both given foci lists
-
-        :return: The hash maps
-        """
-        # Create maps for all foci
-        focmap1 = np.zeros(shape=self.img_shape, dtype="int64")
-        focmap2 = np.zeros(shape=self.img_shape, dtype="int64")
-        for focus_ip in self.foci1:
-            imprint_area_into_array(focus_ip.area, focmap1, hash(focus_ip))
-        for focus_ml in self.foci2:
-            imprint_area_into_array(focus_ml.area, focmap2, hash(focus_ml))
-        return focmap1, focmap2
-
-    def get_match_for_nuclei(self) -> None:
-        """
-        Method to compare the detected foci per nucleus
-
-        :return: None
-        """
-        for nucleus in self.main:
-            nuc_ar = NumbaList(nucleus.area)
-            focar1 = convert_area_to_array(nuc_ar, self.foc1_bin)
-            focar2 = convert_area_to_array(nuc_ar, self.foc2_bin)
-            # Create temporary map
-            foc1 = (focar1 > 0).astype(int)
-            foc2 = (focar2 > 0).astype(int)
-            # Compare both maps for the given nucleus
-            comp_area = np.logical_and(foc1, foc2) > 0
-            match = np.sum(comp_area) / max(np.sum(foc1), np.sum(foc2), 1)
-            if nucleus.match != -1:
-                nucleus.match = (nucleus.match + match) / 2
-            else:
-                nucleus.match = match
 
     @staticmethod
-    def create_overlap_dict(focarea1: np.ndarray, focarea2: np.ndarray) -> Dict[int, List[int]]:
+    def get_match_for_nuclei(nuclei: List[ROI], foci: List[List[ROI]]) -> None:
         """
-        Method to check the foci areas for overlaps
+        Method to check the given foci for co-localization.
 
-        :param focarea1: The first focus area
-        :param focarea2: The second focus area
-        :return: List of overlapping foci
+        :param nuclei: List of all detected nuclei
+        :param foci: List of all detected foci, subdivided by method
+        :return: None
         """
-        overlap = {}
-        for y in range(focarea1.shape[0]):
-            for x in range(focarea1.shape[1]):
-                # Get pixel at position y:x
-                pix = focarea1[y][x]
-                pix2 = focarea2[y][x]
-                if pix > 0 and pix2 > 0:
-                    if pix not in overlap:
-                        overlap[pix] = []
-                    if pix2 not in overlap[pix]:
-                        overlap[pix].append(pix2)
-        return overlap
+        # Create a conversion dictionary for all methods
+        nucleus_focus_association_dict = MapComparator.get_nucleus_focus_association_dictionary(nuclei, foci)
+        hash_roi_converter = MapComparator.get_hash_roi_converter(nuclei)
+        # Get dict that allows hash to ROI conversion
+        focus_conversion_dict = MapComparator.create_focus_conversion_dict(foci)
+        # Iterate over all nuclei and check the co-localization for all foci
+        for nucleus, foci in nucleus_focus_association_dict.items():
+            co_localized = []
+            # Get the foci of the first method
+            foci1 = foci[0]
+            # Get the foci of the second method
+            foci2 = foci[1]
+            # Iterate over the first foci list and check for overlap
+            for focus in foci1:
+                for focus2 in foci2:
+                    if check_if_two_circles_overlap(focus, focus2):
+                        co_localized.append((focus, focus2))
+                        break
+            # Iterate over the co-localization list and set the foci to co-localized
+            for focus_pair in co_localized:
+                focus_conversion_dict[focus_pair[0][-1]].colocalized = True
+                focus_conversion_dict[focus_pair[1][-1]].colocalized = True
+            # Calculate the amount of co-localization for this nucleus
+            hash_roi_converter[nucleus].match = len(co_localized) / (len(foci1) + len(foci2))
 
-    def merge_overlapping_foci(self) -> List[ROI]:
+    @staticmethod
+    def get_hash_roi_converter(roi: List[ROI]) -> Dict[int, ROI]:
         """
-        Method to merge overlapping nuclei
+        Method to get an ROI object from their hash
 
+        :param roi: The roi to get the converter for
+        :return: The converter dict
+        """
+        return {hash(x): x for x in roi}
+
+    def merge_overlapping_foci(self, max_overlap: float = 0.5) -> List[ROI]:
+        """
+        Method to merge overlapping foci
+
+        :param max_overlap: Max overlap foci should have
         :return: The cleaned list of foci and the percentage of overlap between
         """
         start = time.time()
-        overlap = self.create_overlap_dict(self.foc1_bin, self.foc2_bin)
-        # Get a list of all potential ROI
-        roi = self.foci1 + self.foci2
-        match = []
-        focind = 0
-        channel = "No channel given"
-        for key, values in overlap.items():
-            # Get the focus
-            foc1 = self.get_foci_via_hash(self.foci1, key)
-            if foc1:
-                foc1 = foc1[0]
-                channel = foc1.ident
-                # Remove the large ROI in favor of the smaller roi
-                if len(values) > 1:
-                    roi.remove(foc1)
-                    continue
-                # Get list of potentially overlapping roi
-                foc2 = self.get_foci_via_hash(self.foci2, values)
-                # Calculate the overlap for each given focus
-                spec_overlap = self.calculate_overlap(foc1, foc2)
-                foc1.match = np.average(spec_overlap)
-                # Iterate over all overlapping foci from the second map
-                for ind, foc2 in enumerate(foc2):
-                    focind += 1
-                    # Get specific overlap for this focus
-                    sov = spec_overlap[ind]
-                    foc2.match = sov
-                    if sov > 0.2:
-                        if hash(foc2) in match:
-                            continue
-                        match.append(hash(foc2))
-                        roi.remove(foc2)
-                        foc2.detection_method = "Removed"
-                        # Get overlapping area
-                        foc1.set_area(self.get_overlapping_area(foc1.area, foc2.area))
-                        foc1.detection_method = "Merged"
+        # Get a dictionary linking all nuclei with their respective foci
+        nucleus_focus_association_dict = self.get_nucleus_focus_association_dictionary(self.main,
+                                                                                       [self.foci1, self.foci2])
+        # Get dict that allows hash to ROI conversion
+        focus_conversion_dict = self.create_focus_conversion_dict([self.foci1, self.foci2])
+        # List that contains all foci that should be added
+        focus_addition_lst = []
+        # List that contains all focus pairs that should be merged
+        focus_merge_lst = []
+        # Check the overlap for each focus
+        for nucleus, foci in nucleus_focus_association_dict.items():
+            temp_addition_lst, temp_merge_lst = self.check_focus_overlap(foci[0], foci[1], max_overlap)
+            focus_addition_lst.extend(temp_addition_lst)
+            focus_merge_lst.extend(temp_merge_lst)
+        # Merge the foci marked for it
+        merged_roi = self.merge_marked_roi(focus_merge_lst, focus_conversion_dict)
+        # Get the roi marked for addition
+        # Iterate over the addition foci, that their overlap and create a list containing the ROI objects
+        added_roi = []
+        for data in focus_addition_lst:
+            # Get the actual roi object
+            roi = focus_conversion_dict[data[1][-1]]
+            # Set the overlap
+            roi.match = data[0]
+            # Add the roi to the list
+            added_roi.append(roi)
+        self.log(f"Channel: {added_roi[0].ident}\t{len(focus_merge_lst)} matching foci"
+                 f" found and merged in {time.time() - start: .3f} secs")
+        return merged_roi + added_roi
+
+    @staticmethod
+    def get_nucleus_focus_association_dictionary(nuclei: List[ROI],
+                                                 foci: List[List[ROI]]) -> Dict[int, Tuple[List[Tuple], List[Tuple]]]:
+        """
+        Method to get a dictionary that associates all nuclei with their respective foci for both methods
+
+        :param nuclei: The nuclei to create the checklist for
+        :param foci: List of all foci
+        :return: The dict linking the idents of the nucleus with the minimal repr. of the foci for both methods
+        """
+        associations = {}
+        # Iterate over each nucleus
+        for nucleus in nuclei:
+            nucleus_hash = hash(nucleus)
+            associations[nucleus_hash] = [], []
+            for method, focus_lst in enumerate(foci):
+                # Iterate over all foci for this method
+                for focus in focus_lst:
+                    if hash(focus.associated) == nucleus_hash:
+                        associations[nucleus_hash][method].append(focus.get_minimal_representation())
+        return associations
+
+    @staticmethod
+    def check_for_excessive_overlap(foci1: List[Tuple[int, int, int, int]],
+                                    foci2: List[Tuple[int, int, int, int]],
+                                    threshold: float = 0.4) -> Tuple[List[Tuple], List[Tuple], List[Tuple]]:
+        """
+        Method to check if the foci of list 1 overlap excessively with those of list 2. Results are given as
+        Overlap, Minimal Repr. pairs.
+
+        :param foci1: The first list of foci in minimal representation
+        :param foci2: The second list of foci in minimal representation
+        :param threshold: Threshold for overlap. If the total overlap exceeds this, the focus marked for deletion
+        :return: Foci without excessive overlap, foci with excessive overlap, foci without any overlap
+        """
+        without_excessive_overlap = []
+        with_excessive_overlap = []
+        without_overlap = []
+        for focus in foci1:
+            total_overlap = 0
+            overlapping_foci = 0
+            # Iterate over all foci from foci2 and check for overlap
+            for focus2 in foci2:
+                overlap = calculate_overlap_between_two_circles_as_percentage(focus, focus2)
+                # If the focus overlaps, add it to the list
+                if overlap > 0:
+                    total_overlap += overlap
+                    overlapping_foci += 1
+            # Check if the overlap is excessive
+            if overlapping_foci > 1 and total_overlap > threshold:
+                with_excessive_overlap.append((total_overlap, focus))
+            elif overlapping_foci == 0:
+                without_overlap.append((0, focus))
             else:
-                warnings.warn(f"Focus with hash {key} not found!")
-        self.log(f"Channel: {channel}\t{len(match)} matching foci found and merged in {start-time.time(): .3f} secs")
-        return roi
+                without_excessive_overlap.append((total_overlap, focus))
+        return without_excessive_overlap, with_excessive_overlap, without_overlap
 
-    @staticmethod
-    def get_foci_via_hash(foci: List[ROI], hashes: Union[int, List[int]]) -> List[ROI]:
+    def check_focus_overlap(self,
+                            foci1: List[Tuple[int, int, int, int]],
+                            foci2: List[Tuple[int, int, int, int]],
+                            max_overlap: float) -> Tuple[List, List]:
         """
-        Method to extract the ROI given by hash
+        Method to check the overlap of the foci opf list 1 with the foci of list 2
 
-        :param foci: The list of foci to extract from
-        :param hashes: Either the hash of the ROI to extract or a list of hashes to extract
-        :return: List of extracted ROI
+        :param foci1: First list of foci in minimal representation
+        :param foci2: Second list of foci in minimal representation
+        :param max_overlap: Maximum acceptable overlap 0-1
+        :return: A list of all foci that can be directly added and a list of foci that have to be merged
         """
-        if not isinstance(hashes, List):
-            return [x for x in foci if hash(x) == hashes]
-        else:
-            foci_ = []
-            for hash_ in hashes:
-                foci_.extend(MapComparator.get_foci_via_hash(foci, hash_))
-            return foci_
-
-    @staticmethod
-    def get_overlapping_area(lines1, lines2) -> List[Tuple[int, int, int]]:
+        # List of foci that can be directly added
+        focus_addition_lst = []
         """
-        Method to get the overlapping area bewteen two rl-encoded areas
-
-        :param lines1: The first area
-        :param lines2: The second area
-        :return: The overlapping area
+        List that contains all focus pairs that should be merged
+        Contains pairs of foci repr. as Tuple. The first focus is only the repr, the second and later tuples
+        contain the overlap with focus 0 and the repr. of the focus
         """
-        # Get potentially overlapping lines
-        sl1, sl2 = MapComparator.get_potentially_overlapping_lines(lines1, lines2)
-        # Check both areas for u-turn
-        sl1 = MapComparator.check_for_u_turn(sl1)
-        sl2 = MapComparator.check_for_u_turn(sl2)
-        if not sl1 or not sl2:
-            raise ValueError("Areas not overlapping!")
-        else:
-            area = []
-            # Zip bot lists
-            for l1, l2 in zip(sl1, sl2):
-                area.append(MapComparator.get_overlap_line(l1, l2))
-            return area
-
-    @staticmethod
-    def check_for_u_turn(lines: List[Tuple[int, int, int]]) -> List[Tuple[int, int, int]]:
-        """
-        Method to check if the given list of lines contains lines within the same row
-
-        :param lines: The lines to test
-        :return: The tested list of lines
-        """
-        # Test if lines contains multiple lines with the same row
-        rows, counts = np.unique([x[0] for x in lines], return_counts=True)
-        tested = []
-        # Get row with multiple entries
-        for ind, count in enumerate(counts):
-            row = int(rows[ind])
-            test = [x for x in lines if x[0] == row]
-            if count > 1:
-                # Merge the lines
-                sort = sorted(test, key=lambda x: x[1])
-                tested.append((row, sort[0][1], int(np.sum([x[2] for x in sort]))))
+        focus_merge_lst = []
+        # Check method 2 for excessive overlap
+        foci2, _, foci2_add = self.check_for_excessive_overlap(foci2, foci1, 0)
+        foci2 = [x[1] for x in foci2]
+        # Iterate over every focus of method 1 and check for the overlap
+        for focus in foci1:
+            overlapping_foci = []
+            # For each focus of method 2, check the overlap
+            for focus2 in foci2:
+                overlap = calculate_overlap_between_two_circles_as_percentage(focus, focus2)
+                # If the focus overlaps, append it
+                if overlap > 0:
+                    overlapping_foci.append((overlap, focus2))
+            # If the focus overlaps with multiple foci
+            if len(overlapping_foci) > 1:
+                # Calculate the total overlap
+                ovl = [x[0] for x in overlapping_foci]
+                # Check if the total overlap is larger than the allowed overlap
+                if np.sum(ovl) >= max_overlap:
+                    # Check if all items are below the threshold or if multiple items
+                    check = [x >= max_overlap for x in ovl]
+                    if not all(check) or np.sum(check) > 1:
+                        # Add all additional foci to merge
+                        focus_addition_lst.extend(overlapping_foci)
+                    # Check which focus causes the overshoot, add both to merge, add the rest to addition
+                    for checker, focus2 in zip(check, overlapping_foci):
+                        # If the focus does not cause the overshoot, add it to the addition list
+                        if not checker:
+                            focus_addition_lst.append(focus2)
+                        else:
+                            focus_merge_lst.append((focus, focus2))
+            # If the focus overlaps with 1 other focus
+            elif 0 < len(overlapping_foci) < 2:
+                # Check the overlap
+                focus2 = overlapping_foci[0][1]
+                focus2_overlap = overlapping_foci[0][0]
+                # Merge if threshold is exceeded
+                if focus2_overlap > max_overlap:
+                    focus_merge_lst.append((focus, (focus2_overlap, focus2)))
+                # Otherwise add both
+                else:
+                    focus_addition_lst.append((focus2_overlap, focus))
+                    focus_addition_lst.append((focus2_overlap, focus2))
+            # If the focus does not overlap
             else:
-                tested.extend(test)
-        return tested
+                focus_addition_lst.append((0, focus))
+        # Add all foci from the second method that do not overlap
+        focus_addition_lst.extend(foci2_add)
+        return focus_addition_lst, focus_merge_lst
 
     @staticmethod
-    def get_overlap_line(line1: Tuple[int, int, int], line2: Tuple[int, int, int]) -> Tuple[int, int, int]:
+    def create_focus_conversion_dict(foci: List[List[ROI]]) -> Dict[int, ROI]:
         """
-        Method to merge both given lines
+        Method to create a dictionary that allows the conversion from hash to ROI object
 
-        :param line1: The first line
-        :param line2: The second line
-        :return: The merged line
+        :return: The created dictionary
         """
-        if line1[0] != line2[0]:
-            raise ValueError("Lines are not in the same row!")
-        # Get the left line
-        if line1[1] < line2[1]:
-            return line1[0], line2[1], MapComparator.get_line_overlap(line1, line2)
-        else:
-            return line1[0], line1[1], MapComparator.get_line_overlap(line1, line2)
+        conv_dict = {}
+        # Iterate over all foci
+        for data in foci:
+            for focus in data:
+                conv_dict[hash(focus)] = focus
+        return conv_dict
 
     @staticmethod
-    def get_potentially_overlapping_lines(lines1, lines2) -> Tuple:
+    def merge_marked_roi(foci: List[Tuple], conv_dict: Dict[int, ROI]) -> List[ROI]:
         """
-        Method to get tuples of potentially overlapping lines for the given Areas
+        Method to merge the foci
 
-        :param lines1: The lines of the first area
-        :param lines2: The lines of the second area
-        :return: The potentially overlapping lines between both areas
+        :param foci: Tuple containing the hashes of ROI to be merged
+        :param conv_dict: Dictionary allowing the conversion from hash to ROI object
+        :return: List of merged ROI
         """
-        # Sort both lists according to their row
-        sort1 = sorted(lines1, key=lambda x: x[0])
-        sort2 = sorted(lines2, key=lambda x: x[0])
-        # Check which area is higher
-        sl1 = sort1 if sort1[0][0] <= sort2[0][0] else sort2
-        sl2 = sort2 if sort1[0][0] <= sort2[0][0] else sort1
-        # Get index where areas potentially overlap
-        start = None
-        for ind, line in enumerate(sl1):
-            if line[0] == sl2[0][0]:
-                start = ind
-        if start is not None:
-            return sl1[start:], sl2[:len(sl1[start:]) + 1]
-        else:
-            return (), ()
+        rois = []
+        for merge_lst in foci:
+            # Get the first ROI
+            focus1 = conv_dict[merge_lst[0][-1]]
+            # Get the total overlap
+            total_overlap = 0
+            # Merge the given focus with all marked foci
+            for focus2 in merge_lst[1:]:
+                total_overlap += focus2[0]
+                focus1.merge(conv_dict[focus2[1][-1]])
+            focus1.match = total_overlap
+            rois.append(focus1)
+        return rois
+
+    def create_roi_identifier_conversion_list(self) -> Tuple[Dict[int, ROI], Dict[int, ROI]]:
+        """
+        Method to create a list of ROI identifier conversions
+
+        :return: The list of ROI according to their corresponding numerical identifier
+         for the first and second focus map
+        """
+        conv1 = self.create_roi_identifier_conversion_list_for_area(self.foci1_map, self.foci1)
+        conv2 = self.create_roi_identifier_conversion_list_for_area(self.foci2_map, self.foci2)
+        return conv1, conv2
 
     @staticmethod
-    def get_amount_of_overlapping_pixels(lines1, lines2) -> int:
+    def create_roi_identifier_conversion_list_for_area(area_map: np.ndarray, roi: List[ROI]) -> Dict[int, ROI]:
         """
-        Method to get tuples of potentially overlapping lines for the given Areas
+        Method to create a list of ROI according to their corresponding numerical identifier
 
-        :param lines1: The lines of the first area
-        :param lines2: The lines of the second area
-        :return: The overall overlap between both areas
+        :param area_map: The binary map containing the roi as numerical areas
+        :param roi: List of all rois
+        :return:  List of ROI according to their corresponding numerical identifier
         """
-        overlap = []
-        sl1, sl2 = MapComparator.get_potentially_overlapping_lines(lines1, lines2)
-        if not sl1 or not sl2:
-            return 0
-        for line1, line2 in zip(sl1, sl2):
-            overlap.append(MapComparator.get_line_overlap(line1, line2))
-        return np.sum(overlap)
-
-    @staticmethod
-    def get_line_overlap(line1: Tuple[int, int, int], line2: Tuple[int, int, int]) -> int:
-        """
-        Method to get the overlap between to run-length encoded lines
-
-        :param line1: The first line
-        :param line2: The second line
-        :return: The overlap between both lines
-        """
-        # Check which of the lines is right
-        if line1[1] > line2[1]:
-            return MapComparator.calculate_line_overlap(line2, line1)
-        elif line1[1] < line2[1]:
-            return MapComparator.calculate_line_overlap(line1, line2)
-        elif line1[1] == line2[1]:
-            return min(line1[2], line2[2])
-        return 0
-
-    @staticmethod
-    def calculate_line_overlap(line1: Tuple[int, int, int], line2: Tuple[int, int, int]) -> int:
-        """
-        Calculates the overlap between both lines
-
-        :param line1: The line with the lower x value
-        :param line2: The line with the higher x value
-        :return: The overlap between both lines
-        """
-        dist = line2[1] - line1[1]
-        if line1[2] > dist + line2[2]:
-            return line2[2]
-        else:
-            return line1[2] - dist
-
-    @staticmethod
-    def calculate_overlap(focus1: ROI, focus2: List[ROI]) -> List[float]:
-        """
-        Method to calculate the overlap for the given ROI
-
-        :param focus1: The focus to check overlap for
-        :param focus2: List of foci to check
-        :return: The overlaps
-        """
-        overlaps = []
-        for foc2 in focus2:
-            # Get the size of both areas
-            ar1 = focus1.calculate_dimensions()["area"]
-            ar2 = foc2.calculate_dimensions()["area"]
-            # Get potentially overlapping lines between both foci
-            overlap = MapComparator.get_amount_of_overlapping_pixels(focus1.area, foc2.area)
-            overlaps.append((overlap / ar1) if ar1 < ar2 else overlap / ar2)
-        return overlaps
-
-
+        conv: Dict[int: ROI] = {}
+        for roi in roi:
+            # Get the first row of the roi
+            ident = area_map[roi.area[0][0]][roi.area[0][1]]
+            if ident == 0:
+                raise ValueError(f"Malformed ROI detected! -> {hash(roi)}")
+            conv[ident] = roi
+        return conv

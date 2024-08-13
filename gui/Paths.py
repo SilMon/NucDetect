@@ -9,8 +9,11 @@ def get_main_folder_path() -> str:
     """
     # Get the current file path
     fp = __file__
+    # Check if this is the pypi or installer version
+    ftf = "_internal" if "_internal" in fp else "NucDetect"
+    # Check if the NucDetect folder is in the path -> pypi version
     # Split the path and find NucDetect folder
-    while os.path.split(fp)[1] != "NucDetect":
+    while os.path.split(fp)[1] != ftf:
         fp = os.path.split(fp)[0]
     return fp
 
@@ -25,7 +28,8 @@ model_dir = os.path.join(gen, "fcn", "model")
 css_dir = os.path.join(gui, "definitions", "css")
 sql_dir = os.path.join(gen, "core", "database", "scripts")
 log_path = os.path.join(nuc_detect_dir, "logs", "nucdetect.log")
-settings_path = os.path.join(nuc_detect_dir, "settings")
+settings_path = os.path.join(gui, "settings")
+#settings_path = os.path.join(nuc_detect_dir, "settings")
 
 ui_main = os.path.join(script_dir, "nucdetect.ui")
 ui_result_image_dialog = os.path.join(script_dir, "result_image_dialog.ui")
@@ -43,4 +47,5 @@ ui_save_dial = os.path.join(script_dir, "data_export_dialog.ui")
 database = os.path.join(nuc_detect_dir, "nucdetect.db")
 result_path = os.path.join(nuc_detect_dir, "results")
 images_path = os.path.join(nuc_detect_dir, "images")
+log_dir_path = os.path.join(nuc_detect_dir, "logs")
 thumb_path = os.path.join(nuc_detect_dir, "thumbnails")

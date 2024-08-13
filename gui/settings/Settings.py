@@ -1,5 +1,6 @@
 import os
 
+import Paths
 from PyQt5 import uic
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import QWidget, QSizePolicy
@@ -27,7 +28,7 @@ class SettingsWidget(QWidget):
         self._initialize_ui(ui_file)
 
     def _initialize_ui(self, ui_file):
-        self.ui = uic.loadUi(os.path.join(os.getcwd(), os.path.join("settings", ui_file)), self)
+        self.ui = uic.loadUi(os.path.join(Paths.settings_path, ui_file), self)
         self.ui.title.setText(self._title)
         self.ui.description.setText(self._description)
 

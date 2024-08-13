@@ -49,8 +49,13 @@ def encode_areas(area_map: np.ndarray) -> Dict[int, List[Tuple[int, int, int]]]:
     and run length
     """
     height, width = area_map.shape
+    # Check if the area_map actually contains areas
+    if np.amax(area_map) == 0:
+        return {}
     # Define dict for detected areas
-    areas = {}
+    areas = {
+        x: [] for x in np.unique(area_map)[1:]
+    }
     # Iterate over map
     for y in range(height):
         x = 0
@@ -58,11 +63,9 @@ def encode_areas(area_map: np.ndarray) -> Dict[int, List[Tuple[int, int, int]]]:
             # Get label at y:x
             label = area_map[y][x]
             if label != 0:
-                if areas.get(label) is None:
-                    areas[label] = []
                 col = x
                 # run length
-                rl = 0
+                rl = 1
                 # Iterate over row
                 while area_map[y][x] == label:
                     rl += 1

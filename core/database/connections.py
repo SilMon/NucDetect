@@ -547,7 +547,8 @@ class Requester(DatabaseInteractor):
         :return: List of database entries for each nucleus
         """
         return [int(x[0]) for x in self.connector.get_view_from_table("hash", "roi",
-                                                                      (("associated", Specifiers.IS, Specifiers.NULL),
+                                                                      (("associated", Specifiers.IS,
+                                                                        Specifiers.NULL),
                                                                        ("image", Specifiers.EQUALS, md5)))]
 
     def get_hashes_of_associated_foci(self, nucleus: str) -> List[str]:
@@ -579,7 +580,8 @@ class Requester(DatabaseInteractor):
 
         :return: The hashes of all modified images
         """
-        return [x[0] for x in self.connector.get_view_from_table("md5", "images", ("modified", Specifiers.EQUALS, "1"))]
+        return [x[0] for x in self.connector.get_view_from_table("md5", "images",
+                                                                 ("modified", Specifiers.EQUALS, "1"))]
 
     def get_associated_roi(self, image: str) -> List[Tuple]:
         """
@@ -588,7 +590,8 @@ class Requester(DatabaseInteractor):
         :param image: The image to get the ROI for
         :return: The retrieved information
         """
-        return self.connector.get_view_from_table(Specifiers.ALL, "roi", ("image", Specifiers.EQUALS, image))
+        return self.connector.get_view_from_table(Specifiers.ALL, "roi",
+                                                  ("image", Specifiers.EQUALS, image))
 
     def get_channels(self, image: str) -> List[Tuple]:
         """
@@ -597,7 +600,8 @@ class Requester(DatabaseInteractor):
         :param image: The image to get the information for
         :return: None
         """
-        return self.connector.get_view_from_table(Specifiers.ALL, "channels", ("md5", Specifiers.EQUALS, image))
+        return self.connector.get_view_from_table(Specifiers.ALL, "channels",
+                                                  ("md5", Specifiers.EQUALS, image))
 
     def get_channel_names(self, img: str, include_main: bool = True) -> List[str]:
         """
@@ -642,7 +646,8 @@ class Requester(DatabaseInteractor):
         :param roi: The roi hash to get the statistics for
         :return: The statistics
         """
-        stats = self.connector.get_view_from_table(Specifiers.ALL, "statistics", ("hash", Specifiers.EQUALS, roi))
+        stats = self.connector.get_view_from_table(Specifiers.ALL, "statistics", ("hash",
+                                                                                  Specifiers.EQUALS, roi))
         return stats[0] if stats else ()
 
     def get_points_for_roi(self, roi: ROI) -> List[Tuple]:
@@ -652,7 +657,8 @@ class Requester(DatabaseInteractor):
         :param roi: The roi hash to get the points for
         :return: The saved points
         """
-        return self.connector.get_view_from_table(Specifiers.ALL, "points", ("hash", Specifiers.EQUALS, roi))
+        return self.connector.get_view_from_table(Specifiers.ALL, "points",
+                                                  ("hash", Specifiers.EQUALS, roi))
 
     def get_table_data_for_image(self, image: str, name: str = None) -> List[List]:
         """
