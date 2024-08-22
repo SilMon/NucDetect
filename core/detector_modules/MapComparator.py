@@ -7,7 +7,8 @@ import numpy as np
 from numba.typed import List as NumbaList
 
 from roi.AreaAnalysis import imprint_area_into_array, convert_area_to_array
-from DataProcessing import calculate_overlap_between_two_circles_as_percentage, check_if_two_circles_overlap
+from DataProcessing import calculate_overlap_between_two_circles_as_percentage, check_if_two_circles_overlap, \
+    check_circles_for_engulfment, get_circle_area
 from roi.ROI import ROI
 
 
@@ -214,6 +215,7 @@ class MapComparator:
         # Iterate over every focus of method 1 and check for the overlap
         for focus in foci1:
             overlapping_foci = []
+            area1 = get_circle_area(focus)
             # For each focus of method 2, check the overlap
             for focus2 in foci2:
                 overlap = calculate_overlap_between_two_circles_as_percentage(focus, focus2)
@@ -246,7 +248,21 @@ class MapComparator:
                 # Merge if threshold is exceeded
                 if focus2_overlap > max_overlap:
                     focus_merge_lst.append((focus, (focus2_overlap, focus2)))
-                # Otherwise add both
+                # Check if one focus is engulfed in the other
+                elif check_circles_for_engulfment(focus, focus2):
+                    # Check if the overlap is larger than half of the max overlap
+                    if focus2_overlap > max_overlap / 2:
+                        # Merge both foci
+                        focus_merge_lst.append((focus, (focus2_overlap, focus2)))
+                    # If not, add the smaller focus (most likely to be accurate)
+                    else:
+                        area1 = get_circle_area(focus[2])
+                        area2 = get_circle_area(focus2[2])
+                        if area1 >= area2:
+                            focus_addition_lst.append((focus2_overlap, focus))
+                        else:
+                            focus_addition_lst.append((focus2_overlap, focus2))
+                # If no conditions are met, add both foci
                 else:
                     focus_addition_lst.append((focus2_overlap, focus))
                     focus_addition_lst.append((focus2_overlap, focus2))

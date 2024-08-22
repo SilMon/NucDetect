@@ -1,1 +1,366 @@
-{"Experiments": [{"id": "exp_std_name", "title": "Standard Experiment", "desc": "The Standard name for experiments", "type": "text", "value": "Default"}], "Analysis - General": [{"id": "names", "title": "Channel Names", "desc": "The names assigned to the isolated channels.Separate the individual names by ';' in the order BRGXY...Z", "type": "text", "value": "Red;Green;Blue;Cyan;Magenta"}, {"id": "main_channel", "title": "Main Channel Index", "desc": "Index of the channel containing nuclei", "type": "spin", "value": 2, "values": {"min": 0, "max": 4, "step": 1, "prefix": "", "suffix": "", "unit": ""}}, {"id": "quality_check", "title": "Quality Check", "desc": "Activates a quality check for nuclei and foci after analysis. Might increase data fidelity. Adverse effect on performance", "type": "check", "value": 2, "values": {"tristate": 2}}, {"id": "logging", "title": "Logging", "desc": "Activates console logging during analysis", "type": "check", "value": 2, "values": {"tristate": 0}}, {"id": "num_threads", "title": "Number of free threads", "desc": "The number of threads not utilized by the program. Should be increased if memory problems occur.", "type": "spin", "value": 4, "values": {"min": 0, "max": 256, "step": 1, "prefix": "", "suffix": "", "unit": "Threads"}}], "Analysis - Image Processing": [{"id": "min_sigma", "title": "Blob Detection - Minimum standard deviation", "desc": "The minimum standard deviation for Gaussian kernel. Lower values will help to detect smaller foci", "type": "decspin", "value": 1.0, "values": {"min": 0, "max": 100, "step": 0.01, "decimals": 2, "prefix": "", "suffix": ""}}, {"id": "max_sigma", "title": "Blob Detection - Maximum standard deviation", "desc": "The maximum standard deviation for Gaussian kernel. Higher values will help to detect larger foci", "type": "decspin", "value": 1.5, "values": {"min": 0, "max": 100, "step": 0.01, "decimals": 2, "prefix": "", "suffix": ""}}, {"id": "num_sigma", "title": "Blob Detection - Number of standard deviation steps", "desc": "The number of deviation steps between the minimum and maximum standard deviation. Higher values will result in more accurate results. Adverse effect on performance", "type": "spin", "value": 5, "values": {"min": 0, "max": 100, "step": 1, "prefix": "", "suffix": ""}}, {"id": "acc_thresh", "title": "Blob Detection - Threshold", "desc": "Threshold for foci detection. Foci with an intensity lower than the threshold will be ignored. Lower values will help to detect foci with lower intensity", "type": "decspin", "value": 0.019999999999999997, "values": {"min": 0, "max": 100, "step": 0.01, "decimals": 2, "prefix": "", "suffix": ""}}, {"id": "overlap", "title": "Blob Detection - Overlap", "desc": "Allowed overlap of foci in percent. Foci overlap more than this value, the smaller foci will be ignored", "type": "decspin", "value": 0.2, "values": {"min": 0, "max": 100, "step": 0.01, "decimals": 2, "prefix": "", "suffix": ""}}, {"id": "iterations", "title": "Nucleus Detection - Iterations", "desc": "Number of maximum filtering to perform in a row. Change only if you know what you are doing. Adverse effect on performance", "type": "slider", "value": 7, "values": {"min": 1, "max": 20, "step": 1, "unit": "It."}}, {"id": "mask_size", "title": "Nucleus Detection - Mask Size", "desc": "The diameter of the circular mask for filtering. Adverse effect on performance", "type": "slider", "value": 7, "values": {"min": 3, "max": 31, "step": 1, "unit": "pix"}}, {"id": "percent_hmax", "title": "Nucleus Detection - Percentage of Histogram Maximum", "desc": "The amount of the histogram maximum added to the histogram minimum to form the detection threshold.", "type": "decspin", "value": 0.45, "values": {"min": 0, "max": 1, "step": 0.01, "decimals": 2, "prefix": "", "suffix": ""}}, {"id": "local_threshold_multiplier", "title": "Nucleus Detection - Local Threshold Multiplier", "desc": "Multiplier used to increase mask_size for local thresholding", "type": "slider", "value": 8, "values": {"min": 2, "max": 20, "step": 2, "unit": ""}}, {"id": "maximum_size_multiplier", "title": "Nucleus Detection - Noise Removal Size Multiplier", "desc": "Multiplier used to increase mask_size for noise removal", "type": "slider", "value": 2, "values": {"min": 2, "max": 20, "step": 2, "unit": ""}}], "Analysis - Machine Learning": [{"id": "fcn_certainty_nuclei", "title": "Detection Certainty", "desc": "Minimum required detection certainty in percent for nucleus detection", "type": "decspin", "value": 0.45, "values": {"min": 0.01, "max": 1, "step": 0.01, "decimals": 2, "prefix": "", "suffix": ""}}, {"id": "fcn_certainty_foci", "title": "Detection Certainty", "desc": "Minimum required detection certainty in percent for focus detection", "type": "decspin", "value": 0.9, "values": {"min": 0.01, "max": 1, "step": 0.01, "decimals": 2, "prefix": "", "suffix": ""}}], "Modification": [{"id": "show_ellipses", "title": "Show Ellipses", "desc": "If active, the approximated ellipses for detected nuclei will be shown on all channels", "type": "check", "value": 1, "values": {"tristate": 0}}, {"id": "track_mouse", "title": "Mouse Tracking", "desc": "If active, the hovered coordinates of the mouse will be shown", "type": "check", "value": 1, "values": {"tristate": 0}}, {"id": "size_factor", "title": "Size factor for modification window", "desc": "Size factor to determine the default size of added nuclei and foci", "type": "decspin", "value": 1, "values": {"min": 0, "max": 5, "step": 0.01, "decimals": 2, "prefix": "", "suffix": ""}}], "Analysis - Quality Check": [{"id": "min_main_area", "title": "Minimal Nucleus Size", "desc": "Minimal size a detected nucleus can have", "type": "slider", "value": 750, "values": {"min": 750, "max": 60000, "step": 250, "unit": "pix"}}, {"id": "max_main_area", "title": "Maximal Nucleus Size", "desc": "Maximal size a detected nucleus can have", "type": "slider", "value": 30000, "values": {"min": 1000, "max": 60000, "step": 1000, "unit": "pix"}}, {"id": "min_foc_area", "title": "Minimal Focus Size", "desc": "Minimal size a detected focus can have", "type": "slider", "value": 6, "values": {"min": 4, "max": 280, "step": 2, "unit": "pix"}}, {"id": "max_foc_area", "title": "Maximal Focus Size", "desc": "Maximal size a detected focus can have", "type": "slider", "value": 60, "values": {"min": 4, "max": 270, "step": 2, "unit": "pix"}}, {"id": "min_foc_int", "title": "Minimal Focus Intensity", "desc": "Minimal brightness a focus should have in %max. intensity", "type": "decspin", "value": 0.05, "values": {"min": 0.01, "max": 1, "step": 0.01, "decimals": 2, "prefix": "", "suffix": ""}}, {"id": "overlap", "title": "Maximal Focus Overlap", "desc": "Maximum percentage of allowed focus area overlap", "type": "decspin", "value": 0.2, "values": {"min": 0.01, "max": 1, "step": 0.01, "decimals": 2, "prefix": "", "suffix": ""}}]}
+{
+  "Experiments": [
+    {
+      "id": "exp_std_name",
+      "title": "Standard Experiment",
+      "desc": "The Standard name for experiments",
+      "type": "text",
+      "value": "Default"
+    }
+  ],
+  "Analysis - General": [
+    {
+      "id": "names",
+      "title": "Channel Names",
+      "desc": "The names assigned to the isolated channels.Separate the individual names by ';' in the order BRGXY...Z",
+      "type": "text",
+      "value": "Red;Green;Blue;Cyan;Magenta"
+    },
+    {
+      "id": "main_channel",
+      "title": "Main Channel Index",
+      "desc": "Index of the channel containing nuclei",
+      "type": "spin",
+      "value": 2,
+      "values": {
+        "min": 0,
+        "max": 4,
+        "step": 1,
+        "prefix": "",
+        "suffix": "",
+        "unit": ""
+      }
+    },
+    {
+      "id": "quality_check",
+      "title": "Quality Check",
+      "desc": "Activates a quality check for nuclei and foci after analysis. Might increase data fidelity. Adverse effect on performance",
+      "type": "check",
+      "value": 2,
+      "values": {
+        "tristate": 2
+      }
+    },
+    {
+      "id": "logging",
+      "title": "Logging",
+      "desc": "Activates console logging during analysis",
+      "type": "check",
+      "value": 2,
+      "values": {
+        "tristate": 0
+      }
+    },
+    {
+      "id": "num_threads",
+      "title": "Number of free threads",
+      "desc": "The number of threads not utilized by the program. Should be increased if memory problems occur.",
+      "type": "spin",
+      "value": 4,
+      "values": {
+        "min": 0,
+        "max": 256,
+        "step": 1,
+        "prefix": "",
+        "suffix": "",
+        "unit": "Threads"
+      }
+    }
+  ],
+  "Analysis - Image Processing": [
+    {
+      "id": "min_sigma",
+      "title": "Blob Detection - Minimum standard deviation",
+      "desc": "The minimum standard deviation for Gaussian kernel. Lower values will help to detect smaller foci",
+      "type": "decspin",
+      "value": 1.0,
+      "values": {
+        "min": 0,
+        "max": 100,
+        "step": 0.01,
+        "decimals": 2,
+        "prefix": "",
+        "suffix": ""
+      }
+    },
+    {
+      "id": "max_sigma",
+      "title": "Blob Detection - Maximum standard deviation",
+      "desc": "The maximum standard deviation for Gaussian kernel. Higher values will help to detect larger foci",
+      "type": "decspin",
+      "value": 1.5,
+      "values": {
+        "min": 0,
+        "max": 100,
+        "step": 0.01,
+        "decimals": 2,
+        "prefix": "",
+        "suffix": ""
+      }
+    },
+    {
+      "id": "num_sigma",
+      "title": "Blob Detection - Number of standard deviation steps",
+      "desc": "The number of deviation steps between the minimum and maximum standard deviation. Higher values will result in more accurate results. Adverse effect on performance",
+      "type": "spin",
+      "value": 5,
+      "values": {
+        "min": 0,
+        "max": 100,
+        "step": 1,
+        "prefix": "",
+        "suffix": ""
+      }
+    },
+    {
+      "id": "acc_thresh",
+      "title": "Blob Detection - Threshold",
+      "desc": "Threshold for foci detection. Foci with an intensity lower than the threshold will be ignored. Lower values will help to detect foci with lower intensity",
+      "type": "decspin",
+      "value": 0.019999999999999997,
+      "values": {
+        "min": 0,
+        "max": 100,
+        "step": 0.01,
+        "decimals": 2,
+        "prefix": "",
+        "suffix": ""
+      }
+    },
+    {
+      "id": "overlap",
+      "title": "Blob Detection - Overlap",
+      "desc": "Allowed overlap of foci in percent. Foci overlap more than this value, the smaller foci will be ignored",
+      "type": "decspin",
+      "value": 0.2,
+      "values": {
+        "min": 0,
+        "max": 100,
+        "step": 0.01,
+        "decimals": 2,
+        "prefix": "",
+        "suffix": ""
+      }
+    },
+    {
+      "id": "iterations",
+      "title": "Nucleus Detection - Iterations",
+      "desc": "Number of maximum filtering to perform in a row. Change only if you know what you are doing. Adverse effect on performance",
+      "type": "slider",
+      "value": 7,
+      "values": {
+        "min": 1,
+        "max": 20,
+        "step": 1,
+        "unit": "It."
+      }
+    },
+    {
+      "id": "mask_size",
+      "title": "Nucleus Detection - Mask Size",
+      "desc": "The diameter of the circular mask for filtering. Adverse effect on performance",
+      "type": "slider",
+      "value": 7,
+      "values": {
+        "min": 3,
+        "max": 31,
+        "step": 1,
+        "unit": "pix"
+      }
+    },
+    {
+      "id": "percent_hmax",
+      "title": "Nucleus Detection - Percentage of Histogram Maximum",
+      "desc": "The amount of the histogram maximum added to the histogram minimum to form the detection threshold.",
+      "type": "decspin",
+      "value": 0.45,
+      "values": {
+        "min": 0,
+        "max": 1,
+        "step": 0.01,
+        "decimals": 2,
+        "prefix": "",
+        "suffix": ""
+      }
+    },
+    {
+      "id": "local_threshold_multiplier",
+      "title": "Nucleus Detection - Local Threshold Multiplier",
+      "desc": "Multiplier used to increase mask_size for local thresholding",
+      "type": "slider",
+      "value": 8,
+      "values": {
+        "min": 2,
+        "max": 20,
+        "step": 2,
+        "unit": ""
+      }
+    },
+    {
+      "id": "maximum_size_multiplier",
+      "title": "Nucleus Detection - Noise Removal Size Multiplier",
+      "desc": "Multiplier used to increase mask_size for noise removal",
+      "type": "slider",
+      "value": 2,
+      "values": {
+        "min": 2,
+        "max": 20,
+        "step": 2,
+        "unit": ""
+      }
+    }
+  ],
+  "Analysis - Machine Learning": [
+    {
+      "id": "fcn_certainty_nuclei",
+      "title": "Detection Certainty",
+      "desc": "Minimum required detection certainty in percent for nucleus detection",
+      "type": "decspin",
+      "value": 0.45,
+      "values": {
+        "min": 0.01,
+        "max": 1,
+        "step": 0.01,
+        "decimals": 2,
+        "prefix": "",
+        "suffix": ""
+      }
+    },
+    {
+      "id": "fcn_certainty_foci",
+      "title": "Detection Certainty",
+      "desc": "Minimum required detection certainty in percent for focus detection",
+      "type": "decspin",
+      "value": 0.9,
+      "values": {
+        "min": 0.01,
+        "max": 1,
+        "step": 0.01,
+        "decimals": 2,
+        "prefix": "",
+        "suffix": ""
+      }
+    }
+  ],
+  "Modification": [
+    {
+      "id": "show_ellipses",
+      "title": "Show Ellipses",
+      "desc": "If active, the approximated ellipses for detected nuclei will be shown on all channels",
+      "type": "check",
+      "value": 1,
+      "values": {
+        "tristate": 0
+      }
+    },
+    {
+      "id": "track_mouse",
+      "title": "Mouse Tracking",
+      "desc": "If active, the hovered coordinates of the mouse will be shown",
+      "type": "check",
+      "value": 1,
+      "values": {
+        "tristate": 0
+      }
+    },
+    {
+      "id": "size_factor",
+      "title": "Size factor for modification window",
+      "desc": "Size factor to determine the default size of added nuclei and foci",
+      "type": "decspin",
+      "value": 1,
+      "values": {
+        "min": 0,
+        "max": 5,
+        "step": 0.01,
+        "decimals": 2,
+        "prefix": "",
+        "suffix": ""
+      }
+    }
+  ],
+  "Analysis - Quality Check": [
+    {
+      "id": "min_main_area",
+      "title": "Minimal Nucleus Size",
+      "desc": "Minimal size in µm² a detected nucleus can have",
+      "type": "slider",
+      "value": 115,
+      "values": {
+        "min": 115,
+        "max": 9350,
+        "step": 50,
+        "unit": "µm²"
+      }
+    },
+    {
+      "id": "max_main_area",
+      "title": "Maximal Nucleus Size",
+      "desc": "Maximal size in µm² a detected nucleus can have",
+      "type": "slider",
+      "value": 4650,
+      "values": {
+        "min": 155,
+        "max": 9350,
+        "step": 50,
+        "unit": "µm²"
+      }
+    },
+    {
+      "id": "min_foc_area",
+      "title": "Minimal Focus Size",
+      "desc": "Minimal size in µm² a detected focus can have",
+      "type": "slider",
+      "value": 7,
+      "values": {
+        "min": 7,
+        "max": 450,
+        "step": 1,
+        "unit": "µm²"
+      }
+    },
+    {
+      "id": "max_foc_area",
+      "title": "Maximal Focus Size",
+      "desc": "Maximal size in µm² a detected focus can have",
+      "type": "slider",
+      "value": 250,
+      "values": {
+        "min": 7,
+        "max": 705,
+        "step": 1,
+        "unit": "µm²"
+      }
+    },
+    {
+      "id": "min_foc_int",
+      "title": "Minimal Focus Intensity",
+      "desc": "Minimal brightness a focus should have in %max. intensity",
+      "type": "decspin",
+      "value": 0.05,
+      "values": {
+        "min": 0.01,
+        "max": 1,
+        "step": 0.01,
+        "decimals": 2,
+        "prefix": "",
+        "suffix": ""
+      }
+    },
+    {
+      "id": "overlap",
+      "title": "Maximal Focus Overlap",
+      "desc": "Maximum percentage of allowed focus area overlap",
+      "type": "decspin",
+      "value": 0.2,
+      "values": {
+        "min": 0.01,
+        "max": 1,
+        "step": 0.01,
+        "decimals": 2,
+        "prefix": "",
+        "suffix": ""
+      }
+    }
+  ]
+}

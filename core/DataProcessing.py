@@ -201,6 +201,7 @@ def calculate_overlap_between_two_circles(c1: Tuple[int, int, int, int], c2: Tup
     return part1 + part2 - part3
 
 
+@njit(cache=True)
 def check_if_two_circles_overlap(c1: Tuple[int, int, int, int], c2: Tuple[int, int, int, int]) -> bool:
     """
     Method to check if the two given circles overlap
@@ -231,6 +232,21 @@ def calculate_overlap_between_two_circles_as_percentage(c1: Tuple[int, int, int,
     else:
         # Get the total area
         return overlapping_area / (area_1 + area_2 - overlapping_area)
+
+
+@njit(cache=True)
+def check_circles_for_engulfment(c1: Tuple[int, int, int, int], c2: Tuple[int, int, int, int]) -> bool:
+    """
+    Function to check if one of the circles is engulfed in the other
+    :param c1: The first circle
+    :param c2: The second circle
+    :return: True if one circle is engulfed, else False
+    """
+    # Calculate the distance between both circles
+    dist = euclidean_distance(c1[:2], c2[:2])
+    # Check if the distance is smaller than
+    # Check if one circle is inside the other
+    return dist <= abs(c1[2] / 2 - c2[2] / 2)
 
 
 def create_circular_mask(h: Union[int, float], w: Union[int, float],
