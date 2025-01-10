@@ -214,12 +214,15 @@ def check_if_two_circles_overlap(c1: Tuple[int, int, int, int], c2: Tuple[int, i
         
 
 def calculate_overlap_between_two_circles_as_percentage(c1: Tuple[int, int, int, int],
-                                                        c2: Tuple[int, int, int, int]) -> float:
+                                                        c2: Tuple[int, int, int, int],
+                                                        true_overlap: bool = False) -> float:
     """
     Function to calculate the overlap between two circles as a percentage of the total area
 
     :param c1: The center and diameter of the first circle
     :param c2: The center and diameter of the second circle
+    :param true_overlap: If true, the actual overlap in percent is returned, else the percentage of the max. possible
+    overlap is returned
     :return: The overlapping area between both circles, as float
     """
     # Calculate the areas of  the circles
@@ -231,7 +234,12 @@ def calculate_overlap_between_two_circles_as_percentage(c1: Tuple[int, int, int,
         return 0
     else:
         # Get the total area
-        return overlapping_area / (area_1 + area_2 - overlapping_area)
+        ovl = overlapping_area / (area_1 + area_2 - overlapping_area)
+        if true_overlap:
+            return ovl
+        else:
+            # Adjust the overlap to represent the percentage of max possible overlap
+            return ovl / (min(area_1, area_2) / max(area_1, area_2))
 
 
 @njit(cache=True)

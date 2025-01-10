@@ -287,11 +287,16 @@ class Editor(QDialog):
         "roi",
         "size_factor",
         "temp_items",
-        "active_channels"
+        "active_channels",
+        "x_scale",
+        "y_scale"
     ]
 
-    def __init__(self, image: np.ndarray, roi: ROIHandler, active_channels: List[Tuple[int, str, int]],
-                 size_factor: float = 1, img_name: str = ""):
+    def __init__(self, image: np.ndarray,
+                 roi: ROIHandler,
+                 active_channels: List[Tuple[int, str, int]],
+                 size_factor: float = 1, img_name: str = "",
+                 x_scale: float = 1, y_scale: float = 1):
         """
         Constructor
 
@@ -300,6 +305,8 @@ class Editor(QDialog):
         :param active_channels: Index, Name
         :param size_factor: Scaling factor for standard sizes
         :param img_name: Name of the image
+        :param x_scale: Scaling factor for x-axis
+        :param y_scale: Scaling factor for y-axis
         """
         super(Editor, self).__init__()
         self.ui = None
@@ -310,6 +317,8 @@ class Editor(QDialog):
         self.active_channels = active_channels
         self.size_factor = size_factor
         self.temp_items = []
+        self.x_scale = x_scale
+        self.y_scale = y_scale
         self.initialize_ui()
 
     def accept(self) -> None:
@@ -332,8 +341,11 @@ class Editor(QDialog):
                             QtCore.Qt.WindowMinMaxButtonsHint |
                             QtCore.Qt.Window)
         self.editor: EditorView = EditorView(self.image, self.roi,
-                                             self, self.active_channels,
-                                             self.size_factor)
+                                             self,
+                                             active_channels=self.active_channels,
+                                             size_factor=self.size_factor,
+                                             x_scale=self.x_scale,
+                                             y_scale=self.y_scale)
         self.ui.view.addWidget(self.editor)
         # Add icons to buttons
         self.ui.btn_view.setIcon(Icon.get_icon("EYE"))
@@ -362,8 +374,8 @@ class Editor(QDialog):
         self.ui.cbx_high_contrast.stateChanged.connect(self.editor.toggle_high_contrast_mode)
         self.ui.cbx_white_balance.stateChanged.connect(self.editor.toggle_adjust_white_balance)
         self.ui.cbx_colormap.addItems(self.get_colormaps())
-        self.ui.cbx_colormap.setCurrentText("jet")
-        self.editor.change_colormap("jet")
+        self.ui.cbx_colormap.setCurrentText("gray")
+        self.editor.change_colormap("gray")
         self.ui.cbx_colormap.currentTextChanged.connect(self.editor.change_colormap)
         # React to Draw Ellipsis Button toggle
         self.ui.btn_show.toggled.connect(

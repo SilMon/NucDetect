@@ -258,7 +258,7 @@ class ROI:
                 self.dims["center_y"] = center[0]
                 self.dims["area"] = area
             else:
-                raise Exception(f"ROI {self.id} does not contain any points!")
+                raise Exception(f"ROI {self.id} associated to {self.associated} does not contain any points!")
         return self.dims
 
     def extract_area_intensity(self, channel: np.ndarray) -> List[Union[int, float]]:
@@ -273,7 +273,7 @@ class ROI:
             # Iterate over saved points
             for x in range(row[2]):
                 vals.append(
-                    channel[row[0]][row[1] + x]
+                    channel[row[0]][row[1] + x - 1] # Starting point is part of the run length
                 )
         return vals
 

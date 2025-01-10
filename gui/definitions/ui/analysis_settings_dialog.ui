@@ -118,7 +118,7 @@
      <item row="3" column="1">
       <widget class="QDoubleSpinBox" name="spbx_mmpd">
        <property name="toolTip">
-        <string>Standard value (1.3938) assumes a 1024x1024 image at 630 magnification</string>
+        <string>Standard value (6.412) assumes a 1024x1024 image at 400 magnification</string>
        </property>
        <property name="suffix">
         <string/>
@@ -126,8 +126,11 @@
        <property name="decimals">
         <number>4</number>
        </property>
+       <property name="maximum">
+        <double>100.000000000000000</double>
+       </property>
        <property name="value">
-        <double>1.393800000000000</double>
+        <double>6.412000000000000</double>
        </property>
       </widget>
      </item>
@@ -533,8 +536,7 @@
   </connection>
  </connections>
  <buttongroups>
-  <buttongroup name="objective_selection_group"/>
-  <buttongroup name="main_channel_btn_group"/>
   <buttongroup name="detection_method_btn_group"/>
+  <buttongroup name="main_channel_btn_group"/>
  </buttongroups>
 </ui>

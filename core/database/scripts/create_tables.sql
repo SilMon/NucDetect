@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS "roi"
     "associated"       INTEGER,
     "detection_method" TEXT,
     "match"            INTEGER,
+    "co_localized"     INTEGER,
     PRIMARY KEY ("hash", "image")
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS "settings"
@@ -101,4 +102,13 @@ CREATE TABLE IF NOT EXISTS "statistics"
     "ellipticity"          INTEGER,
     PRIMARY KEY ("hash", "image")
 ) WITHOUT ROWID;
+-- Create search-relevant indices to speed up the search
+CREATE INDEX IF NOT EXISTS associated_idx ON roi(associated);
+CREATE INDEX IF NOT EXISTS channel_idx ON roi(channel);
+CREATE INDEX IF NOT EXISTS detection_idx ON roi(detection_method);
+CREATE INDEX  IF NOT EXISTS image_idx ON roi(image);
+CREATE INDEX IF NOT EXISTS images_md5_idx ON images(md5);
+CREATE INDEX IF NOT EXISTS points_hash_idx ON points(hash);
+CREATE INDEX IF NOT EXISTS roi_hash_idx ON roi(hash);
+CREATE INDEX IF NOT EXISTS statistics_hash_idx ON statistics(hash);
 COMMIT;

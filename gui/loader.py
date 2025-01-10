@@ -59,7 +59,7 @@ class Loader(QTimer):
         # Update the last index
         self.last_index += self.batch_size
         # Update the loading percentage
-        self.percentage = self.items_loaded / (len(self.items))
+        self.percentage = self.items_loaded / len(self.items) if self.items else 1
         # Check if a feedback function was given
         if self.feedback:
             # Call the feedback function

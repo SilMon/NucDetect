@@ -587,7 +587,6 @@ class NucDetect(QMainWindow):
         self.prg_signal.emit("Analysing image", maxi * 0.05, maxi, "")
         data = self.detector.analyse_image(path, settings=analysis_settings, save_log=True)
         self.roi_cache = data["handler"]
-        s0 = time.time()
         self.prg_signal.emit(f"Ellipse parameter calculation", maxi * 0.75, maxi, "")
         for roi in self.roi_cache:
             if roi.main:
@@ -762,6 +761,9 @@ class NucDetect(QMainWindow):
         for ind in range(len(data["names"])):
             ins.add_channel(key, ind, data["names"][ind],
                             data["active channels"][ind], data["main channel"] == ind)
+        # Save scale and scale unit
+        ins.set_image_scale(key, data["x_scale"], data["y_scale"])
+        ins.set_image_scale_unit(key, data["scale_unit"])
         # Save data for detected ROI
         roidat, pdat, elldat = NucDetect.prepare_roihandler_for_database(data["handler"], data["channels"])
         # Check if there is any data to save
@@ -794,7 +796,7 @@ class NucDetect(QMainWindow):
             asso = hash(roi.associated) if roi.associated else None
             roidat.append((hash(roi), handler.ident, True, roi.ident,
                            str(dim["center_x"]), str(dim["center_y"]),
-                           dim["width"], dim["height"], asso, roi.detection_method, roi.match))
+                           dim["width"], dim["height"], asso, roi.detection_method, roi.match, roi.colocalized))
             for p in roi.area:
                 pdat.append((hash(roi), p[0], p[1], p[2]))
             elldat.append(
@@ -1174,6 +1176,8 @@ class NucDetect(QMainWindow):
             sett.save_menu_settings()
             self.inserter.commit()
         self.check_all_item_statuses()
+        # TODO check
+        self.settings = self.load_settings()
 
     def show_modification_window(self) -> None:
         """
@@ -1183,9 +1187,11 @@ class NucDetect(QMainWindow):
         """
         # Load channels for image from database
         channels = [(x[1], x[2]) for x in self.requester.get_channels(self.cur_img["key"])]
-        editor = Editor(image=ImageLoader.load_image(self.cur_img["path"]), active_channels=channels,
+        editor = Editor(image=ImageLoader.load_image(self.cur_img["path"]),
+                        active_channels=channels,
                         roi=self.roi_cache, size_factor=self.settings["size_factor"],
-                        img_name=self.cur_img['file_name'])
+                        img_name=self.cur_img['file_name'],
+                        x_scale=self.cur_img["x_scale"], y_scale=self.cur_img["y_scale"])
         editor.setWindowFlags(editor.windowFlags() |
                               QtCore.Qt.WindowSystemMenuHint |
                               QtCore.Qt.WindowMinMaxButtonsHint |

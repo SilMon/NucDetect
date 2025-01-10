@@ -129,11 +129,13 @@ def create_list_item(path: str) -> QStandardItem:
         )
         item.setIcon(icon)
         analysed, modified = check_if_image_was_analysed_and_modified(key)
+        y_scale, x_scale = 1, 1
         if analysed:
             if modified:
                 item.setBackground(Color.ITEM_MODIFIED)
             else:
                 item.setBackground(Color.ITEM_ANALYSED)
+            y_scale, x_scale = get_image_scale(key)
         item.setData({
             "key": key,
             "path": path,
@@ -143,7 +145,9 @@ def create_list_item(path: str) -> QStandardItem:
             "folder": folder,
             "date": t[0],
             "time": t[1],
-            "icon": icon
+            "icon": icon,
+            "x_scale": x_scale,
+            "y_scale": y_scale
         })
         return item
 
@@ -216,3 +220,22 @@ def check_if_image_was_analysed_and_modified(md5: str) -> Tuple[bool, bool]:
     else:
         modified = False
     return analysed, modified
+
+def get_image_scale(md5: str) -> Tuple[float, float]:
+    """
+    Function to get the saved scale of this image
+
+    :param md5: The md5 hash of the image
+    :return: Tuple containing the scale for the y- and x-axis
+    """
+    connection = sqlite3.connect(Paths.database)
+    cursor = connection.cursor()
+    x_scale = cursor.execute(
+        "SELECT x_res FROM images WHERE md5=?",
+        (md5,)
+    ).fetchall()[0][0]
+    y_scale = cursor.execute(
+        "SELECT y_res FROM images WHERE md5=?",
+        (md5,)
+    ).fetchall()[0][0]
+    return y_scale, x_scale

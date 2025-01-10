@@ -2,6 +2,7 @@ import warnings
 from typing import List
 
 import numpy as np
+from matplotlib import pyplot as plt
 from scipy import ndimage as ndi
 from skimage import img_as_ubyte
 from skimage.filters import threshold_local
@@ -71,6 +72,10 @@ class NucleusMapper(AreaMapper):
         percent_hmax = self.settings["percent_hmax"]
         # Calculate the threshold to use
         threshold = np.amin(self.channels[0]) + round(percent_hmax * np.amax(self.channels[0]))
+        # Check for sufficient dynamic range
+        # TODO begründete Lösung finden
+        if np.amax(self.channels[0]) - np.amin(self.channels[0]) < 30:
+            return np.zeros(shape=self.channels[0].shape, dtype=bool)
         return ndi.binary_fill_holes(self.channels[0] > threshold)
 
     @staticmethod
@@ -136,7 +141,7 @@ class NucleusMapper(AreaMapper):
         # Calculate center of each detected nucleus
         centers = [(np.average(x[0]), np.average(x[1])) for x in nucs]
         # Create center map as starting point for watershed segmentation
-        cmask = np.zeros(shape=max_it.shape)
+        cmask = np.zeros(shape=max_it.shape, dtype=np.uint32)
         ind = 1
         for c in centers:
             cmask[int(c[0])][int(c[1])] = ind

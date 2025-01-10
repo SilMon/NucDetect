@@ -107,46 +107,52 @@ class Detector:
                                                    if x is not analysis_settings["main_channel_name"]]
         # Detect roi via image processing and machine learning
         main_map, main_roi = self.nucleus_extraction(main, names[main_channel], analysis_settings)
-        if detection_method == "image processing" or detection_method == "combined":
-            iproi, maps1 = self.ip_roi_extraction(main, main_map, main_roi, foc_channels, analysis_settings)
-            self.add_log_message(f"Detected IP ROI: {len(iproi)}")
-        if detection_method == "u-net" or detection_method == "combined":
-            mlroi, maps2 = self.ml_roi_extraction(main_roi, foc_channels, analysis_settings)
-            self.add_log_message(f"Detected ML ROI: {len(mlroi)}")
-        rois = []
-        if detection_method == "combined":
-            # Merge the foci for each channel
-            foci = []
-            for channel in analysis_settings["foci_channel_names"]:
-                # Define map Comparator
-                mapc = MapComparator(main_roi,
-                                     maps1[analysis_settings["foci_channel_names"].index(channel)],
-                                     [x for x in iproi if x.ident == channel],
-                                     maps2[analysis_settings["foci_channel_names"].index(channel)],
-                                     [x for x in mlroi if x.ident == channel],
-                                     image.shape[:2],
-                                     self.add_log_message)
-                foci.append(mapc.merge_overlapping_foci())
-            # Add all foci
-            for x in foci:
-                rois.extend(x)
-            # Check the foci for co-localisation
-            MapComparator.get_match_for_nuclei(main_roi, foci)
-        elif detection_method == "image processing":
-            rois.extend(iproi)
-        else:
-            rois.extend(mlroi)
-        # Add the detected nuclei to the list
-        rois.extend(main_roi)
-        # Check for quality of roi
-        if rois:
-            qroi = self.perform_quality_check(channels, names, analysis_settings, rois)
-            self.add_log_message(f"QR: Removed foci: {len(rois) - len(qroi)}")
-        else:
-            qroi = []
+        # Define a handler to take the ROI
         handler = ROIHandler(ident=imgdat["id"])
-        handler.add_rois(qroi)
         handler.idents = analysis_settings["names"]
+        # Check if nuclei were detected
+        if main_roi:
+            if detection_method == "image processing" or detection_method == "combined":
+                iproi, maps1 = self.ip_roi_extraction(main, main_map, main_roi, foc_channels, analysis_settings)
+                self.add_log_message(f"Detected IP ROI: {len(iproi)}")
+            if detection_method == "u-net" or detection_method == "combined":
+                mlroi, maps2 = self.ml_roi_extraction(main_roi, foc_channels, analysis_settings)
+                self.add_log_message(f"Detected ML ROI: {len(mlroi)}")
+            rois = []
+            if detection_method == "combined":
+                # Merge the foci for each channel
+                foci = []
+                for channel in analysis_settings["foci_channel_names"]:
+                    # Define map Comparator
+                    mapc = MapComparator(main_roi,
+                                         maps1[analysis_settings["foci_channel_names"].index(channel)],
+                                         [x for x in iproi if x.ident == channel],
+                                         maps2[analysis_settings["foci_channel_names"].index(channel)],
+                                         [x for x in mlroi if x.ident == channel],
+                                         image.shape[:2],
+                                         self.add_log_message)
+                    foci.append(mapc.merge_overlapping_foci())
+                # Add all foci
+                for x in foci:
+                    rois.extend(x)
+                # Check the foci for co-localisation
+                MapComparator.get_match_for_nuclei(main_roi, foci)
+            elif detection_method == "image processing":
+                rois.extend(iproi)
+            else:
+                rois.extend(mlroi)
+            # Add the detected nuclei to the list
+            rois.extend(main_roi)
+            # Check for quality of roi
+            if rois:
+                qroi = self.perform_quality_check(channels, names, analysis_settings, rois)
+                self.add_log_message(f"QR: Removed foci: {len(rois) - len(qroi)}")
+            else:
+                qroi = []
+            handler.add_rois(qroi)
+        imgdat["x_scale"] = analysis_settings["dots_per_micron"]
+        imgdat["y_scale"] = analysis_settings["dots_per_micron"]
+        imgdat["scale_unit"] = "µm"
         imgdat["handler"] = handler
         imgdat["names"] = analysis_settings["names"]
         imgdat["channels"] = channels

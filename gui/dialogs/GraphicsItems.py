@@ -1,4 +1,5 @@
 import threading
+import time
 from typing import List, Iterable, Dict, Tuple
 
 import numpy as np
@@ -7,6 +8,7 @@ from PyQt5 import QtCore
 from PyQt5.QtCore import QRectF, Qt, QPointF
 from PyQt5.QtGui import QColor, QKeyEvent, QMouseEvent
 from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem
+from pyqtgraph import HistogramLUTItem, ColorBarItem
 from skimage.draw import ellipse
 
 from DataProcessing import create_lg_lut, automatic_colorbalance
@@ -27,7 +29,9 @@ class EditorView(pg.GraphicsView):
 
     def __init__(self, image: np.ndarray, roi: ROIHandler,
                  parent: QDialog, active_channels: List[Tuple[int, str]],
-                 size_factor: float = 1, high_contrast: bool = False, adjust_whitebalance: bool = False):
+                 size_factor: float = 1, high_contrast: bool = False,
+                 adjust_whitebalance: bool = False,
+                 x_scale: float = 1, y_scale: float = 1):
         """
         :param image: The background image to display
         :param roi: All roi associated with this image
@@ -35,6 +39,9 @@ class EditorView(pg.GraphicsView):
         :param active_channels: List containing the index of the channel and its corresponding name
         :param size_factor: Size factor used for newly added ROI
         :param high_contrast: If true, the channels will be shown in high contrast mode
+        :param adjust_whitebalance: If true, white balance will be applied to all channels
+        :param x_scale: Scale factor for x-axis
+        :param y_scale: Scale factor for y-axis
         """
         super(EditorView, self).__init__()
         self.parent = parent
@@ -42,6 +49,8 @@ class EditorView(pg.GraphicsView):
         self.size_factor = size_factor
         self.high_contrast = high_contrast
         self.adjust_whitebalance = adjust_whitebalance
+        self.x_scale = x_scale
+        self.y_scale = y_scale
         self.mode = -1
         self.image = image
         self.image_adj = None
@@ -79,8 +88,32 @@ class EditorView(pg.GraphicsView):
         self.selected_item: ROIItem = None
         self.shift_down = False
         self.saved_values: Dict = None
+        """
+        # Add histogram widget to this view
+        self.hist = HistogramLUTItem(image=self.img_item)
+        # Get the image shape
+        shape = image.shape
+        # Calculate the size and position of the widget
+        xpos = shape[1] + 25
+        ypos = int(shape[0] * 0.25)
+        xsize = int(shape[1] * 0.2)
+        ysize = int(shape[0] * 0.5)
+        self.hist.setGeometry(xpos, ypos, xsize, ysize)
+        self.plot_item.addItem(self.hist)
+        """
+        # Add a color bar widget
+        self.color_bar = ColorBarItem(values=(np.amin(image[...,0]), np.amax(image[..., 0])))
+        # Link the bar to the image
+        self.color_bar.setImageItem(self.img_item, insert_in=self.plot_item)
         self.show_channel("Composite")
         self.current_channel = "Composite"
+        # Add a scale bar to this view
+        self.scale_microns = 10
+        self.scale = pg.ScaleBar(size=self.scale_microns * self.x_scale, width=15)
+        self.scale.setParentItem(self.plot_item.getViewBox())
+        self.scale.text.setPlainText(f"{self.scale_microns} µm")
+        self.scale.anchor((1, 1), (1, 1), offset=(-50, -50)) # Position set to bottom right
+        self.addItem(self.scale)
         self.initialize_wb_and_hc()
 
     def initialize_wb_and_hc(self) -> None:
@@ -132,10 +165,12 @@ class EditorView(pg.GraphicsView):
         self.active_channel = channel
         if channel == "Composite":
             self.img_item.setImage(self.image if not self.adjust_whitebalance else self.image_adj)
+            #self.hist.setLevelMode("rgba")
             index = self.image.shape[2]
         else:
             # Check to which index the name corresponds
             index = self.active_channels[channel]
+            #self.hist.setLevelMode("mono")
             if self.high_contrast:
                 self.img_item.setImage(self.hcimg[..., index] if
                                        not self.adjust_whitebalance else self.hcimg_adj[..., index])
@@ -200,7 +235,10 @@ class EditorView(pg.GraphicsView):
         :param colormap: Name of the colormap to load
         :return: None
         """
+        # Update the image item
         self.img_item.setColorMap(pg.colormap.get(colormap, source="matplotlib"))
+        # Update the corresponding color bar
+        self.color_bar.setColorMap(pg.colormap.get(colormap, source="matplotlib"))
 
     def change_mode(self, mode: int = 0) -> None:
         """
@@ -363,8 +401,8 @@ class EditorView(pg.GraphicsView):
         # Get click position
         pos = self.mpos
         if self.active_channel == self.main_channel:
-            item = NucleusItem(round(pos.x() - 75 * self.size_factor), round(pos.y() - 38 * self.size_factor),
-                               round(150 * self.size_factor), round(76 * self.size_factor),
+            item = NucleusItem(round(pos.x() - 45 * self.size_factor), round(pos.y() - 23 * self.size_factor),
+                               round(90 * self.size_factor), round(46 * self.size_factor),
                                round(pos.x()), round(pos.y()),
                                0, (0, 0), self.active_channels[self.main_channel], -1)
             item.set_pens(
@@ -379,8 +417,8 @@ class EditorView(pg.GraphicsView):
             item.enable_editing(True)
             self.parent.setup_editing(item)
         else:
-            item = FocusItem(round(pos.x() - 3.5 * self.size_factor), round(pos.y() - 3.5 * self.size_factor),
-                             round(7 * self.size_factor), round(7 * self.size_factor),
+            item = FocusItem(round(pos.x() - 2 * self.size_factor), round(pos.y() - 2 * self.size_factor),
+                             round(4 * self.size_factor), round(4 * self.size_factor),
                              self.active_channels[self.active_channel], -1)
             item.set_pen(
                 ROIDrawer.MARKERS["manual"],
@@ -457,7 +495,9 @@ class EditorView(pg.GraphicsView):
         :param maps: Association hash maps for all channels
         :return: None
         """
+        new_roi = []
         for item in self.items:
+            start = time.time()
             if item.changed:
                 if item not in self.temp_items:
                     continue
@@ -468,28 +508,37 @@ class EditorView(pg.GraphicsView):
                     if isinstance(item, NucleusItem):
                         # Get hash list of associated foci
                         hashes = self.requester.get_hashes_of_associated_foci(item.roi_id)
-                        print(item.roi_id)
                         unassociated.extend(hashes)
                         self.inserter.reset_nucleus_focus_association(item.roi_id)
                     else:
                         unassociated.append(item.roi_id)
                 # Get coordinates corresponding to the item
-                rr, cc = ellipse(item.center[1], item.center[0], item.height / 2, item.width / 2,
+                # Process width/height
+                height = round(item.height)
+                width = round(item.width)
+                height = height / 2 + 1 if height % 2 == 0 else item.height / 2
+                width = width / 2 + 1  if width % 2 == 0 else item.width / 2
+                rr, cc = ellipse(item.center[1], item.center[0], height, width,
                                  self.image.shape, np.deg2rad(-item.angle))
                 # Get encoded area for item
                 rle = self.encode_new_roi(rr, cc, maps[item.channel_index])
-                # Create new ROI instance
-                roi = ROI(channel=self.roi.idents[item.channel_index],
-                          main=isinstance(item, NucleusItem), auto=False)
-                roi.set_area(rle)
-                roihash = hash(roi)
-                # Foci need to be associated
-                if isinstance(item, FocusItem):
-                    unassociated.append(roihash)
-                self.replace_placeholder(maps[item.channel_index], roihash)
-                self.write_item_to_database(item, roi, rle, self.image, self.roi.ident)
-                # Add ROI to ROIHandler
-                self.roi.rois.append(roi)
+                if rle:
+                    # Create new ROI instance
+                    roi = ROI(channel=self.roi.idents[item.channel_index],
+                              main=isinstance(item, NucleusItem), auto=False)
+                    roi.set_area(rle)
+                    roihash = hash(roi)
+                    # Foci need to be associated
+                    if isinstance(item, FocusItem):
+                        unassociated.append(roihash)
+                    self.replace_placeholder(maps[item.channel_index], roihash)
+                    self.write_item_to_database(item, roi, rle, self.image, self.roi.ident)
+                    # Add ROI to ROIHandler
+                    new_roi.append(roi)
+                else:
+                    print("ROI does not contain any points!")
+        self.roi.rois.extend(new_roi)
+
 
     def apply_all_changes(self) -> None:
         """
@@ -536,8 +585,9 @@ class EditorView(pg.GraphicsView):
         # Calculate statistics
         roidat = (hash(roi), image_id, False, roi.ident,
                   item.center[1], item.center[0], item.edit_rect.width,
-                  item.edit_rect.height, None, "manual", -1)
+                  item.edit_rect.height, None, "manual", -1, roi.colocalized)
         stats = roi.calculate_statistics(image[..., item.channel_index])
+        # TODO replace for FOCI
         ellp = roi.calculate_ellipse_parameters()
         stat_data = (hash(roi), image_id, stats["area"], stats["intensity average"],
                      stats["intensity median"], stats["intensity maximum"], stats["intensity minimum"],
@@ -603,12 +653,7 @@ class EditorView(pg.GraphicsView):
         :param placeholder: The placeholder to replace
         :return: None
         """
-        shape = map_.shape
-        # Replace placeholder with real hash
-        for y in range(shape[0]):
-            for x in range(shape[1]):
-                if map_[y][x] == placeholder:
-                    map_[y][x] = roihash
+        map_[map_ == placeholder] = roihash
 
     @staticmethod
     def encode_new_roi(rr: List[int], cc: List[int],
@@ -627,7 +672,7 @@ class EditorView(pg.GraphicsView):
         rows = np.unique(rr)
         # Iterate over unique rows
         for row in rows:
-            rl = 0
+            rl = 1
             col = -1
             for index in range(len(rr)):
                 if rr[index] == row and map_[rr[index]][cc[index]] == 0:

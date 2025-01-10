@@ -82,7 +82,10 @@ class MapComparator:
                 focus_conversion_dict[focus_pair[0][-1]].colocalized = True
                 focus_conversion_dict[focus_pair[1][-1]].colocalized = True
             # Calculate the amount of co-localization for this nucleus
-            hash_roi_converter[nucleus].match = len(co_localized) / (len(foci1) + len(foci2))
+            if len(foci1) + len(foci2) > 1:
+                hash_roi_converter[nucleus].match = len(co_localized) / (len(foci1) + len(foci2))
+            else:
+                hash_roi_converter[nucleus].match = None
 
     @staticmethod
     def get_hash_roi_converter(roi: List[ROI]) -> Dict[int, ROI]:
@@ -102,9 +105,14 @@ class MapComparator:
         :return: The cleaned list of foci and the percentage of overlap between
         """
         start = time.time()
+        # Check if there are foci to compare
+        # TODO check for empty lists
+        if not self.foci1 and self.foci2:
+            return []
         # Get a dictionary linking all nuclei with their respective foci
         nucleus_focus_association_dict = self.get_nucleus_focus_association_dictionary(self.main,
                                                                                        [self.foci1, self.foci2])
+        channel = self.foci1[0].ident
         # Get dict that allows hash to ROI conversion
         focus_conversion_dict = self.create_focus_conversion_dict([self.foci1, self.foci2])
         # List that contains all foci that should be added
@@ -128,7 +136,7 @@ class MapComparator:
             roi.match = data[0]
             # Add the roi to the list
             added_roi.append(roi)
-        self.log(f"Channel: {added_roi[0].ident}\t{len(focus_merge_lst)} matching foci"
+        self.log(f"Channel: {channel}\t{len(focus_merge_lst)} matching foci"
                  f" found and merged in {time.time() - start: .3f} secs")
         return merged_roi + added_roi
 
@@ -215,9 +223,9 @@ class MapComparator:
         # Iterate over every focus of method 1 and check for the overlap
         for focus in foci1:
             overlapping_foci = []
-            area1 = get_circle_area(focus)
             # For each focus of method 2, check the overlap
             for focus2 in foci2:
+                # Calculate the actual overlap and compare it to the max overlap
                 overlap = calculate_overlap_between_two_circles_as_percentage(focus, focus2)
                 # If the focus overlaps, append it
                 if overlap > 0:

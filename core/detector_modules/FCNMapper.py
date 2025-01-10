@@ -1,15 +1,14 @@
 import os
 from pathlib import Path
 from typing import Iterable, Dict, List, Tuple
-
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 from scipy.ndimage import label, binary_fill_holes
 from skimage.morphology import binary_erosion, binary_opening, binary_closing
 from skimage.transform import resize
-from tensorflow.python.keras import models
-
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+from tensorflow.keras import models
 import Paths
 from DataProcessing import automatic_whitebalance
 from detector_modules.AreaMapper import AreaMapper
@@ -154,7 +153,7 @@ class FCNMapper(AreaMapper):
         tiles = np.asarray(tiles).astype("float32")
         tiles /= 255
         tiles = tiles.reshape(-1, tiles.shape[1], tiles.shape[2], 1)
-        predictions = model.predict(tiles, use_multiprocessing=True)
+        predictions = model.predict(tiles)#, use_multiprocessing=True)
         masks = []
         for prediction in predictions:
             masks.append(FCNMapper.create_prediction_mask(prediction))

@@ -493,7 +493,9 @@ class Requester(DatabaseInteractor):
         :param image: The md5 hash of the image
         :return: The information as list of strings
         """
-        info = self.connector.get_view_from_table(Specifiers.ALL, "images", ("md5", Specifiers.EQUALS, image))
+        # TODO throws error after analyse all
+        info = self.connector.get_view_from_table(Specifiers.ALL, "images",
+                                                  ("md5", Specifiers.EQUALS, image))
         return info[0] if info else ()
 
     def check_if_image_was_analysed(self, image: str) -> bool:
@@ -503,7 +505,9 @@ class Requester(DatabaseInteractor):
         :param image: The md5 hash of the image
         :return: True if the image was analysed
         """
-        return bool(self.connector.get_view_from_table("analysed", "images", ("md5", Specifiers.EQUALS, image))[0][0])
+        return bool(self.connector.get_view_from_table("analysed", "images",
+                                                       ("md5", Specifiers.EQUALS, image))[0][0])
+
 
     def check_if_image_is_registered(self, image: str) -> bool:
         """
@@ -515,6 +519,41 @@ class Requester(DatabaseInteractor):
         return bool(self.connector.get_view_from_table("file_name",
                                                        "encountered_names",
                                                        ("md5", Specifiers.EQUALS, image)))
+
+    def get_image_x_scale(self, image: str) -> float:
+        """
+        Method to get the x-axis scale of the given image
+
+        :param image: The md5 hash of the image
+        :return: The x-scale of the image as float
+        """
+        x_res = self.connector.get_view_from_table("x_res",
+                                                  "images",
+                                                  ("md5", Specifiers.EQUALS, image))[0]
+        return float(x_res[0][0]) if x_res else None
+
+    def get_image_y_scale(self, image: str) -> float:
+        """
+        Method to get the y-axis scale of the given image
+
+        :param image: The md5 hash of the image
+        :return: The y-scale of the image as float
+        """
+        x_res = self.connector.get_view_from_table("x_res",
+                                                   "images",
+                                                   ("md5", Specifiers.EQUALS, image))[0]
+        return float(x_res[0][0]) if x_res else None
+
+
+    def get_image_scale(self, image: str) -> Tuple[float, float]:
+        """
+        Method to get the y-axis and x-axis scale of the given image
+
+        :param image: The md5 hash of the image
+        :return: The y-axis and x-axis scale of the image as tuple
+        """
+        return self.get_image_y_scale(image), self.get_image_x_scale(image)
+
 
     def get_groups_for_experiment(self, experiment: str) -> List[str]:
         """
@@ -796,7 +835,8 @@ class Inserter(DatabaseInteractor):
         :param group: The name of the group
         :return: None
         """
-        self.connector.insert_or_replace_into("groups", ("image", "experiment", "name"), (image, experiment, group))
+        self.connector.insert_or_replace_into("groups", ("image", "experiment", "name"),
+                                              (image, experiment, group))
 
     def delete_existing_image_data(self, image: str) -> None:
         """
@@ -816,6 +856,27 @@ class Inserter(DatabaseInteractor):
         :return: None
         """
         self.connector.update("images", ("experiment", experiment), ("md5", Specifiers.EQUALS, image))
+
+    def set_image_scale(self, image: str, x_scale: float, y_scale: float) -> None:
+        """
+        Method to set the scale of the given image
+        :param image: The md5 hash of the image
+        :param x_scale: The x-axis scale of the image
+        :param y_scale: The y-axis scale of the image
+        :return: None
+        """
+        self.connector.update("images", (("x_res", x_scale), ("y_res", y_scale)),
+                              ("md5", Specifiers.EQUALS, image))
+
+    def set_image_scale_unit(self, image: str, unit: str) -> None:
+        """
+        Method to set the scale unit for the given image
+
+        :param image: The md5 hash of the image
+        :param unit: The unit in dots/x
+        :return: None
+        """
+        self.connector.update("images", ("unit", unit), ("md5", Specifiers.EQUALS, image))
 
     def mark_image_as_modified(self, image: str) -> None:
         """
@@ -880,7 +941,7 @@ class Inserter(DatabaseInteractor):
         """
         self.connector.insert_or_replace_into("roi", ("hash", "image", "auto", "channel",
                                                       "center_x", "center_y", "width", "height",
-                                                      "associated", "detection_method", "match"),
+                                                      "associated", "detection_method", "match", "co_localized"),
                                               roi_data, isinstance(roi_data[0], tuple))
 
     def save_roi_line_data(self, line_data: List) -> None:

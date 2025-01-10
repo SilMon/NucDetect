@@ -8,7 +8,7 @@ import tensorflow as tf
 from numba import jit
 from scipy.ndimage import label
 from skimage import io
-from tensorflow.python.keras import models
+from tensorflow.keras import models
 
 
 class FCN:

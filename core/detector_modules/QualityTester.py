@@ -193,7 +193,7 @@ class QualityTester:
             for y in range(mask.shape[0]):
                 for x in range(mask.shape[1]):
                     if mask[y][x]:
-                        avg += area[y][x]
+                        avg += int(area[y][x])
                         num += 1
             if avg == 0 or num == 0:
                 continue

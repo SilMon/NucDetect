@@ -119,7 +119,10 @@ def associate_roi(rois: Iterable[ROI], main_map: np.ndarray) -> None:
     """
     for roi in rois:
         # Calculate center of roi
-        y, x = roi.calculate_dimensions()["center_y"], roi.calculate_dimensions()["center_x"]
+        y, x = (min(main_map.shape[0] - 1,
+                    roi.calculate_dimensions()["center_y"]),
+                min(main_map.shape[1] - 1,
+                    roi.calculate_dimensions()["center_x"]))
         # Look if center corresponds to a nucleus
         if main_map[y][x] and main_map[y][x] > 0 and not roi.main:
             roi.associated = main_map[y][x]
