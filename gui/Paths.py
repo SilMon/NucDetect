@@ -1,5 +1,5 @@
 import os
-
+import sys
 
 def get_main_folder_path() -> str:
     """
@@ -7,16 +7,13 @@ def get_main_folder_path() -> str:
 
     :return: The path to the folder
     """
-    # Get the current file path
-    fp = __file__
-    # Check if this is the pypi or installer version
-    ftf = "_internal" if "_internal" in fp else "NucDetect"
-    # Check if the NucDetect folder is in the path -> pypi version
-    # Split the path and find NucDetect folder
-    while os.path.split(fp)[1] != ftf:
-        fp = os.path.split(fp)[0]
-    return fp
-
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.join(os.path.dirname(sys.executable), "_internal")
+    else:
+        # during development, use project root (one level above gui/)
+        exe_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    os.chdir(exe_dir)
+    return exe_dir
 
 gen = get_main_folder_path()
 gui = os.path.join(gen, "gui")
@@ -30,7 +27,7 @@ sql_dir = os.path.join(gen, "core", "database", "scripts")
 log_path = os.path.join(nuc_detect_dir, "logs", "nucdetect.log")
 settings_path = os.path.join(gui, "settings")
 #settings_path = os.path.join(nuc_detect_dir, "settings")
-
+about_txt_path = os.path.join(gui, "definitions", "about.txt")
 ui_main = os.path.join(script_dir, "nucdetect.ui")
 ui_result_image_dialog = os.path.join(script_dir, "result_image_dialog.ui")
 ui_exp_dial = os.path.join(script_dir, "experiment_dialog.ui")
@@ -43,6 +40,7 @@ ui_editor_auto_dial = os.path.join(script_dir, "auto_edit_dialog.ui")
 ui_experiment_selection_dial = os.path.join(script_dir, "experiment_selection_dialog.ui")
 ui_analysis_settings_dial = os.path.join(script_dir, "analysis_settings_dialog.ui")
 ui_save_dial = os.path.join(script_dir, "data_export_dialog.ui")
+ui_stat_plot_settings_dial = os.path.join(script_dir, "statistics_settings.ui")
 
 database = os.path.join(nuc_detect_dir, "nucdetect.db")
 result_path = os.path.join(nuc_detect_dir, "results")

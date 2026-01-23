@@ -5,7 +5,7 @@ from PyQt5 import QtGui
 from PyQt5.QtCore import QSize
 from PyQt5.QtGui import QIcon, QColor
 
-import Paths
+import gui.Paths as gpaths
 
 
 class Color:
@@ -31,7 +31,7 @@ class Icon:
         :return: QIcon
         """
         icons = {
-            "LOGO": QtGui.QIcon(Paths.logo_dir + os.sep + "logo.png"),
+            "LOGO": QtGui.QIcon(gpaths.logo_dir + os.sep + "logo.png"),
             "RULER": qta.icon("fa5s.ruler", color=Icon.STANDARD),
             "EYE": qta.icon("fa5.eye", color=Icon.STANDARD),
             "EYE_OFF": qta.icon("fa5.eye-slash", color=Icon.STANDARD_OFF),
@@ -62,7 +62,8 @@ class Icon:
             "LOCK": qta.icon("fa5s.lock", color=Icon.STANDARD),
             "UNDO": qta.icon("fa5s.undo", color=Icon.STANDARD),
             "IMAGE": qta.icon("fa5s.image", color=Icon.STANDARD),
-            "SEARCH": qta.icon("fa5s.search", color=Icon.STANDARD)
+            "SEARCH": qta.icon("fa5s.search", color=Icon.STANDARD),
+            "QUESTION": qta.icon("fa5s.question", color=Icon.STANDARD)
         }
         return icons.get(ident, QIcon())
 

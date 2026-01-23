@@ -4,14 +4,21 @@ from typing import Iterable, Dict, List, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
+from scipy.signal.windows import hann
+from skimage.exposure import rescale_intensity
+from skimage.feature import peak_local_max
+from skimage.filters import gaussian, threshold_otsu, threshold_minimum, threshold_local
+from skimage.filters.rank import maximum
+from skimage.segmentation import watershed
 from scipy.ndimage import label, binary_fill_holes
-from skimage.morphology import binary_erosion, binary_opening, binary_closing
+from skimage.morphology import binary_erosion, binary_opening, binary_closing, disk
 from skimage.transform import resize
+from skimage.util import view_as_windows
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 from tensorflow.keras import models
-import Paths
-from DataProcessing import automatic_whitebalance
-from detector_modules.AreaMapper import AreaMapper
+import gui.Paths as gpaths
+from core.detector_modules.AreaMapper import AreaMapper
 
 
 class FCNMapper(AreaMapper):
@@ -60,7 +67,7 @@ class FCNMapper(AreaMapper):
         Method to load the ML models
         :return: None
         """
-        path = os.path.join(Paths.model_dir, "detector.h5")
+        path = os.path.join(gpaths.model_dir, "detector.keras")
         model = models.load_model(path)
         return model
 
@@ -79,66 +86,53 @@ class FCNMapper(AreaMapper):
         pmaps = self.map_channels()
         return self.threshold_maps(pmaps)
 
-    def map_channels(self, adjust_white_balance: bool = True) -> List[np.ndarray]:
+    def map_channels(self) -> List[np.ndarray]:
         """
         Method to map the given channels
 
-        :param adjust_white_balance: Should the channels be scaled to use the full possible intensity range?
         :return: The prediction maps
         """
         prediction_maps = []
         for channel in self.channels:
             orig_shape = channel.shape
+            orig_dtype = channel.dtype
             # Resize the channel to match the training size
-            channel = resize(channel, output_shape=(1024, 1024), preserve_range=True, anti_aliasing=True)
+            # TODO resizen von feature größe abhängig machen, tilen übernimmt den Rest
+            channel = resize(channel, output_shape=(1024, 1024),
+                             preserve_range=True, anti_aliasing=True).astype(orig_dtype)
             # Split channel images into tiles
-            tiles = self.extract_subimages(channel if not adjust_white_balance else automatic_whitebalance(channel),
-                                           (256, 256))
+            tiles = self.extract_subimages(channel,(256, 256))
             # Predict the individual tiles
             ptiles = self.predict_tiles(tiles, self.model)
-            # Merge prediction maps
-            pred_map = resize(self.merge_prediction_tiles(ptiles, channel.shape), output_shape=orig_shape,
+            # Merge prediction maps and bring it back to the original size
+            pred_map = resize(self.merge_prediction_tiles(ptiles,
+                                                          orig_shape,
+                                                          orig_dtype=orig_dtype),
+                              output_shape=orig_shape,
                               preserve_range=True, anti_aliasing=True)
             prediction_maps.append(pred_map)
         return prediction_maps
 
     @staticmethod
-    def extract_subimages(img: np.ndarray, subimage_shape: Tuple[int, int]) -> List[np.ndarray]:
+    def extract_subimages(img: np.ndarray,
+                          subimage_shape: Tuple[int, int],
+                          overlap: float = 0.5) -> List[np.ndarray]:
         """
         Function to extract subimages from a given image
 
         :param img: The image to extract the subimages from
         :param subimage_shape: The shape of each subimage
+        :param overlap: The overlap between two subimages
         :return: List of all extracted subimages
         """
-        # Get the number of subimages for each axis
-        svert, shor = FCNMapper.get_number_of_subimages_per_dimension(img.shape, subimage_shape)
-        sub_images = []
-        for y in range(svert):
-            for x in range(shor):
-                extract = img[y * subimage_shape[0]: (y + 1) * subimage_shape[0],
-                              x * subimage_shape[1]: (x + 1) * subimage_shape[1]]
-                tile = np.zeros(shape=subimage_shape)
-                tile[0: extract.shape[0], 0: extract.shape[1]] = extract
-                sub_images.append(tile)
-        return sub_images
+        tile_height, tile_width = subimage_shape
+        # Defines the stride for each axis
+        step_height = step_width = int(tile_height * (1 - overlap))
+        # Create tiles and show them
+        return view_as_windows(img,
+                               (tile_height, tile_width),
+                               step=(step_height, step_width))
 
-    @staticmethod
-    def get_number_of_subimages_per_dimension(img_shape: Tuple[int, int],
-                                              sub_shape: Tuple[int, int]) -> Tuple[int, int]:
-        """
-        Method to get the number of sub-images per
-
-        :param img_shape: The shape of the image
-        :param sub_shape: The shape of the sub-images to extract
-        :return: The vertical and horizontal sub-image count
-        """
-        hcheck = bool(img_shape[0] % sub_shape[0])
-        wcheck = bool(img_shape[1] % sub_shape[1])
-        # Get the number of tiles
-        hcount = img_shape[0] // sub_shape[0] if not hcheck else img_shape[0] // sub_shape[0] + 1
-        wcount = img_shape[1] // sub_shape[1] if not wcheck else img_shape[1] // sub_shape[1] + 1
-        return hcount, wcount
 
     @staticmethod
     def predict_tiles(tiles: List[np.ndarray],
@@ -150,72 +144,70 @@ class FCNMapper(AreaMapper):
         :param model: The model to use for the prediction
         :return: Predictions for all tiles
         """
+        orig_max = np.iinfo(tiles[0].dtype).max
         tiles = np.asarray(tiles).astype("float32")
-        tiles /= 255
-        tiles = tiles.reshape(-1, tiles.shape[1], tiles.shape[2], 1)
-        predictions = model.predict(tiles)#, use_multiprocessing=True)
-        masks = []
-        for prediction in predictions:
-            masks.append(FCNMapper.create_prediction_mask(prediction))
-        return masks
-
-    @staticmethod
-    def create_prediction_mask(pred: tf.Tensor) -> np.ndarray:
-        """
-        Method to create the prediction mask from the prediction tensor
-
-        :param pred: The prediction tensor
-        :return: The created mask
-        """
-        mask = pred[:, :, 0]
-        # Add a new axis to the prediction mask
-        return mask
+        tiles /= orig_max
+        tiles = tiles.reshape(-1, 256, 256, 1)
+        return [pred[:, :, 0] for pred in model.predict(tiles)]
 
     @staticmethod
     def merge_prediction_tiles(masks: List[np.ndarray],
-                               orig_shape: Tuple[int, int]) -> np.ndarray:
+                               orig_shape: Tuple[int, int],
+                               overlap: float = 0.5,
+                               orig_dtype = np.uint8) -> np.ndarray:
         """
         Method to merge created prediction masks into one large image
 
         :param masks: A list containing the created prediciton masks
+        :param overlap: The overlap between prediction masks
         :param orig_shape: A tuple specifying the shape of the original image
+        :param orig_dtype: The dtype of the original image
         :return: The merged prediction mask
         """
-        hcount, wcount = FCNMapper.get_number_of_subimages_per_dimension(orig_shape, masks[0].shape)
-        img = np.zeros(shape=(orig_shape[0], orig_shape[1]))
-        height, width = orig_shape
-        ts = masks[0].shape
-        for y in range(hcount):
-            for x in range(wcount):
-                # Define the mask position
-                y1 = ts[0] * y
-                y2 = ts[0] * (y + 1)
-                x1 = ts[1] * x
-                x2 = ts[1] * (x + 1)
-                mask = masks[y * wcount + x]
-                # Cut mask to boundaries
-                mask = mask[0:min(ts[0], height - y1), 0:min(ts[1], width - x1)]
-                # Merge mask with image
-                img[y1:y2, x1:x2] = mask[...]
-        return img
+        # TODO Overlap einstellbar machen
+        # Create an accumulator map as well as a weights map
+        accum = np.zeros(orig_shape, np.float32)
+        weights = np.zeros(orig_shape, np.float32)
+        tile_height, tile_width = masks[0].shape[0], masks[0].shape[1]
+        step_height = step_width = int(tile_height * (1 - overlap))
+        n_tiles_vert = int(((orig_shape[0] - tile_height) / step_height)) + 1
+        n_tiles_hor = int(((orig_shape[1] - tile_width) / step_width)) + 1
+        # Create the 1D weighting function
+        weight1d = hann(masks[0].shape[0], sym=False)
+        # Create the 2D weighting array
+        weight2d = np.outer(weight1d, weight1d)
+        for y in range(n_tiles_vert):
+            for x in range(n_tiles_hor):
+                accum[y * step_height: y * step_height + tile_height,
+                x * step_width: x * step_width + tile_width] += masks[y * n_tiles_hor + x] * weight2d
+                weights[y * step_height: y * step_height + tile_height,
+                x * step_width: x * step_width + tile_width] += weight2d
+        return (np.divide(accum, weights) * np.iinfo(orig_dtype).max).astype(orig_dtype)
 
-    def threshold_maps(self, prediction_maps: List[np.ndarray]) -> List[np.ndarray]:
+    @staticmethod
+    def threshold_maps(prediction_maps: List[np.ndarray]) -> List[np.ndarray]:
         """
         Method to threshold the given prediction maps
 
         :param prediction_maps: The prediction maps to threshold
         :return: The thresholded prediction maps
         """
-        if len(prediction_maps) > 1:
-            bin_maps = []
-            for pmap in prediction_maps:
-                bmap = binary_fill_holes(pmap >= self.settings["fcn_certainty_foci"])
-                #bmap = binary_opening(bmap, footprint=np.ones(shape=(5, 5)))
-                bmap = label(bmap)[0]
-                bin_maps.append(bmap)
-            return bin_maps
-        else:
-            return label(binary_opening(prediction_maps[0] >= self.settings["fcn_certainty_nuclei"],
-                                        footprint=np.ones(shape=(5, 5))))[0]
-
+        bin_maps = []
+        for inference in prediction_maps:
+            # Threshold the image
+            # TODO threshold als einstellung ermöglichen
+            threshold = threshold_otsu(inference)
+            binary = binary_opening(inference >= threshold)
+            # Extract the individual areas using watershed segmentation
+            seed_points = peak_local_max(inference,
+                                         threshold_abs=threshold,
+                                         footprint=np.ones((3, 3)))
+            mask = np.zeros(inference.shape, dtype=bool)
+            mask[tuple(seed_points.T)] = True
+            labeled = label(mask)[0]
+            bin_maps.append(watershed(image=-inference,
+                                      markers=labeled,
+                                      mask=binary,
+                                      watershed_line=True))
+        return bin_maps
 

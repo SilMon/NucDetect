@@ -4,9 +4,9 @@ import time
 from enum import Enum
 from typing import Tuple, Dict, List, Union, Iterable, Any
 
-from detector_modules.ImageLoader import ImageLoader
+from core.detector_modules.ImageLoader import ImageLoader
 from gui import Paths
-from roi.ROI import ROI
+from core.roi.ROI import ROI
 
 
 class Specifiers(Enum):
@@ -725,8 +725,7 @@ class Requester(DatabaseInteractor):
                    f"{float(stats[12]):.2f}", f"{float(stats[13]):.2f}", f"{match:.2f}"]
             # Count the foci
             for channel in sorted(self.get_channel_names(image, False)):
-                row.append(str(self.count_foci_for_nucleus_and_channel(nuc, channel)))
-            rows.append(row)
+                rows.append(row + [channel, str(self.count_foci_for_nucleus_and_channel(nuc, channel))])
         return rows
 
     def get_table_data_for_experiment(self, experiment: str):

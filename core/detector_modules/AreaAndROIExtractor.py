@@ -4,8 +4,8 @@ import numpy as np
 from matplotlib import pyplot as plt
 from numba.typed import List as nList
 
-from roi.AreaAnalysis import imprint_area_into_array
-from roi.ROI import ROI
+from core.roi.AreaAnalysis import imprint_area_into_array
+from core.roi.ROI import ROI
 
 
 def extract_nuclei_from_maps(map_: np.ndarray, channel_name: str) -> List[ROI]:
@@ -65,7 +65,7 @@ def encode_areas(area_map: np.ndarray) -> Dict[int, List[Tuple[int, int, int]]]:
             if label != 0:
                 col = x
                 # run length
-                rl = 1
+                rl = 0
                 # Iterate over row
                 while area_map[y][x] == label:
                     rl += 1

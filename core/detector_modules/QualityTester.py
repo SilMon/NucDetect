@@ -5,7 +5,7 @@ from typing import Dict, Union, List, Iterable, Tuple, Any
 import numpy as np
 from numpy import ndarray
 
-from roi.ROI import ROI
+from core.roi.ROI import ROI
 
 
 class QualityTester:
@@ -86,9 +86,9 @@ class QualityTester:
         foci = self.check_size_boundaries(foci, self.settings["min_foc_area"], self.settings["max_foc_area"])
         self.log(f"Focus Size Check: {len(foci)}")
         # Check foci for intensity
-        foci = self.check_intensity_boundaries(foci, self.settings["min_foc_int"], 1)
+        #foci = self.check_intensity_boundaries(foci, self.settings["min_foc_int"], 1)
         self.log(f"Focus Intensity Check: {len(foci)}")
-        foci = self.check_focus_contrast(foci, self.settings["min_foc_cont"])
+        #foci = self.check_focus_contrast(foci, self.settings["min_foc_cont"])
         self.log(f"Focus Contrast Check: {len(foci)}")
         return main, foci
 
@@ -116,7 +116,6 @@ class QualityTester:
         :param upper_bound: Upper threshold
         :return: List of ROI that are larger than lower_bound and smaller than upper_bound
         """
-        # TODO check
         # Size factor gives the pix/mikro m ; area is given in pix
         return [x for x in roi if lower_bound <= x.calculate_dimensions()["area"] /
                 self.settings["size_factor"] <= upper_bound]

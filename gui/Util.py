@@ -10,8 +10,8 @@ from PyQt5.QtWidgets import QScrollArea, QVBoxLayout, QHBoxLayout, QWidget
 from skimage import io, img_as_ubyte
 from skimage.transform import resize
 
-from definitions.icons import Color
-from detector_modules.ImageLoader import ImageLoader
+from gui.definitions.icons import Color
+from core.detector_modules.ImageLoader import ImageLoader
 from gui import Paths
 
 IMAGE_FORMATS = [
@@ -21,7 +21,6 @@ IMAGE_FORMATS = [
         ".jpg",
         ".bmp"
 ]
-
 
 def create_scroll_area(layout_type: bool = False,
                        widget_resizable: bool = True) -> Tuple[QScrollArea, Union[QVBoxLayout, QHBoxLayout]]:

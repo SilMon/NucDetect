@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import multiprocessing
 import os
 import shutil
@@ -29,14 +27,14 @@ from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSpl
 from core.Detector import Detector
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
-from database.connections import Connector, Requester, Inserter
-from definitions.icons import Icon, Color
-from detector_modules.ImageLoader import ImageLoader
-from dialogs.data import Editor, ExperimentDialog, StatisticsDialog, DataExportDialog
-from dialogs.selection import ExperimentSelectionDialog
-from dialogs.settings import AnalysisSettingsDialog, SettingsDialog
-from gui import Paths, Util
-
+from core.database.connections import Connector, Requester, Inserter
+from gui.definitions.icons import Icon, Color
+from core.detector_modules.ImageLoader import ImageLoader
+from gui.dialogs.data import Editor, ExperimentDialog, StatisticsDialog, DataExportDialog
+from gui.dialogs.selection import ExperimentSelectionDialog
+from gui.dialogs.settings import AnalysisSettingsDialog, SettingsDialog
+from gui import Paths as gpaths
+from gui import Util
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, False)
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, False)
 pg.setConfigOptions(imageAxisOrder='row-major')
@@ -57,7 +55,7 @@ class NucDetect(QMainWindow):
                              "ROI Identifier", "Center Y",
                              "Center X", "Area [px]", "Ellipticity[%]",
                              "Or. Angle [deg]", "Maj. Axis", "Min. Axis",
-                             "match"]
+                             "Co-Localization [%]", "Channel", "Foci"]
 
     def __init__(self):
         """
@@ -108,21 +106,21 @@ class NucDetect(QMainWindow):
         :return: None
         """
         # Create the NucDetect folder
-        if not os.path.isdir(Paths.nuc_detect_dir):
-            os.makedirs(Paths.nuc_detect_dir)
+        if not os.path.isdir(gpaths.nuc_detect_dir):
+            os.makedirs(gpaths.nuc_detect_dir)
         # Create the thumbnail folder
-        if not os.path.isdir(Paths.thumb_path):
-            os.makedirs(Paths.thumb_path)
+        if not os.path.isdir(gpaths.thumb_path):
+            os.makedirs(gpaths.thumb_path)
         # Create the results folder
-        if not os.path.isdir(Paths.result_path):
-            os.makedirs(Paths.result_path)
+        if not os.path.isdir(gpaths.result_path):
+            os.makedirs(gpaths.result_path)
         # Create the images folder
-        if not os.path.isdir(Paths.images_path):
-            os.makedirs(Paths.images_path)
-            shutil.copy2(os.path.join(os.pardir, "demo.tif"), os.path.join(Paths.images_path, "demo.tif"))
+        if not os.path.isdir(gpaths.images_path):
+            os.makedirs(gpaths.images_path)
+            shutil.copy2(os.path.join(os.pardir, "demo.tif"), os.path.join(gpaths.images_path, "demo.tif"))
         # Create the log folder
-        if not os.path.isdir(Paths.log_dir_path):
-            os.makedirs(Paths.log_dir_path)
+        if not os.path.isdir(gpaths.log_dir_path):
+            os.makedirs(gpaths.log_dir_path)
 
     def load_settings(self) -> Dict:
         """
@@ -187,12 +185,12 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        self.ui = uic.loadUi(Paths.ui_main, self)
-        self.ui.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css")).read())
+        self.ui = uic.loadUi(gpaths.ui_main, self)
+        self.ui.setStyleSheet(open(os.path.join(gpaths.css_dir, "main.css")).read())
         # General Window Initialization
         self.setWindowTitle("NucDetect - Focus Analysis Software")
         self.setWindowIcon(Icon.get_icon("LOGO"))
-        self.ui.lbl_logo.setPixmap(QPixmap(os.path.join(Paths.logo_dir, "banner.png")))
+        self.ui.lbl_logo.setPixmap(QPixmap(os.path.join(gpaths.logo_dir, "banner.png")))
 
     def _initialize_image_list(self) -> None:
         """
@@ -200,7 +198,7 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        self.add_images_from_folder(Paths.images_path)
+        self.add_images_from_folder(gpaths.images_path)
         self.img_list_model = ImageListModel(self.ui.list_images, paths=self.loaded_files)
         self.ui.list_images.setModel(self.img_list_model)
         self.ui.list_images.selectionModel().selectionChanged.connect(self.on_image_selection_change)
@@ -240,6 +238,7 @@ class NucDetect(QMainWindow):
         self.ui.btn_delete_from_list.clicked.connect(self.remove_image_from_list)
         self.ui.btn_clear_list.clicked.connect(self.clear_image_list)
         self.ui.btn_reload.clicked.connect(self.reload)
+        self.ui.btn_about.clicked.connect(self.show_about_window)
 
     def _set_button_icons(self) -> None:
         """
@@ -258,6 +257,7 @@ class NucDetect(QMainWindow):
         self.ui.btn_delete_from_list.setIcon(Icon.get_icon("TIMES"))
         self.ui.btn_clear_list.setIcon(Icon.get_icon("TRASH_ALT"))
         self.ui.btn_reload.setIcon(Icon.get_icon("SYNC"))
+        self.ui.btn_about.setIcon(Icon.get_icon("QUESTION"))
 
     def _connect_signals(self) -> None:
         """
@@ -277,7 +277,7 @@ class NucDetect(QMainWindow):
         :return: None
         """
         self.loaded_files = []
-        self.add_images_from_folder(Paths.images_path, reload=True)
+        self.add_images_from_folder(gpaths.images_path, reload=True)
         self.img_list_model.set_paths(self.loaded_files)
 
     def fetch_more_images_if_needed(self, value: int, threshold: float = 0.75):
@@ -350,7 +350,7 @@ class NucDetect(QMainWindow):
         :return: The exit code of the dialog
         """
         msg = QMessageBox()
-        msg.setStyleSheet(open(os.path.join(Paths.css_dir, "messagebox.css"), "r").read())
+        msg.setStyleSheet(open(os.path.join(gpaths.css_dir, "messagebox.css"), "r").read())
         msg.setWindowIcon(Icon.get_icon("LOGO"))
         msg.setIcon(QMessageBox.Information)
         msg.setWindowTitle(title)
@@ -700,7 +700,7 @@ class NucDetect(QMainWindow):
                 self.write_to_log(msg)
                 curind = b
                 cur_batch += 1
-                self.detector.save_log_messages(Paths.log_path, True)
+                self.detector.save_log_messages(gpaths.log_path, True)
             self.enable_buttons()
             self.ui.list_images.setEnabled(True)
             settings["analysis_settings"]["logging"] = logstate
@@ -727,7 +727,7 @@ class NucDetect(QMainWindow):
         :param msg: The message to write to the log file
         :return: None
         """
-        with open(Paths.log_path, "a+") as lf:
+        with open(gpaths.log_path, "a+") as lf:
             lf.write("#" * 20 + "\n")
             lf.write(datetime.today().strftime("%Y-%m-%d") + "\n")
             lf.write(datetime.today().strftime("%H:%M:%S") + "\n")
@@ -797,6 +797,7 @@ class NucDetect(QMainWindow):
             roidat.append((hash(roi), handler.ident, True, roi.ident,
                            str(dim["center_x"]), str(dim["center_y"]),
                            dim["width"], dim["height"], asso, roi.detection_method, roi.match, roi.colocalized))
+            # TODO
             for p in roi.area:
                 pdat.append((hash(roi), p[0], p[1], p[2]))
             elldat.append(
@@ -910,7 +911,6 @@ class NucDetect(QMainWindow):
         chans = sorted(chans)
         # Create header
         header = copy(NucDetect.STANDARD_TABLE_HEADER)
-        header.extend(chans)
         if experiment:
             header.insert(2, "Group")
         rows = self.prepare_main_table_rows(experiment)
@@ -1142,7 +1142,7 @@ class NucDetect(QMainWindow):
             msg = QMessageBox()
             msg.setWindowIcon(Icon.get_icon("LOGO"))
             msg.setIcon(QMessageBox.Information)
-            msg.setStyleSheet(open(os.path.join(Paths.css_dir, "messagebox.css"), "r").read())
+            msg.setStyleSheet(open(os.path.join(gpaths.css_dir, "messagebox.css"), "r").read())
             msg.setWindowTitle("Warning")
             msg.setText("No experiments were defined")
             msg.setInformativeText("Statistics can only be displayed, if images are assigned to an experiment")
@@ -1166,7 +1166,7 @@ class NucDetect(QMainWindow):
         :return: None
         """
         sett = SettingsDialog(self.inserter)
-        sett.initialize_from_file(os.path.join(Paths.settings_path, "settings.json"))
+        sett.initialize_from_file(os.path.join(gpaths.settings_path, "settings.json"))
         code = sett.exec()
         if code == QDialog.Accepted:
             if sett.changed:
@@ -1200,6 +1200,24 @@ class NucDetect(QMainWindow):
         if code == QDialog.Accepted:
             self.create_result_table_from_list(self.roi_cache)
             self.check_all_item_statuses()
+
+    def show_about_window(self) -> None:
+        """
+        Method to show the about message box
+
+        :return: None
+        """
+        # Load the about text
+        with open(gpaths.about_txt_path, "r", encoding="utf-8") as f:
+            # Define new message box
+            msg = QMessageBox()
+            msg.setWindowIcon(Icon.get_icon("LOGO"))
+            msg.setIcon(QMessageBox.Information)
+            msg.setTextFormat(Qt.RichText)
+            msg.setText(f.read())
+            msg.setWindowTitle("About NucDetect")
+            msg.setStyleSheet(open(os.path.join(gpaths.css_dir, "main.css")).read())
+            msg.exec()
 
     def reflect_item_status_changes(self) -> None:
         """
@@ -1397,7 +1415,7 @@ def exception_hook(exc_type, exc_value, traceback_obj) -> None:
     msg = QMessageBox()
     msg.setIcon(QMessageBox.Critical)
     msg.setWindowIcon(Icon.get_icon("LOGO"))
-    msg.setStyleSheet(open(os.path.join(Paths.css_dir, "messagebox.css"), "r").read())
+    msg.setStyleSheet(open(os.path.join(gpaths.css_dir, "messagebox.css"), "r").read())
     msg.setText(text)
     msg.setInformativeText(info)
     msg.setWindowTitle(title)
@@ -1414,17 +1432,17 @@ def main() -> None:
         warnings.filterwarnings("ignore")
         sys.excepthook = exception_hook
         app = QtWidgets.QApplication(sys.argv)
-        pixmap = QPixmap(os.path.join(Paths.logo_dir, "banner_norm.png"))
+        pixmap = QPixmap(os.path.join(gpaths.logo_dir, "banner_norm.png"))
         splash = QSplashScreen(pixmap)
         splash.show()
         splash.showMessage("Checking for thumbnails...")
         print("Check files for thumbnails...")
         # Count number of available images
         total = 0
-        for root, dirs, files in os.walk(Paths.images_path):
+        for root, dirs, files in os.walk(gpaths.images_path):
             total += len(files)
         file_index = 1
-        for root, dirs, files in os.walk(Paths.images_path):
+        for root, dirs, files in os.walk(gpaths.images_path):
             for file in files:
                 msg = f"{file_index: 04d}:{total: 04d} checked..."
                 os.system('cls' if os.name == 'nt' else 'clear')

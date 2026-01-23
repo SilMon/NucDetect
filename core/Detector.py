@@ -13,7 +13,7 @@ from typing import Union, Dict, List, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 
-import Paths
+import gui.Paths as gpaths
 from core.detector_modules.AreaAndROIExtractor import extract_nuclei_from_maps, extract_foci_from_maps
 from core.detector_modules.FCNMapper import FCNMapper
 from core.detector_modules.FocusMapper import FocusMapper
@@ -61,7 +61,7 @@ class Detector:
             results.append(self.analyse_image(path, settings))
             print(f"Analysed image {os.path.basename(path)}")
         self.add_log_message(f"Analysed batch with size {len(images)} in {time.time() - start} seconds")
-        self.save_log_messages(Paths.log_path)
+        self.save_log_messages(gpaths.log_path)
         return results
 
     def analyse_image(self, path: str,
@@ -72,7 +72,7 @@ class Detector:
 
         :param path: The URL of the image
         :param settings: Dictionary containing the necessary information for analysis
-        :param save_log: If true, the analysis log will be saved to Paths.log_path
+        :param save_log: If true, the analysis log will be saved to gpaths.log_path
         :return: The analysis results as dict
         """
         analysis_settings = deepcopy(settings["analysis_settings"])
@@ -95,8 +95,8 @@ class Detector:
         active = settings["activated"]
         # Check if all channels are activated
         analysis_settings["names"] = [names[x] for x in range(len(names)) if active[x]]
-        analysis_settings["use_pre-processing"] = settings["use_pre-processing"]
         analysis_settings["main_channel_name"] = analysis_settings["names"][main_channel]
+
         channels = [channels[x] for x in range(len(channels)) if active[x]]
         # Adjust the index of the main channel
         for x in range(main_channel):
@@ -125,18 +125,15 @@ class Detector:
                 for channel in analysis_settings["foci_channel_names"]:
                     # Define map Comparator
                     mapc = MapComparator(main_roi,
-                                         maps1[analysis_settings["foci_channel_names"].index(channel)],
                                          [x for x in iproi if x.ident == channel],
-                                         maps2[analysis_settings["foci_channel_names"].index(channel)],
                                          [x for x in mlroi if x.ident == channel],
-                                         image.shape[:2],
                                          self.add_log_message)
                     foci.append(mapc.merge_overlapping_foci())
                 # Add all foci
                 for x in foci:
                     rois.extend(x)
-                # Check the foci for co-localisation
-                MapComparator.get_match_for_nuclei(main_roi, foci)
+                    # Check the foci for co-localisation TODO
+                    MapComparator.get_match_for_nuclei(main_roi, foci)
             elif detection_method == "image processing":
                 rois.extend(iproi)
             else:
@@ -165,7 +162,7 @@ class Detector:
         imgdat["used_settings"] = analysis_settings
         self.add_log_message(f"Total analysis time: {time.time() - start: .4f}")
         if save_log:
-            self.save_log_messages(Paths.log_path, True)
+            self.save_log_messages(gpaths.log_path, True)
             self.clear_log()
         return imgdat
 
@@ -206,7 +203,7 @@ class Detector:
         # Map foci
         self.focusmapper.set_channels(foc_channels)
         self.focusmapper.set_settings(analysis_settings)
-        foc_maps = self.focusmapper.map_foci(main=main, main_map=main_map)
+        foc_maps = self.focusmapper.map_foci()
         self.add_log_message(f"Finished IP foci extraction {time.time() - s0:.4f}")
         roi = Detector.extract_foci_from_maps(nuclei, foc_maps,
                                               analysis_settings["foci_channel_names"])

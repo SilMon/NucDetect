@@ -1,0 +1,14 @@
+<b>Version:</b> 1.0<br>
+
+<br><b>GitHub</b>:<br>
+https://github.com/SilMon/NucDetect
+
+<br><br><b>Developed by:</b><br>
+Romano Weiss<br>
+Stefan Rödiger
+
+<br><br><b>Developed at</b>:<br>
+Brandenburg University of Technology Cottbus-Senftenberg
+
+<br><br><b>Correspondence</b>:<br>
+stefan.roediger@b-tu.de

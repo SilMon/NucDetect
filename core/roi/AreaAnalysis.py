@@ -7,36 +7,45 @@ from matplotlib import pyplot as plt
 from numba import njit
 
 
-def merge_rle_areas(area1: List[Tuple[int, int, int]],
-                    area2: List[Tuple[int, int, int]]) -> List[Tuple[int, int, int]]:
+def get_rle_area_intersection(area1: List[Tuple[int, int, int]],
+                              area2: List[Tuple[int, int, int]]) -> List[Tuple[int, int, int]]:
     """
-    Function to merge to two run length encoded areas
+    Function to intersect two run length encoded areas
 
     :param area1: The first area
     :param area2: The second area
-    :return: The merged area
+    :return: The area intersection
     """
     # Check if any of the lines contains u-turns
     area1 = check_for_u_turn(area1)
     area2 = check_for_u_turn(area2)
-    # Get overlapping rows
-    ov_rows = get_potentially_overlapping_lines(area1, area2)
-    # Get all lines, that are not overlapping
-    no_lines1 = [line for line in area1 if line[0] not in ov_rows]
-    no_lines2 = [line for line in area2 if line[0] not in ov_rows]
-    # Get all lines that are potentially overlapping
-    o_lines1 = sorted([line for line in area1 if line[0] in ov_rows], key=lambda y: y[0])
-    o_lines2 = sorted([line for line in area2 if line[0] in ov_rows], key=lambda y: y[0])
-    if len(o_lines1) != len(o_lines2):
-        raise ValueError("Number of lines not equal!")
-    merged = []
-    for ind, line in enumerate(o_lines1):
-        al1 = line
-        al2 = o_lines2[ind]
-        merged.append(merge_lines(al1, al2))
-    # Return unchanged and merged lines
-    return sorted(no_lines1 + no_lines2 + merged)
-
+    # Check if both lists contain anything
+    if not area1 or not area2:
+        return []
+    # Ensure both lists are sorted by their y-coordinate
+    a = sorted(area1, key=lambda t: t[0])
+    b = sorted(area2, key=lambda t: t[0])
+    ya_start, ya_stop = a[0][0], a[-1][0]
+    yb_start, yb_stop = b[0][0], b[-1][0]
+    # Determine overlapping row range
+    y_start = max(ya_start, yb_start)
+    y_end = min(ya_stop, yb_stop)
+    # Check if there is any overlap at all
+    if y_start > y_end:
+        return []
+    # Compute offsets into a and b for row y_start
+    offset_a = y_start - ya_start
+    offset_b = y_start - yb_start
+    intersect = []
+    for k, y in enumerate(range(y_start, y_end + 1)):
+        ya, xa, rlea = a[offset_a + k]
+        yb, xb, rleb = b[offset_b + k]
+        # 1D intersection of [xa, xa + rlea) and [xb, xb + rleb)
+        start = max(xa, xb)
+        end = min(xa + rlea, xb + rleb)
+        if start < end:
+            intersect.append((y, start, end - start))
+    return intersect
 
 def check_for_u_turn(lines: List[Tuple[int, int, int]]) -> List[Tuple[int, int, int]]:
     """
@@ -137,7 +146,7 @@ def merge_lines(line1: Tuple[int, int, int], line2: Tuple[int, int, int]) -> Tup
         return l1[0], l1[1], start_dist + l2[2]
 
 
-@njit(cache=True)
+@njit
 def amax(lst: Iterable[int]) -> int:
     """
     Numba wrapper for np.amax
@@ -152,7 +161,7 @@ def amax(lst: Iterable[int]) -> int:
     return max_
 
 
-@njit(cache=True)
+@njit
 def amin(lst: Iterable[int]) -> int:
     """
     Numba wrapper for np.amin
@@ -167,7 +176,7 @@ def amin(lst: Iterable[int]) -> int:
     return min_
 
 
-@njit(cache=True)
+@njit
 def convert_area_to_binary_map(area: Iterable[Tuple[int, int]]) -> np.ndarray:
     """
     Function to convert an area to an array representation
@@ -185,7 +194,7 @@ def convert_area_to_binary_map(area: Iterable[Tuple[int, int]]) -> np.ndarray:
     return binmap
 
 
-@njit(cache=True)
+@njit
 def convert_area_to_array(area: Union[List[Tuple[int, int, int]], numba.typed.List], channel: np.ndarray) -> np.ndarray:
     """
     Function to extract the given area from the channel
@@ -205,7 +214,7 @@ def convert_area_to_array(area: Union[List[Tuple[int, int, int]], numba.typed.Li
     return carea
 
 
-@njit(cache=True)
+@njit
 def imprint_area_into_array(area: Iterable[Tuple[int, int, int]],
                             array: np.ndarray,
                             ident: int) -> None:
@@ -222,7 +231,7 @@ def imprint_area_into_array(area: Iterable[Tuple[int, int, int]],
         array[ar[0], ar[1]: ar[1] + ar[2]] = ident
 
 
-@njit(cache=True)
+@njit
 def get_bounding_box(area: Union[List[tuple[int, int, int]], numba.typed.List], rle=True) -> Tuple[int, int, int, int]:
     """
     Function to calculate the bounding box of the given area
@@ -236,14 +245,14 @@ def get_bounding_box(area: Union[List[tuple[int, int, int]], numba.typed.List], 
     ymin = amin(yvals)
     height = len(area)
     if rle:
-        # -1 because the start point is included in the run-length
-        width = amax([a[1] + a[2] - 1 for a in area]) - xmin
+        # Get the max run length
+        width = amax([a[2] for a in area])
     else:
         width = amax([a[1] for a in area]) - xmin + 1
     return ymin, xmin, height, width
 
 
-@njit(cache=True)
+@njit
 def get_surface(area: Iterable[Tuple[int, int, int]]) -> int:
     """
     Function to get the surface of an area
@@ -257,24 +266,27 @@ def get_surface(area: Iterable[Tuple[int, int, int]]) -> int:
     return s
 
 
-@njit(cache=True)
-def get_center(area: Iterable[Tuple[int, int, int]]) -> Tuple[int, int]:
+@njit
+def get_center(area: List[Tuple[int, int, int]]) -> Tuple[int, int]:
     """
     Function to get the center of the given area
 
     :param area: The area to get the center from
     :return: The center as y, x
     """
-    cy, cx = 0, 0
-    s = len(area)
+    cy, cx = 0.0, 0.0
+    total_pixels = 0
     for rle in area:
         ys, xs, rl = rle
-        cy += ys
-        cx += (xs + xs + rl - 1) / 2
-    return round(cy / s), round(cx / s)
+        cy += ys * rl
+        cx += (xs + (rl - 1)/2) * rl
+        total_pixels += rl
+    if not total_pixels:
+        return 0, 0
+    return round(cy / total_pixels), round(cx / total_pixels)
 
 
-@njit(cache=True)
+@njit
 def get_moment(area: Iterable[Tuple[int, int, int]],  p: int, q: int) -> float:
     """
     Function to get the moment of this ROI specified by p and q
@@ -291,7 +303,7 @@ def get_moment(area: Iterable[Tuple[int, int, int]],  p: int, q: int) -> float:
     return mom
 
 
-@njit(cache=True)
+@njit
 def get_central_moment(area: Iterable[Tuple[int, int, int]], p: int, q: int) -> float:
     """
     Function to get the central moment of this ROI
@@ -309,7 +321,7 @@ def get_central_moment(area: Iterable[Tuple[int, int, int]], p: int, q: int) -> 
     return mom
 
 
-@njit(cache=True)
+@njit
 def get_normalized_central_moment(area: Iterable[Tuple[int, int, int]], p: int, q: int) -> float:
     """
     Function to get the normalized central moment of this ROI
@@ -324,7 +336,7 @@ def get_normalized_central_moment(area: Iterable[Tuple[int, int, int]], p: int, 
     return get_central_moment(area, p, q) / norm
 
 
-@njit(cache=True)
+@njit
 def get_orientation_angle(area: Iterable[Tuple[int, int, int]]) -> float:
     """
     Function to get the angle of the main rotation axis of this roi relative to the main axis
@@ -341,7 +353,7 @@ def get_orientation_angle(area: Iterable[Tuple[int, int, int]]) -> float:
         return 0.0
 
 
-@njit(cache=True)
+@njit
 def get_orientation_vector(area: Iterable[Tuple[int, int, int]]) -> Tuple[float, float]:
     """
     Function to get the orientation vector of this ROI, relative to the main axis
@@ -359,7 +371,7 @@ def get_orientation_vector(area: Iterable[Tuple[int, int, int]]) -> Tuple[float,
         return x, y if a >= 0 else -y
 
 
-@njit(cache=True)
+@njit
 def get_calculation_factors(area: Iterable[Tuple[int, int, int]]) -> Iterable[float]:
     """
     Function to get the central moments m20, m02 and m11 from an area
@@ -375,7 +387,7 @@ def get_calculation_factors(area: Iterable[Tuple[int, int, int]]) -> Iterable[fl
     return a1, a2
 
 
-@njit(cache=True)
+@njit
 def get_ellipse_radii(area: Iterable[Tuple[int, int, int]]) -> Tuple[float, float]:
     """
     Function to get the radii of the enclosing ellipse for this area
@@ -388,7 +400,7 @@ def get_ellipse_radii(area: Iterable[Tuple[int, int, int]]) -> Tuple[float, floa
     return math.sqrt(((2 * a1) / ar)), math.sqrt(((2 * a2) / ar))
 
 
-@njit(cache=True)
+@njit
 def get_ovality(area: Iterable[Tuple[int, int, int]]) -> float:
     """
     Function to calculate the ovality of the given area
@@ -404,7 +416,7 @@ def get_ovality(area: Iterable[Tuple[int, int, int]]) -> float:
     return 4 * math.pi * are / per ** 2
 
 
-@njit(cache=True)
+@njit
 def get_perimeter(area: Iterable[Tuple[int, int, int]]) -> int:
     """
     Function to get the perimeter of the given area
@@ -434,7 +446,7 @@ def get_perimeter(area: Iterable[Tuple[int, int, int]]) -> int:
     return perimeter
 
 
-@njit(cache=True)
+@njit
 def get_eccentricity(area: Iterable[Tuple[int, int, int]]) -> float:
     """
     Function to get the eccentricity of this roi

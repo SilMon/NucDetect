@@ -139,6 +139,9 @@
          </item>
          <item>
           <widget class="QPushButton" name="btn_auto">
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
            <property name="toolTip">
             <string>Opens a dialog to semi-automatically adjust the nucleus detection</string>
            </property>

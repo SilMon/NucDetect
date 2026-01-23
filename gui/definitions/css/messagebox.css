@@ -3,7 +3,7 @@ QMessageBox {
 }
 
 QMessageBox QLabel{
-    color: white;
+    color: slategrey;
 }
 
 QMessageBox QPushbutton{

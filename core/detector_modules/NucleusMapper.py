@@ -10,8 +10,8 @@ from skimage.filters.rank import maximum
 from skimage.morphology.binary import binary_opening
 from skimage.segmentation import watershed
 
-from DataProcessing import create_circular_mask
-from detector_modules.AreaMapper import AreaMapper
+from core.DataProcessing import create_circular_mask
+from core.detector_modules.AreaMapper import AreaMapper
 
 
 class NucleusMapper(AreaMapper):

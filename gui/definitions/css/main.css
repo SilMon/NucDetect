@@ -1,70 +1,386 @@
-QPushButton[objectName="btn_red"]{
-	color: red;
+/* =======================================================================
+   Base palette and typography
+   ======================================================================= */
+
+/* Global widget base */
+QWidget {
+    background-color: #003366;          /* dark blue base */
+    color: #ffffff;
+    font-size: 13px;
+    font-family: "Segoe UI", "DejaVu Sans", "Arial", sans-serif;
 }
 
-QPushButton[objectName="btn_green"]{
-	color: green;
+/* Main windows and dialogs (explicit, for clarity) */
+QMainWindow,
+QDialog {
+    background-color: #003366;
 }
 
-QPushButton[objectName="btn_blue"]{
-	color: blue;
+/* Labels and basic text controls */
+QLabel,
+QCheckBox,
+QRadioButton {
+    color: #ffffff;
+    font-size: 13px;
 }
 
-QPushButton{
-	color: White;
-	background-color: rgba(22, 42, 75 , 255);
-	border: none;
-	font-size: 14px;
- 	text-align: center;
-	min-height: 25px;
-	min-width: 40px;
+/* Group box: for logical grouping of settings */
+QGroupBox {
+    border: 1px solid #3c4f7c;
+    border-radius: 3px;
+    margin-top: 10px;
+    padding: 6px;
+    font-weight: bold;
 }
 
-QPushButton:hover{
-	background-color:  rgba(15, 35, 68 , 255);
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 0 4px;
 }
 
-QPushButton:pressed{
-	background-color:  rgba(8, 28, 61 , 255);
+/* =======================================================================
+   Buttons
+   ======================================================================= */
+
+/* Special color buttons (text only, inherit other properties) */
+QPushButton[objectName="btn_red"] {
+    color: #ff6b6b;
 }
 
-QPushButton:disabled{
-	background-color:  rgba(40, 60, 100 , 255);
+QPushButton[objectName="btn_green"] {
+    color: #5ad46a;
 }
 
-QPushButton:checked{
-	background-color:  rgba(8, 28, 61 , 255);
+QPushButton[objectName="btn_blue"] {
+    color: #6bb6ff;
 }
 
-QTableView, QListView{
-	color: White;
-	background-color: rgba(77, 77, 77, 128)
+/* General push button style */
+QPushButton {
+    color: #ffffff;
+    background-color: #162a4b;
+    border: 1px solid #3c4f7c;
+    border-radius: 0px;                 /* square edges */
+    font-size: 13px;
+    text-align: center;
+
+    /* square geometry + spacing */
+    min-width: 28px;
+    min-height: 28px;
+    padding: 4px 6px;
+    margin: 3px;
 }
 
-QCheckBox{
-	color:White;
-	font-size: 16px;
+/* Hover / pressed / checked / disabled states */
+QPushButton:hover {
+    background-color: #0f2344;
 }
 
-QLabel{
-	color:White;
-	font-size:16px;
+QPushButton:pressed,
+QPushButton:checked {
+    background-color: #081c3d;
+    border-color: #5a78b0;
 }
+
+QPushButton:disabled {
+    background-color: #404f73;
+    border-color: #2e3a58;
+    color: #a0a9c4;
+}
+
+/* =======================================================================
+   Line edits, spin boxes, combo boxes, text edits
+   ======================================================================= */
+
+QLineEdit,
+QPlainTextEdit,
+QTextEdit,
+QComboBox,
+QAbstractSpinBox
+{
+    background-color: #0a3c6e;
+    color: #ffffff;
+    border: 1px solid #3c4f7c;
+    border-radius: 2px;
+    padding: 2px 4px;
+    selection-background-color: #205c9c;
+    selection-color: #ffffff;
+}
+
+/* Read-only fields (slightly dimmed) */
+QLineEdit:read-only {
+    background-color: #082b4f;
+    color: #c0c8e0;
+}
+
+/* Combo box popup list */
+QComboBox QAbstractItemView {
+    background-color: #0a3c6e;
+    color: #ffffff;
+    border: 1px solid #3c4f7c;
+    selection-background-color: #205c9c;
+    selection-color: #ffffff;
+}
+
+/* Spinbox buttons */
+/* Remove any platform-specific arrow images */
+QAbstractSpinBox::up-arrow,
+QAbstractSpinBox::down-arrow {
+    width: 8px;     /* must not be 0, otherwise nothing is drawn */
+    height: 8px;
+    margin: 2px;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+}
+QAbstractSpinBox::up-button,
+QAbstractSpinBox::down-button {
+    width: 30px;
+    border: none;
+    background-color: #162a4b;
+}
+
+QAbstractSpinBox::up-button:hover,
+QAbstractSpinBox::down-button:hover {
+    background-color: #0f2344;
+}
+
+/* Upper white triangle (up arrow) */
+QAbstractSpinBox::up-arrow {
+    image: url(gui/definitions/css/arrow_up.png);
+}
+
+/* Lower white triangle (down arrow) */
+QAbstractSpinBox::down-arrow {
+    image: url(gui/definitions/css/arrow_down.png);
+}
+
+/* Dim arrows when disabled */
+QAbstractSpinBox::up-arrow:disabled,
+QAbstractSpinBox::down-arrow:disabled {
+    border-bottom-color: #808080;  /* up */
+    border-top-color: #808080;     /* down */
+}
+
+/* =======================================================================
+   Check boxes and radio buttons
+   ======================================================================= */
+
+QCheckBox::indicator,
+QRadioButton::indicator {
+    width: 14px;
+    height: 14px;
+}
+
+QCheckBox::indicator {
+    border: 1px solid #3c4f7c;
+    background-color: #0a3c6e;
+}
+
+QCheckBox::indicator:checked {
+    background-color: #205c9c;
+    image: url(gui/definitions/css/checkmark.png);
+}
+
+QRadioButton::indicator {
+    border: 1px solid #3c4f7c;
+    background-color: #0a3c6e;
+    border-radius: 7px;
+}
+
+QRadioButton::indicator:checked {
+    image: url(gui/definitions/css/circle.png);
+    background-color: #205c9c;
+}
+
+/* =======================================================================
+   Tables, lists, trees
+   ======================================================================= */
+
+QTableView,
+QListView,
+QTreeView {
+    background-color: #1e1e1e;
+    alternate-background-color: #252526;
+    color: #ffffff;
+    gridline-color: #3c3c3c;
+    border: 1px solid #3c4f7c;
+    selection-background-color: #205c9c;
+    selection-color: #ffffff;
+}
+
+/* Headers for tables and trees */
+QHeaderView::section {
+    background-color: #162a4b;
+    color: #ffffff;
+    padding: 4px 6px;
+    border: 1px solid #3c4f7c;
+}
+
+/* List widgets (if used) */
+QListWidget {
+    background-color: #1e1e1e;
+    alternate-background-color: #252526;
+    color: #ffffff;
+    border: 1px solid #3c4f7c;
+    selection-background-color: #205c9c;
+    selection-color: #ffffff;
+}
+
+/* =======================================================================
+   Progress bar
+   ======================================================================= */
 
 QProgressBar {
-	color: White;
-    border: 1px solid grey;
-    background-color: rgb(10, 60, 110);
- }
-
- QProgressBar::chunk {
-     background-color: rgba(77, 77, 77, 128);
- }
-
-QDialog, QMainWindow{
-	background-color: rgb(0, 51, 102);
+    color: #ffffff;
+    border: 1px solid #3c4f7c;
+    background-color: #0a3c6e;
+    text-align: center;
 }
 
-QGraphicsView{
-	background-color: black;
+QProgressBar::chunk {
+    background-color: #4f8cd4;      /* accent blue */
+}
+
+/* =======================================================================
+   Tabs
+   ======================================================================= */
+
+QTabWidget::pane {
+    border: 1px solid #3c4f7c;
+    top: 1px;
+}
+
+QTabBar::tab {
+    background-color: #162a4b;
+    color: #ffffff;
+    padding: 4px 10px;
+    border: 1px solid #3c4f7c;
+    border-bottom: none;
+    margin-right: 2px;
+}
+
+QTabBar::tab:selected,
+QTabBar::tab:hover {
+    background-color: #205c9c;
+}
+
+/* =======================================================================
+   Menus, menu bar, toolbars, status bar
+   ======================================================================= */
+
+QMenuBar {
+    background-color: #162a4b;
+    color: #ffffff;
+}
+
+QMenuBar::item {
+    padding: 4px 10px;
+    background-color: transparent;
+}
+
+QMenuBar::item:selected {
+    background-color: #205c9c;
+}
+
+QMenu {
+    background-color: #162a4b;
+    color: #ffffff;
+    border: 1px solid #3c4f7c;
+}
+
+QMenu::item {
+    padding: 4px 16px;
+}
+
+QMenu::item:selected {
+    background-color: #205c9c;
+}
+
+QToolBar {
+    background-color: #162a4b;
+    border-bottom: 1px solid #3c4f7c;
+    spacing: 4px;
+}
+
+QStatusBar {
+    background-color: #081c3d;
+    color: #d0d6ec;
+}
+
+/* =======================================================================
+   Scrollbars and sliders
+   ======================================================================= */
+
+QScrollBar:vertical {
+    background: #0a3c6e;
+    width: 12px;
+    margin: 0px;
+}
+
+QScrollBar::handle:vertical {
+    background: #4f8cd4;
+    min-height: 20px;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    background: #162a4b;
+    height: 0px;
+}
+
+QScrollBar:horizontal {
+    background: #0a3c6e;
+    height: 12px;
+    margin: 0px;
+}
+
+QScrollBar::handle:horizontal {
+    background: #4f8cd4;
+    min-width: 20px;
+}
+
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    background: #162a4b;
+    width: 0px;
+}
+
+/* Sliders */
+QSlider::groove:horizontal {
+    height: 4px;
+    background: #3c4f7c;
+}
+
+QSlider::handle:horizontal {
+    background: #4f8cd4;
+    width: 12px;
+    margin: -4px 0;
+    border-radius: 6px;
+}
+
+QSlider::groove:vertical {
+    width: 4px;
+    background: #3c4f7c;
+}
+
+QSlider::handle:vertical {
+    background: #4f8cd4;
+    height: 12px;
+    margin: 0 -4px;
+    border-radius: 6px;
+}
+
+/* =======================================================================
+   Graphics view
+   ======================================================================= */
+
+/* Preserve black background for imaging / plots */
+QGraphicsView {
+    background-color: #000000;
+}
+
+/* Optional: frame around graphics view to integrate with theme */
+QGraphicsView {
+    border: 1px solid #3c4f7c;
 }

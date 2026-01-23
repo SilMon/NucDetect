@@ -6,9 +6,9 @@ import pyqtgraph as pg
 from PyQt5 import uic, QtCore
 from PyQt5.QtWidgets import QDialog, QWidget, QScrollArea, QSizePolicy, QVBoxLayout, QMessageBox
 
-import Paths
-from definitions.icons import Icon
-from settings.Settings import SettingsShowWidget, SettingsSlider, SettingsDial, SettingsSpinner, SettingsDecimalSpinner, \
+import gui.Paths as gpaths
+from gui.definitions.icons import Icon
+from gui.settings.Widgets import SettingsShowWidget, SettingsSlider, SettingsDial, SettingsSpinner, SettingsDecimalSpinner, \
     SettingsText, SettingsComboBox, SettingsCheckBox
 
 pg.setConfigOptions(imageAxisOrder='row-major')
@@ -31,7 +31,6 @@ class AnalysisSettingsDialog(QDialog):
         """
         return {
             "re-analyse": self.cbx_reanalyse.isChecked(),
-            "use_pre-processing": self.cbx_preproc.isChecked(),
             "add_to_experiment": self.ui.cbx_experiment.isChecked(),
             "experiment_details": {
                 "name": self.ui.le_name.text(),
@@ -55,7 +54,11 @@ class AnalysisSettingsDialog(QDialog):
             "main": abs(self.ui.main_channel_btn_group.checkedId()) - 2,
             "analysis_settings": {
                 "method": self.ui.detection_method_btn_group.checkedButton().text().lower(),
-                "dots_per_micron": self.spbx_mmpd.value()
+                "dots_per_micron": self.spbx_mmpd.value(),
+                "use_smoothing": self.cbx_noise.isChecked(),
+                "smoothing_method": self.cmbx_noise.currentText(),
+                "use_background_reduction": self.cbx_bckg.isChecked(),
+                "background_reduction_method": self.cmbx_bckg.currentText()
             }
         }
 
@@ -66,9 +69,9 @@ class AnalysisSettingsDialog(QDialog):
         :return: None
         """
         # Load UI definition
-        self.ui = uic.loadUi(Paths.ui_analysis_settings_dial, self)
+        self.ui = uic.loadUi(gpaths.ui_analysis_settings_dial, self)
         # Load css file
-        self.ui.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css")).read())
+        self.ui.setStyleSheet(open(os.path.join(gpaths.css_dir, "main.css")).read())
         self.setWindowIcon(Icon.get_icon("LOGO"))
         self.setWindowTitle("Analysis Settings")
         # Check if single image analysis or multi image analysis is performed
@@ -106,6 +109,14 @@ class AnalysisSettingsDialog(QDialog):
             channel_names[name].setEnabled(True)
             channel_names[name].setText(names[name])
         channel_main[self.settings["main_channel"]].setChecked(True)
+        # Fill the pre-processing combo boxes
+        self.ui.cmbx_noise.addItems(("Gaussian", "average",
+                                     "median", "Total Variation Denoising",
+                                     "Bilateral Denoising", "Wavelet Denoising"))
+        self.ui.cmbx_bckg.addItems(("White Top-Hat", "Unsharp Masking", "Butterworth-Filtering"))
+        # Bind the checkboxes for the pre-processing methods
+        self.ui.cbx_noise.toggled.connect(self.ui.cmbx_noise.setEnabled)
+        self.ui.cbx_bckg.toggled.connect(self.ui.cmbx_bckg.setEnabled)
         # Bind checkboxes for individual channels to the corresponding text edit
         self.ui.cbx_one.toggled.connect(self.ui.le_one.setEnabled)
         self.ui.cbx_one.toggled.connect(self.ui.rbtn_one.setEnabled)
@@ -134,7 +145,7 @@ class SettingsDialog(QDialog):
         self._initialize_ui()
 
     def _initialize_ui(self) -> None:
-        self.ui = uic.loadUi(Paths.ui_settings_dial, self)
+        self.ui = uic.loadUi(gpaths.ui_settings_dial, self)
         # Load css file
         self.setWindowFlags(
             self.windowFlags() |
@@ -144,7 +155,7 @@ class SettingsDialog(QDialog):
         )
         self.setWindowIcon(Icon.get_icon("LOGO"))
         self.setWindowTitle("Settings")
-        self.setStyleSheet(open(os.path.join(Paths.css_dir, "settings.css"), "r").read())
+        self.setStyleSheet(open(os.path.join(gpaths.css_dir, "main.css"), "r").read())
         self.setModal(True)
         self.ui.btn_reset_db.clicked.connect(self.reset_database)
         self.ui.btn_reset_an.clicked.connect(self.reset_analysis_data)
@@ -170,7 +181,7 @@ class SettingsDialog(QDialog):
         msbbox = QMessageBox()
         msbbox.setIcon(QMessageBox.Warning)
         msbbox.setWindowIcon(Icon.get_icon("LOGO"))
-        msbbox.setStyleSheet(open(os.path.join(Paths.css_dir, "messagebox.css"), "r").read())
+        msbbox.setStyleSheet(open(os.path.join(gpaths.css_dir, "messagebox.css"), "r").read())
         msbbox.addButton(QMessageBox.Yes)
         msbbox.addButton(QMessageBox.No)
         msbbox.setWindowTitle("Warning: Permanent removal of stored data imminent")
@@ -205,7 +216,7 @@ class SettingsDialog(QDialog):
         """
         if self.show_warning_dialog("This action will erase all saved logs. Are you sure?") == QMessageBox.Yes:
             print("Log file erased")
-            with open(Paths.log_path, "w") as log_file:
+            with open(gpaths.log_path, "w") as log_file:
                 log_file.write("")
 
     def initialize_from_file(self, url: str) -> None:

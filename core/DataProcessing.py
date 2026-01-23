@@ -1,12 +1,98 @@
 import math
-from typing import Tuple, Union, List
+import os
+from concurrent.futures import ProcessPoolExecutor
+from itertools import product
 
 import numpy as np
+from typing import Tuple, Union, List, Dict
+
+import pandas as pd
+from scipy.stats import permutation_test, cramervonmises_2samp
 from numba import njit
 from numba.typed import List as nList
 
 
-@njit(cache=True)
+def convert_p_values(pval: float) -> str:
+    """
+    Function to convert p-values to *
+    p > 0.05 -> n.s.
+    p <= 0.05 -> *
+    p <= 0.01 -> **
+    p <= 0.005 -> ***
+
+    :param pval: The p value to convert
+    :return: The converted p-value
+    """
+    pv_str = "n.s."
+    if pval < 0.05:
+        pv_str = "*"
+    if pval <= 0.01:
+        pv_str = "**"
+    if pval <= 0.005:
+        pv_str = "***"
+    return pv_str
+
+def get_unique_pairs(data_a, data_b) -> list:
+    """
+    Function to create a set of unique pairs from both lists
+
+    :param data_a: The first list of data
+    :param data_b: The second list of data
+    :return: The set containing the pairs
+    """
+    return sorted({tuple(sorted((x, y))) for x, y in product(data_a, data_b) if x != y})
+
+def cvm_wrapper(x, y, axis):
+    return cramervonmises_2samp(y, x, axis=axis).statistic
+
+
+def perform_statistical_analysis_on_groups(data: pd.DataFrame,
+                                           comparison_groups: List[str]) -> pd.DataFrame:
+    """
+    Function to compare the given groups to each using a permutation test
+
+    :param data: The relevant group data
+    :param comparison_groups: The comparison groups which are tested against
+
+    :return: The calculated data as pandas dataframe
+    """
+    # Get the unique pairings with each comparison group and channel
+    pairs = list(product(get_unique_pairs(comparison_groups, data["Group"].unique()), data["Channel"].unique()))
+    # Clean the pairs up to create two parameter lists
+    param_a = [data.query(f"Channel == '{x[1]}'") for x in pairs]
+    param_b = pairs
+    # Start a ProcessPool to calculate the results
+    with ProcessPoolExecutor(max_workers=(os.cpu_count() // 2) + 2) as exe:
+        res = exe.map(_perform_statistical_analysis_on_group, param_a, param_b)
+        rows = []
+        [rows.append(x) for x in res]
+        stat_data = pd.DataFrame(rows,
+                                 columns=("Group", "Channel", "Tested Against", "Statistic", "p-Value", "Significance"))
+        pd.to_numeric(stat_data["Statistic"], errors="coerce")
+        pd.to_numeric(stat_data["p-Value"], errors="coerce")
+        return stat_data
+
+def _perform_statistical_analysis_on_group(data: pd.DataFrame, pair: Tuple[str, str]) -> Tuple:
+    """
+    Function to perform a permutation test for the given pair on the given channel
+
+    :param data: The underlying data as pandas DataFrame
+    :param pair: The pair to check
+    :return: The statistical data as pandas DataFrame
+    """
+    rows = []
+    control = data.query(f"Group == '{pair[0][0]}'")["Foci"].to_numpy()
+    test = data.query(f"Group == '{pair[0][1]}'")["Foci"].to_numpy()
+    perm_data = permutation_test(data=(control,
+                                       test),
+                                 rng=42,
+                                 statistic=cvm_wrapper,
+                                 n_resamples=9999)
+    return (pair[0][0], pair[1], pair[0][1], perm_data.statistic,
+            perm_data.pvalue, convert_p_values(perm_data.pvalue))
+
+
+@njit
 def create_lg_lut(m: int) -> List[int]:
     """
     Function to create a little_gauss lookup table for the given m values
@@ -17,7 +103,7 @@ def create_lg_lut(m: int) -> List[int]:
     return [little_gauss(x) for x in range(m + 1)]
 
 
-@njit(cache=True)
+@njit
 def little_gauss(n: int) -> int:
     """
     Function to calculate the sum of all numbers between 0 and n
@@ -28,7 +114,7 @@ def little_gauss(n: int) -> int:
     return (n * n + n) // 2
 
 
-@njit(cache=True)
+@njit
 def get_region_outlines(binary_map: np.ndarray) -> np.ndarray:
     """
     Function to get the outlines of the given binary map
@@ -132,7 +218,7 @@ def automatic_whitebalance(image: np.ndarray, cutoff: float = 0.05) -> np.ndarra
     return image
 
 
-@njit(cache=True)
+@njit
 def euclidean_distance(p1: Tuple[int, int], p2: Tuple[int, int]) -> float:
     """
     Function to calculate the Euclidean distance between two two-dimensional points
@@ -144,7 +230,7 @@ def euclidean_distance(p1: Tuple[int, int], p2: Tuple[int, int]) -> float:
     return math.sqrt(((p2[0] - p1[0]) ** 2) + ((p2[1] - p1[1]) ** 2))
 
 
-@njit(cache=True)
+@njit
 def get_circle_area(d: int) -> float:
     """
     Function to calculate the area of a circle
@@ -155,7 +241,7 @@ def get_circle_area(d: int) -> float:
     return math.pi * (d / 2) ** 2
 
 
-@njit(cache=True)
+@njit
 def calculate_overlap_between_two_circles(c1: Tuple[int, int, int, int], c2: Tuple[int, int, int, int]) -> float:
     """
     Function to calculate the overlap between two circles
@@ -201,7 +287,7 @@ def calculate_overlap_between_two_circles(c1: Tuple[int, int, int, int], c2: Tup
     return part1 + part2 - part3
 
 
-@njit(cache=True)
+@njit
 def check_if_two_circles_overlap(c1: Tuple[int, int, int, int], c2: Tuple[int, int, int, int]) -> bool:
     """
     Method to check if the two given circles overlap
@@ -242,7 +328,7 @@ def calculate_overlap_between_two_circles_as_percentage(c1: Tuple[int, int, int,
             return ovl / (min(area_1, area_2) / max(area_1, area_2))
 
 
-@njit(cache=True)
+@njit
 def check_circles_for_engulfment(c1: Tuple[int, int, int, int], c2: Tuple[int, int, int, int]) -> bool:
     """
     Function to check if one of the circles is engulfed in the other
@@ -279,7 +365,7 @@ def create_circular_mask(h: Union[int, float], w: Union[int, float],
     return mask
 
 
-@njit(cache=True)
+@njit
 def relabel_array(array: np.ndarray) -> None:
     """
     Function to relabel a given binary map
@@ -294,7 +380,7 @@ def relabel_array(array: np.ndarray) -> None:
             array[y][x] = nums[unique.index(array[y][x])]
 
 
-@njit(cache=True)
+@njit
 def get_major_axis(points: nList) -> Tuple[Tuple[int, int], Tuple[int, int]]:
     """
     Function to get the two points with the highest distance from a list of points
@@ -317,7 +403,7 @@ def get_major_axis(points: nList) -> Tuple[Tuple[int, int], Tuple[int, int]]:
     return p0, p1
 
 
-@njit(cache=True)
+@njit
 def get_minor_axis(points: nList, p0: Tuple[int, int], p1: Tuple[int, int]) -> Tuple[Tuple[int, int],
                                                                                      Tuple[int, int]]:
     """
@@ -356,7 +442,7 @@ def get_minor_axis(points: nList, p0: Tuple[int, int], p1: Tuple[int, int]) -> T
     return center, pmin
 
 
-@njit(cache=True)
+@njit
 def imprint_data_into_channel(channel: np.ndarray, data: np.ndarray, offset: Union[int, float]) -> None:
     """
     Function to transfer the information stored in data into channel. Works in place

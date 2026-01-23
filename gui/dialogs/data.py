@@ -2,34 +2,42 @@ import copy
 import os
 import sqlite3
 import threading
+
+import matplotlib as mpl
+from matplotlib import font_manager
+from threading import Thread
 from typing import List, Tuple, Dict, Any, Union
 
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
 from PyQt5 import uic, QtCore, QtGui
-from PyQt5.QtCore import QRectF, Qt, QPoint, QPointF, QItemSelection
+from PyQt5.QtCore import QRectF, Qt, QPoint, QPointF, QItemSelection, QAbstractTableModel, QVariant, pyqtSignal, QTimer
 from PyQt5.QtGui import QKeyEvent, QPen, QColor, QMouseEvent, QBrush, QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsRectItem, QGraphicsEllipseItem, QInputDialog, QLabel, \
-    QSpacerItem, QSizePolicy, QMessageBox, QSpinBox
+    QSpacerItem, QSizePolicy, QMessageBox, QSpinBox, QHBoxLayout, QCheckBox, QPushButton, QVBoxLayout, QHeaderView, \
+    QMenuBar, QMenu, QAction, QComboBox, QWidgetAction, QListWidget, QAbstractItemView, QListWidgetItem, \
+    QAbstractScrollArea
 from scipy import ndimage as ndi
 from skimage.draw import line
 from skimage.segmentation import watershed
+from matplotlib.backends.backend_qt5 import NavigationToolbar2QT as NavigationToolbar
 
-import Util
-from DataProcessing import euclidean_distance
-from Plots import PoissonPlotWidget
-from Util import create_image_item_list_from
-from database.connections import Inserter, Requester
-from definitions.icons import Icon, Color
-from detector_modules import AreaAndROIExtractor
-from dialogs.GraphicsItems import EditorView
-from dialogs.selection import ImageSelectionDialog
+from gui import Plots
+from gui import Util
+from core.DataProcessing import euclidean_distance, perform_statistical_analysis_on_groups, convert_p_values
+from gui.Plots import PoissonPlotWidget, PlotCanvas
+from gui.Util import create_image_item_list_from
+from core.database.connections import Inserter, Requester
+from gui.definitions.icons import Icon, Color
+from core.detector_modules import AreaAndROIExtractor
+from gui.dialogs.GraphicsItems import EditorView
+from gui.dialogs.selection import ImageSelectionDialog, ExperimentSelectionDialog
 from gui import Paths
-from loader import Loader
-from roi.AreaAnalysis import imprint_area_into_array
-from roi.ROI import ROI
-from roi.ROIHandler import ROIHandler
+from gui.loader import Loader
+from core.roi.AreaAnalysis import imprint_area_into_array
+from core.roi.ROI import ROI
+from core.roi.ROIHandler import ROIHandler
 
 pg.setConfigOptions(imageAxisOrder='row-major')
 
@@ -57,7 +65,7 @@ class DataExportDialog(QDialog):
         :param display_name: The name of the currently selected image. None if there is no current image
         """
         super(DataExportDialog, self).__init__()
-        self.threads: List[threading.Thread] = []
+        self.threads: List[Thread] = []
         self.cur_img = current_image
         self.disp_name = display_name
         self.req = Requester(protected=False)
@@ -224,10 +232,8 @@ class DataExportDialog(QDialog):
         """
         # Get general table header
         header = copy.copy(self.STANDARD_HEADER)
-        # Get associated channels for the experiment
-        chans = self.req.get_channels_for_experiment(experiment)
         header.insert(2, "Group")
-        header.extend(chans)
+        header.extend(("Channel", "Foci"))
         # Get the data for the given image
         rows = self.req.get_table_data_for_experiment(experiment)
         self.save_table_to_disk(experiment,
@@ -352,6 +358,8 @@ class Editor(QDialog):
         self.ui.btn_add.setIcon(Icon.get_icon("PLUS_CIRCLE"))
         self.ui.btn_edit.setIcon(Icon.get_icon("EDIT"))
         self.ui.btn_auto.setIcon(Icon.get_icon("MAGIC"))
+        # TODO fix
+        self.ui.btn_auto.setVisible(False)
         self.ui.btn_show.setIcon(Icon.get_icon("CIRCLE"))
         self.ui.btn_coords.setIcon(Icon.get_icon("MOUSE"))
         self.ui.btn_preview.setIcon(Icon.get_icon("EYE"))
@@ -874,6 +882,7 @@ class AutoEdit(QDialog):
 
     @staticmethod
     def get_end_points_of_separation_lines(edm: np.ndarray, linepoints, orth: Tuple[float, float]):
+        # TODO
         max_distance = 10000000
         brakes = None
         for line_point in linepoints:
@@ -1486,9 +1495,10 @@ class ExperimentDialog(QDialog):
                 # Enable buttons for input
                 self.ui.btn_images_add.setEnabled(True)
                 self.ui.btn_remove.setEnabled(True)
+            self.enable_experiment_buttons(True)
         else:
             self.clear_experiment_screen()
-        self.enable_experiment_buttons(True)
+            self.enable_experiment_buttons(False)
 
     def enable_text_inputs(self, enable: bool = True) -> None:
         """
@@ -1621,7 +1631,8 @@ class StatisticsDialog(QDialog):
     """
     Dialog to show statistical analysis of data
     """
-
+    stat_calculation_finished_signal = pyqtSignal()
+    # TODO aktualisieren, hübsch machen, tatsächliche Statistiken einführen
     def __init__(self, experiment: str, active_channels: Dict, *args, **kwargs):
         """
         :param experiment: The experiment to show
@@ -1630,25 +1641,33 @@ class StatisticsDialog(QDialog):
         :param kwargs: Keyword arguments
         """
         super().__init__(*args, **kwargs)
-        self.was_initialized = False
         self.ui = None
         self.experiment = experiment
         self.active_channels = active_channels
         self.requester = Requester()
-        self.current_channel = 0
-        self.current_group = None
-        self.current_distribution = 0
-        self.channels: List = []
-        self.groups: List = []
-        self.qlabels: List = []
-        self.qplot: List = []
-        self.group_data: Dict = {}
-        self.group_keys: Dict = {}
-        self.plot_widget: PoissonPlotWidget = None
+        self.data = self.get_group_data()
+        self.statistics = None
+        self.comparison_groups: List = []
         self.initialize_ui()
-        self.get_raw_data()
-        self.prepare_plot()
-        self.was_initialized = True
+        self._add_group_boxes()
+        self.settings = copy.copy(Plots.STANDARD_SETTINGS)
+        self.general_settings = {
+            "show_ns": True,
+            "show_title": True,
+            "show_xlabel": True,
+            "show_ylabel": True,
+            "show_legend": True,
+            "legend_fontsize": 7,
+            "show_grid": True,
+            "minor_steps": 5,
+            "major_steps": 10,
+            "violin_inner": "quartile",
+            "violin_split": True,
+            "orientation": "vertical",
+            "palette": "husl"
+        }
+        self.plot_data()
+        self.stat_calculation_finished_signal.connect(self._display_calculated_statistics)
 
     def initialize_ui(self) -> None:
         """
@@ -1657,218 +1676,510 @@ class StatisticsDialog(QDialog):
         :return: None
         """
         self.ui = uic.loadUi(Paths.ui_stat_dial, self)
+        self.list_widget = None
+        self.menu_bar = StatisticsDialogMenuBar(parent=self)
+        self.layout().insertWidget(0, self.menu_bar)
         # Set window and style
         self.setWindowIcon(Icon.get_icon("LOGO"))
         self.setWindowTitle(f"Statistics for {self.experiment}")
         self.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css"), "r").read())
-        self.ui.cbx_dist.addItems(["Poisson"])
-        # Bind comboboxes to listeners
-        self.ui.cbx_dist.currentIndexChanged.connect(self.change_distribution)
-        self.ui.cbx_channel.currentIndexChanged.connect(self.change_channel)
-        self.ui.cbx_group.currentIndexChanged.connect(self.change_group)
+        self._initialize_plot_widgets()
+        self.ui.tv_group_data.setModel(DataFrameModel(self.data))
+        self.ui.tv_group_data.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.ui.tv_group_data.verticalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.ui.btn_statistics.clicked.connect(self.calculate_and_display_statistics)
+        self.ui.btn_statistics.setEnabled(False)
+        self.ui.lbl_statistics.setVisible(False)
+        self.ui.tv_group_statistics.setVisible(False)
+        self.setWindowFlags(self.windowFlags() |
+                            QtCore.Qt.WindowSystemMenuHint |
+                            QtCore.Qt.WindowMinMaxButtonsHint)
+        self.setWindowState(self.windowState() | QtCore.Qt.WindowMaximized)
+
+    def _initialize_plot_widgets(self):
+        self.canvas = PlotCanvas(self)
+        self.toolbar = NavigationToolbar(self.canvas, self)
+        self.toolbar.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.cmbx_type = QComboBox()
+        self.cmbx_type.addItems(PlotCanvas.plot_types)
+        self.cmbx_type.currentTextChanged.connect(self.change_plot_type)
+        h_layout = QHBoxLayout()
+        h_layout.addWidget(self.toolbar)
+        h_layout.addWidget(self.cmbx_type)
+        self.ui.vl_data.addLayout(h_layout)
+        self.ui.vl_data.addWidget(self.canvas)
+
+    def initialize_statistics_table(self) -> None:
+        """
+        Method to populate the data and statistics tables
+
+        :return: None
+        """
+        if not isinstance(self.ui.tv_group_statistics.model(), DataFrameModel):
+            self.ui.tv_group_statistics.setModel(DataFrameModel(self.statistics))
+        else:
+            # Reset the view and add the newly calculated data
+            self.ui.tv_group_statistics.model().setDataFrame(self.statistics)
+        self.ui.tv_group_statistics.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.ui.tv_group_statistics.verticalHeader().setSectionResizeMode(QHeaderView.Stretch)
+
+    def change_experiment(self):
+        """
+        Method to change the currently viewed experiment
+
+        :return: None
+        """
+        exp_sel_dial = ExperimentSelectionDialog()
+        code = exp_sel_dial.exec()
+        if code == QDialog.Accepted:
+            self.experiment = exp_sel_dial.sel_exp
+            self.active_channels = exp_sel_dial.active_channels
+            # Load the data from the new experiment
+            self.get_group_data()
+            # Reset the group boxes
+            for i in reversed(range(self.ui.vl_groups.count())):
+                # Check is this is a sub-layout
+                if self.ui.vl_groups.itemAt(i).widget() is None:
+                    # Get the layout
+                    layout = self.ui.vl_groups.itemAt(i).layout()
+                    for i in reversed(range(layout.count())):
+                        layout.itemAt(i).widget().setParent(None)
+                    # Remove the layout
+                    layout.setParent(None)
+            if self.ui.tv_group_statistics.model() is not None:
+                self.ui.tv_group_statistics.model().setDataFrame(pd.DataFrame())
+            self._add_group_boxes()
+            # Plot the new data
+            self.plot_statistics()
+
+    def export_data(self):
+        """
+        Method to export the group and statistics data
+
+        :return: None
+        """
+        self.data.to_csv(os.path.join(Paths.result_path, f"{self.experiment}_group_data.csv"))
+        if self.statistics is not None:
+            self.statistics.to_csv(os.path.join(Paths.result_path, f"{self.experiment}_group_data_statistics.csv"))
+        msg = QMessageBox()
+        msg.setWindowIcon(Icon.get_icon("LOGO"))
+        msg.setIcon(QMessageBox.Information)
+        msg.setStyleSheet(open(os.path.join(Paths.css_dir, "messagebox.css"), "r").read())
+        msg.setWindowTitle("Data exported!")
+        msg.setText("Data successfully exported!")
+        msg.setInformativeText(f"CSV files can be found at {Paths.result_path}")
+        msg.setStandardButtons(QMessageBox.Ok)
+        msg.exec()
+
+    def calculate_and_display_statistics(self) -> Dict[str, Dict[str, List]]:
+        """
+        Method to calculate the necessary statistics
+
+        :return: None
+        """
+        thread = Thread(target=self._calculate_statistics)
+        self.setEnabled(False)
+        thread.start()
+
+    def _calculate_statistics(self) -> None:
+        self.statistics = perform_statistical_analysis_on_groups(
+            data=self.data,
+            comparison_groups=self.get_comparison_groups()
+        )
+        self.stat_calculation_finished_signal.emit()
+
+    def _display_calculated_statistics(self) -> None:
+        self.ui.lbl_statistics.setVisible(True)
+        self.ui.tv_group_statistics.setVisible(True)
+        self.initialize_statistics_table()
+        self.plot_statistics()
+        self.setEnabled(True)
+
+    def _add_group_boxes(self) -> None:
+        """
+        Private method to populate the group section
+
+        :return: None
+        """
+        # Check if the list widget was already created
+        if not self.list_widget:
+            self.list_widget = QListWidget(self)
+            self.list_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+            self.list_widget.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
+            # Enable drag&drop reordering
+            self.list_widget.setDragDropMode(QAbstractItemView.InternalMove)
+            self.list_widget.setSelectionMode(QAbstractItemView.SingleSelection)
+            self.ui.vl_groups.addWidget(self.list_widget)
+            self.list_widget.itemChanged.connect(self.enable_statistics_button)
+            self.list_widget.model().rowsMoved.connect(self.plot_data)
+        else:
+            self.list_widget.clear()
+        # Get the respective groups
+        for group in sorted(self.data["Group"].unique()):
+            item = QListWidgetItem(group)
+            # Make the item checkable and draggable
+            flags = item.flags()
+            flags |= QtCore.Qt.ItemIsUserCheckable
+            flags |= QtCore.Qt.ItemIsDragEnabled
+            flags |= QtCore.Qt.ItemIsEnabled
+            item.setFlags(flags)
+            item.setCheckState(QtCore.Qt.Unchecked)
+            self.list_widget.addItem(item)
+
+    def enable_statistics_button(self) -> None:
+        """
+        Method to chec kif the statistics button should be enabled
+
+        :return: None
+        """
+        self.ui.btn_statistics.setEnabled(bool(self.get_comparison_groups()))
+
+
+    def get_comparison_groups(self) -> list[str]:
+        """
+        Private method to identify active comparison groups
+
+        :return: Dictionary with each group and its activation status
+        """
+        active_groups = []
+        for row in range(self.list_widget.count()):
+            item = self.list_widget.item(row)
+            if item.checkState() == QtCore.Qt.Checked:
+                active_groups.append(item.text())
+        return active_groups
+
+    def get_group_ordering(self):
+        ordering = []
+        for row in range(self.list_widget.count()):
+            ordering.append(self.list_widget.item(row).text())
+        return ordering
+
+    def get_group_data(self) -> pd.DataFrame:
+        """
+        Function to get the data for each group
+
+        :return: None
+        """
+        data_header = DataExportDialog.STANDARD_HEADER + ["Channel", "Foci"]
+        data_header.insert(2, "Group")
+        # Load the data
+        data = pd.DataFrame(self.requester.get_table_data_for_experiment(self.experiment),
+                            columns=data_header)
+        # Remove the unnecessary columns
+        data = data[["Group", "Channel", "Foci"]]
+        # Tell pandas which dtypes to use
+        data["Foci"] = pd.to_numeric(data["Foci"], errors="coerce")
+        return data
+
+    def change_plot_type(self, text: str):
+        self.plot_data()
+        self.plot_statistics()
+
+    def plot_data(self) -> None:
+        self.canvas.plot(self.data,
+                         title=self.experiment,
+                         type=self.ui.cmbx_type.currentText(),
+                         ordering=self.get_group_ordering(),
+                         settings = self.settings,
+                         specific_settings=self.general_settings)
+
+    def plot_statistics(self) -> None:
+        self.plot_data()
+        self.canvas.display_statistics(statistics=self.statistics,
+                                       data=self.data,
+                                       ordering=self.get_group_ordering(),
+                                       show_ns=self.general_settings["show_ns"])
+
+    def update_settings(self, settings: dict, special_settings: Dict) -> None:
+        """
+        Method to update the used settings for plotting
+
+        :param settings: The general settings
+        :param special_settings: The special settings (aka the settings not used by matplotlib through RCI)
+        :return: None
+        """
+        self.settings = settings
+        self.general_settings = special_settings
+        self.plot_data()
+        self.plot_statistics()
+
+
+class DataFrameModel(QAbstractTableModel):
+    # Class to display pandas DataFrames
+    def __init__(self, df: pd.DataFrame):
+        super().__init__()
+        self.set_df(df)
+
+    def set_df(self, df) -> None:
+        """
+        Method to initialize the DataFrameModel
+
+        :param df: The data to display as pandas DataFrame
+        :return:None
+        """
+        self.data = df
+        self._values = df.to_numpy(copy=False)
+        self._columns = df.columns.to_list()
+        self._index = df.index.to_list()
+
+    def setDataFrame(self, df):
+        self.beginResetModel()
+        self.set_df(df)
+        self.endResetModel()
+
+    def rowCount(self, parent=None) -> int:
+        """
+        Method to return the number of rows in the DataFrameModel
+
+        :param parent: Parent of this widget
+        :return: The number of rows as int
+        """
+        return self._values.shape[0]
+
+    def columnCount(self, parent=None) -> int:
+        """
+        Method to return the number of columns in the DataFrameModel
+
+        :param parent: The parent of this widget
+        :return: The number of columns as int
+        """
+        return self._values.shape[1]
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid():
+            return QVariant()
+
+        r, c = index.row(), index.column()
+        val = self._values[r, c]
+
+        if role == Qt.DisplayRole:
+            # Fast, reasonable formatting
+            if pd.isna(val):
+                return ""
+            if isinstance(val, float):
+                return f"{val:.6g}"  # scientific-ish, compact
+            return str(val)
+
+        return QVariant()
+
+    def headerData(self, section, orientation, role=Qt.DisplayRole):
+        if role != Qt.DisplayRole:
+            return QVariant()
+        if orientation == Qt.Horizontal:
+            return self._columns[section]
+        else:
+            return str(self._index[section])
+
+    def sort(self,
+             column: int,
+             order: int) -> None:
+        """
+        Method to enable sorting
+
+        :param column: The column to use for sorting
+        :param order: The ordering to use for sorting
+        :return: None
+        """
+        # Optional: enable sorting; for large DF this is still decent
+        self.layoutAboutToBeChanged.emit()
+        ascending = order == Qt.AscendingOrder
+        self.data.sort_values(self._columns[column],
+                              ascending=ascending,
+                              inplace=True,
+                              kind="mergesort")
+        self._values = self.data.to_numpy(copy=False)
+        self._index = self.data.index.to_list()
+        self.layoutChanged.emit()
+
+
+class StatisticsDialogMenuBar(QMenuBar):
+    # Class to add a menu bar to the statistics dialog
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._initialize_selection_menu()
+        self._initialize_settings_menu()
+
+    def _initialize_selection_menu(self):
+        self.file_menu = QMenu("File", self)
+        # Add actions
+        self.act_change = QAction("Change experiment", self)
+        self.act_export = QAction("Export results…", self)
+        self.act_close = QAction("Close", self)
+        # Add triggers
+        self.act_change.triggered.connect(self.parent().change_experiment)
+        self.act_export.triggered.connect(self.parent().export_data)
+        self.act_close.triggered.connect(self.parent().close)
+        # Add the actions to the menu
+        self.file_menu.addAction(self.act_change)
+        self.file_menu.addAction(self.act_export)
+        self.file_menu.addSeparator()
+        self.file_menu.addAction(self.act_close)
+        self.addMenu(self.file_menu)
+
+    def _initialize_settings_menu(self):
+        self.settings_menu = QMenu("Diagram Settings", self)
+        self.act_show_ns = QAction("Show non-significant", self, checkable=True, checked=True)
+        self.act_show_title = QAction("Show title", self, checkable=True, checked=True)
+        self.act_show_xlabel = QAction("Show xlabel", self, checkable=True, checked=True)
+        self.act_show_ylabel = QAction("Show ylabel", self, checkable=True, checked=True)
+        self.act_open_diag_set = QAction("Expanded Settings...")
+        # Add triggers
+        self.act_open_diag_set.triggered.connect(self.open_plot_settings)
+        self.act_show_ns.triggered.connect(self._update_parent_settings)
+        self.act_show_title.triggered.connect(self._update_parent_settings)
+        self.act_show_xlabel.triggered.connect(self._update_parent_settings)
+        self.act_show_ylabel.triggered.connect(self._update_parent_settings)
+        # Add the actions to the settings menu
+        self.settings_menu.addAction(self.act_show_ns)
+        self.settings_menu.addAction(self.act_show_title)
+        self.settings_menu.addAction(self.act_show_xlabel)
+        self.settings_menu.addAction(self.act_show_ylabel)
+        self.settings_menu.addSeparator()
+        self.settings_menu.addAction(self.act_open_diag_set)
+        self.addMenu(self.settings_menu)
+
+    def _update_parent_settings(self):
+        psett = self.parent().general_settings
+        psett["show_ns"] = self.act_show_ns.isChecked()
+        psett["show_title"] = self.act_show_title.isChecked()
+        psett["show_xlabel"] = self.act_show_xlabel.isChecked()
+        psett["show_ylabel"] = self.act_show_ylabel.isChecked()
+        self.parent().plot_statistics()
+
+
+    def open_plot_settings(self):
+        sett = PlotSettingsDialog()
+        code = sett.exec()
+        if code == QDialog.Accepted:
+            sett.settings["show_ns"] = self.act_show_ns.isChecked()
+            sett.settings["show_title"] = self.act_show_title.isChecked()
+            sett.settings["show_xlabel"] = self.act_show_xlabel.isChecked()
+            sett.settings["show_ylabel"] = self.act_show_ylabel.isChecked()
+            self.parent().update_settings(sett.settings,
+                                          sett.specific_settings)
+
+
+class PlotSettingsDialog(QDialog):
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.update_timer = QTimer(self)
+        self.update_timer.setSingleShot(True)
+        self.update_timer.setInterval(300)
+        self.update_timer.timeout.connect(self.update_plots)
+        self.initialize_ui()
+        self.settings = copy.copy(Plots.STANDARD_SETTINGS)
+        self.specific_settings = {
+            "show_legend": True,
+            "show_title": True,
+            "show_xlabel": True,
+            "show_ylabel": True,
+            "legend_fontsize": 10,
+            "show_grid": True,
+            "palette": "husl",
+            "violin_split": True,
+            "violin_inner": "quartile",
+            "orientation": "vertical",
+            "minor_steps": 5,
+            "major_steps": 10
+        }
+        self.create_mockup_diagram()
+
+    def accept(self):
+        self.update_settings()
+        super().accept()
+
+    def initialize_ui(self):
+        self.ui = uic.loadUi(Paths.ui_stat_plot_settings_dial, self)
+        # Initialize the combo box
+        self.ui.cmbx_font.addItems(sorted(self.get_available_fonts()))
+        self.ui.cmbx_font.setCurrentText("DejaVu Sans")
+        self.ui.cmbx_palette.addItems(Plots.COLOR_PALETTES)
+        self.ui.cmbx_palette.setCurrentText("deep")
+        self.ui.cmbx_violin_inner.addItems(["quartile", "box", "stick", "point"])
+        self.ui.cmbx_orientation.addItems(["vertical", "horizontal"])
+        self._connect_widgets_to_update_timer()
+        # Set window and style
+        self.setWindowIcon(Icon.get_icon("LOGO"))
+        self.setWindowTitle("Diagram Settings")
+        self.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css"), "r").read())
         self.setWindowFlags(self.windowFlags() |
                             QtCore.Qt.WindowSystemMenuHint |
                             QtCore.Qt.WindowMinMaxButtonsHint)
 
-    def get_raw_data(self) -> None:
-        """
-        Method to retrieve the data about groups from the database
+    def _connect_widgets_to_update_timer(self):
+        self.ui.spb_h_size.valueChanged.connect(self.update_timer.start)
+        self.ui.spb_v_size.valueChanged.connect(self.update_timer.start)
+        self.ui.spb_dpi.valueChanged.connect(self.update_timer.start)
+        self.ui.cmbx_font.currentTextChanged.connect(self.update_timer.start)
+        self.ui.spb_title_size.valueChanged.connect(self.update_timer.start)
+        self.ui.spb_axis_size.valueChanged.connect(self.update_timer.start)
+        self.ui.spb_tick_size.valueChanged.connect(self.update_timer.start)
+        self.ui.cmbx_palette.currentTextChanged.connect(self.update_timer.start)
+        self.ui.cbx_show_legend.stateChanged.connect(self.update_timer.start)
+        self.ui.spb_legend_font_size.valueChanged.connect(self.update_timer.start)
+        self.ui.cbx_grid_show.stateChanged.connect(self.update_timer.start)
+        self.ui.cbx_ticks_minor.stateChanged.connect(self.update_timer.start)
+        self.ui.spb_steps_major.valueChanged.connect(self.update_timer.start)
+        self.ui.spb_steps_minor.valueChanged.connect(self.update_timer.start)
+        self.ui.cmbx_orientation.currentTextChanged.connect(self.update_timer.start)
+        self.ui.cbx_violin_split.stateChanged.connect(self.update_timer.start)
+        self.ui.cmbx_violin_inner.currentTextChanged.connect(self.update_timer.start)
 
-        :return: None
-        """
-        # Get the groups associated with the experiment
-        groups = self.requester.get_groups_for_experiment(self.experiment)
-        for group in groups:
-            self.group_keys[group] = list()
-        imgs = self.requester.get_associated_images_for_experiment(self.experiment)
-        for img in imgs:
-            # Get associated group for image
-            group = self.requester.get_associated_group_for_image(img, self.experiment)
-            if group in self.group_keys:
-                self.group_keys[group].append(img)
-            else:
-                self.group_keys[group] = [img]
-        # Get the channels of the image
-        channels = self.requester.get_channels_for_experiment(self.experiment)
-        # Get main channel
-        main = self.requester.get_main_channel_for_experiment(self.experiment)
-        # Clean up channels
-        self.channels = [x for x in channels if x != main and self.active_channels[x]]
-        self.ui.cbx_channel.addItems(self.channels)
-        # Select first channel as standard
-        self.ui.cbx_group.addItems(self.group_keys.keys())
-        # Select first group as standard
-        self.ui.cbx_channel.setCurrentIndex(0)
-        self.ui.cbx_group.setCurrentIndex(0)
-        self.current_channel = self.channels[0]
-        self.current_group = list(self.group_keys.keys())[0]
-        # Create empty data lists
-        for group in self.group_keys.keys():
-            self.groups.append(group)
-            self.group_data[group] = [[] for _ in self.channels]
-        # Get data for every group
-        self.get_data_for_groups()
+    def get_available_fonts(self):
+        font_files = font_manager.findSystemFonts()
+        for font_file in font_files:
+            font_manager.fontManager.addfont(font_file)
+        return font_manager.get_font_names()
 
-    def get_data_for_groups(self) -> None:
-        """
-        Get the data for all defined groups
+    def create_mockup_diagram(self):
+        self.canvas_violin = PlotCanvas(self)
+        self.canvas_box = PlotCanvas(self)
+        np.random.seed(42)
+        # Create mockup data
+        group_a = [("Control", "Channel Y", x) for x in np.random.randint(0, 30, size=35)]
+        group_a.extend([("Control", "Channel X", x) for x in np.random.randint(0, 45, size=78)])
+        group_b = [("Test", "Channel Y", x) for x in np.random.randint(0, 145, size=25)]
+        group_b.extend([("Test", "Channel X", x) for x in np.random.randint(0, 112, size=44)])
+        self.data = pd.DataFrame(group_a + group_b, columns=["Group", "Channel", "Foci"])
+        v_lay = QVBoxLayout()
+        v_lay.addWidget(self.canvas_violin)
+        v_lay.addWidget(self.canvas_box)
+        self.ui.hl_data.addLayout(v_lay, stretch=3)
+        self.update_plots()
 
-        :return: None
-        """
-        for group in self.group_keys.keys():
-            # Get keys corresponding to currently
-            keys = self.group_keys.get(group, [])
-            # Iterate over all images of the group
-            for key in keys:
-                # Get all nuclei for this image
-                nuclei = self.requester.get_nuclei_hashes_for_image(key)
-                # Get the associated group for this image
-                # Get the foci per individual nucleus
-                for nuc in nuclei:
-                    # Check all available channels
-                    for channel in self.channels:
-                        index = self.channels.index(channel)
-                        # Get the data for this nucleus from database
-                        self.group_data[group][index].append(
-                            self.requester.count_foci_for_nucleus_and_channel(nuc, channel)
-                        )
+    def update_plots(self):
+        self.update_settings()
+        self.canvas_violin.plot(data=self.data,
+                                type=PlotCanvas.plot_types[0],
+                                settings=self.settings,
+                                specific_settings=self.specific_settings)
+        self.canvas_box.plot(data=self.data,
+                             title="Box Plot",
+                             type=PlotCanvas.plot_types[1],
+                             settings=self.settings,
+                             specific_settings=self.specific_settings)
 
-    def prepare_plot(self) -> None:
-        """
-        Method to prepare the plot
-
-        :return: The Plot Widget
-        """
-        if not self.plot_widget:
-            # Get the data to display
-            data = self.group_data[self.current_group][self.channels.index(self.current_channel)]
-            # Create the plot
-            self.plot_widget = PoissonPlotWidget(data=data, label=self.current_group)
-            # Add plot to UI
-            self.ui.vl_data.addWidget(self.plot_widget)
-            # Prepare labels to show
-            texts = [
-                f"Values:\t\t{len(data)}",
-                f"Average:\t{np.average(data):.2f}",
-                f"Min.:\t\t{np.amin(data)}",
-                f"Max.:\t\t{np.amax(data)}"
-            ]
-            self.create_labels(texts)
-
-    def update_plot_data(self) -> List[str]:
-        """
-        Method to create plots for the value tab
-
-        :return: The respective diagram as PlotItem and associated labels
-        """
-        # Get the data to display
-        data = self.group_data[self.current_group][self.channels.index(self.current_channel)]
-        self.plot_widget.set_data(data,
-                                  f"{self.current_channel}({self.current_group}) - Comparison to Poisson Distribution")
-        # Create the associated texts
-        texts = [
-            f"Values:\t\t{len(data)}",
-            f"Average:\t{np.average(data):.2f}",
-            f"Min.:\t\t{np.amin(data)}",
-            f"Max.:\t\t{np.amax(data)}"
-        ]
-        return texts
-
-    def create_labels(self, texts: List[str]) -> None:
-        """
-        Method to create the labels specified by texts
-        :param texts: List of strings to display
-        :return: None
-        """
-        # Add new texts
-        for text in texts:
-            label = QLabel(text)
-            label.setAlignment(Qt.AlignLeft)
-            self.ui.vl_text.addWidget(QLabel(text))
-        self.ui.vl_text.addItem(QSpacerItem(40, 20, QSizePolicy.Minimum, QSizePolicy.Expanding))
-
-    def get_active_plot_and_texts(self) -> List[str]:
-        """
-        Method to get the currently selected plot and associated texts
-        :return: a tuple containing the plot and the associated texts as List of strings
-        """
-        plot_type = self.ui.cbx_dist.currentIndex()
-        if plot_type == 0:
-            return self.update_plot_data()
-        else:
-            print("No match")
-            return self.update_plot_data()
-
-    def clear_labels(self) -> None:
-        """
-        Method to remove all added labels
-
-        :return: None
-        """
-        if self.ui.vl_text.itemAt(0):
-            # Delete all 4 labels
-            self.ui.vl_text.itemAt(0).widget().deleteLater()
-            self.ui.vl_text.itemAt(1).widget().deleteLater()
-            self.ui.vl_text.itemAt(2).widget().deleteLater()
-            self.ui.vl_text.itemAt(3).widget().deleteLater()
-            # Also delete spacer
-            self.ui.vl_text.removeItem(self.ui.vl_text.itemAt(4))
-
-    def clear_plots(self) -> None:
-        """
-        Method to clear all added plots
-
-        :return: None
-        """
-        if self.ui.vl_data.itemAt(0):
-            self.ui.vl_data.itemAt(0).widget().deleteLater()
-
-    def change_group(self, index: int) -> None:
-        """
-        Method to change the active group
-
-        :param index: The index of the new distribution
-        :return: None
-        """
-        if not self.was_initialized:
-            return
-        self.current_group = self.groups[index]
-        self.create_plot()
-
-    def change_channel(self, index: int) -> None:
-        """
-        Method to change the active channel
-
-        :param index: The index of the new distribution
-        :return: None
-        """
-        if not self.was_initialized:
-            return
-        self.current_channel = self.channels[index]
-        self.create_plot()
-
-    def change_distribution(self, index: int) -> None:
-        """
-        Method to change the active distribution
-
-        :param index: The index of the new distribution
-        :return: None
-        """
-        if not self.was_initialized:
-            return
-        self.current_distribution = index
-        self.create_plot()
-
-    def create_plot(self) -> None:
-        """
-        Method to fill the dialog
-
-        :return: None
-        """
-        texts = self.get_active_plot_and_texts()
-        self.clear_labels()
-        self.create_labels(texts)
-        self.update_plot_data()
+    def update_settings(self):
+        self.settings["figure.figsize"] = self.ui.spb_h_size.value(), self.ui.spb_v_size.value()
+        self.settings["figure.dpi"] = self.ui.spb_dpi.value()
+        self.settings["savefig.dpi"] = self.ui.spb_dpi.value()
+        self.settings["font.family"] = self.ui.cmbx_font.currentText()
+        self.settings["axes.titlesize"] = self.ui.spb_title_size.value()
+        self.settings["axes.labelsize"] = self.ui.spb_axis_size.value()
+        self.settings["xtick.labelsize"] = self.ui.spb_tick_size.value()
+        self.settings["ytick.labelsize"] = self.ui.spb_tick_size.value()
+        self.settings["ytick.minor.visible"] = self.ui.cbx_ticks_minor.isChecked()
+        self.specific_settings["show_grid"] = self.ui.cbx_grid_show.isChecked()
+        self.specific_settings["show_legend"] = self.ui.cbx_show_legend.isChecked()
+        self.specific_settings["legend_fontsize"] = self.ui.spb_legend_font_size.value()
+        self.specific_settings["palette"] = self.ui.cmbx_palette.currentText()
+        self.specific_settings["major_steps"] = self.ui.spb_steps_major.value()
+        self.specific_settings["minor_steps"] = self.ui.spb_steps_minor.value()
+        self.specific_settings["violin_split"] = self.ui.cbx_violin_split.isChecked()
+        self.specific_settings["violin_inner"] = self.ui.cmbx_violin_inner.currentText()
+        self.specific_settings["orientation"] = self.ui.cmbx_orientation.currentText()
 
 
 class GroupDialog(QDialog):
@@ -1905,8 +2216,9 @@ class GroupDialog(QDialog):
         self.ui.lv_groups.selectionModel().selectionChanged.connect(self.on_group_selection_change)
         self.ui.btn_add_images.clicked.connect(self.add_images_to_group)
         self.ui.btn_remove_image.clicked.connect(self.remove_selected_image)
+        self.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css")).read())
         self.setWindowTitle("Group Dialog")
-        self.setWindowIcon(QtGui.QIcon('logo.png'))
+        self.setWindowIcon(Icon.get_icon("LOGO"))
         self.setWindowFlags(self.windowFlags() |
                             QtCore.Qt.WindowSystemMenuHint |
                             QtCore.Qt.WindowMinMaxButtonsHint)

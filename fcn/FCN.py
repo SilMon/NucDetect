@@ -98,9 +98,9 @@ class FCN:
         :return: A tuple of the loaded models
         """
         nuc_path: Path = FCN.script_dir / "nucleus_detector.h5"
-        foc_path: Path = FCN.script_dir / "detector.h5"
-        nuc_model = models.load_models(nuc_path.resolve())
-        foc_model = models.load_models(foc_path.resolve())
+        foc_path: Path = FCN.script_dir / "detector.keras"
+        nuc_model = models.load_model(nuc_path.resolve())
+        foc_model = models.load_model(foc_path.resolve())
         logging.info("Models loaded")
         return nuc_model, foc_model
 
@@ -211,16 +211,6 @@ class FCN:
         mask = prediction_mask > threshold
         mask = mask.astype("uint8")
         return label(mask)
-        """
-        # Label the individual areas of the map
-        label = 2
-        for y in range(height):
-            for x in range(width):
-                if mask[y][x] == 1:
-                    FCN.flood_fill(mask, (y, x), label)
-                    label += 1
-        return mask
-        """
 
     @staticmethod
     @jit(nopython=True)

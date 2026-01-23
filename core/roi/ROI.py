@@ -12,10 +12,10 @@ from typing import Union, Dict, List, Tuple, Iterable
 import numpy as np
 from numba.typed import List as numList
 
-from DataProcessing import calculate_overlap_between_two_circles
+from core.DataProcessing import calculate_overlap_between_two_circles
 from core.roi.AreaAnalysis import get_bounding_box, get_center, get_surface, get_ellipse_radii, get_orientation_angle, \
     get_orientation_vector, get_eccentricity, get_ovality
-from roi import AreaAnalysis
+from core.roi import AreaAnalysis
 
 
 class ROI:
@@ -112,24 +112,21 @@ class ROI:
             self.id = int(f"0x{md5.hexdigest()}", 0)
         return self.id
 
-    def merge(self, roi: ROI) -> None:
+    def merge(self, roi: ROI) -> ROI:
         """
         Method to merge this roi with another ROI
 
         :param roi: The roi to merge with this
-        :return: None
+        :return: Reference to self
         """
         if isinstance(roi, ROI):
             if roi.ident == self.ident:
+                if not self.associated:
+                    self.associated = roi.associated
                 self.add_to_area(roi.area)
-                self.detection_method = "Merged"
-                self.id = None
-                self.dims.clear()
-                self.stats.clear()
-                self.ell_params.clear()
-            else:
                 warnings.warn(f"The ROI {hash(self)} and  "
                               f"{hash(roi)} have different channel IDs!({self.ident}, {roi.ident})")
+            return self
         else:
             raise ValueError(f"{type(roi)} is not a ROI")
 
@@ -175,20 +172,28 @@ class ROI:
         :param rle: run length encoded area
         :return: None
         """
+        if not rle:
+            return
         self.area.clear()
         self.area = rle
         self.reset_stored_values()
 
-    def add_to_area(self, rle):
+    def add_to_area(self, rle) -> bool:
         """
         Method to extend the area of this ROI with the given area
 
         :param rle: RL encoded area to add to this ROI
-        :return: None
+        :return: True, the areas were merged
         """
-        self.detection_method = "Merged"
-        self.area = AreaAnalysis.merge_rle_areas(self.area, rle)
-        self.reset_stored_values()
+        # Get the intersecting area
+        intersect = AreaAnalysis.get_rle_area_intersection(self.area, rle)
+        if intersect:
+            self.area = intersect
+            self.detection_method = "Merged"
+            self.reset_stored_values()
+            return True
+        else:
+            return False
 
     def is_valid(self) -> bool:
         """
@@ -261,7 +266,8 @@ class ROI:
                 raise Exception(f"ROI {self.id} associated to {self.associated} does not contain any points!")
         return self.dims
 
-    def extract_area_intensity(self, channel: np.ndarray) -> List[Union[int, float]]:
+    def extract_area_intensity(self,
+                               channel: np.ndarray) -> List[Union[int, float]]:
         """
         Method to extract the intensity values of this roi from the given channel
 

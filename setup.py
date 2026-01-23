@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="UTF-8") as fh:
 
 setuptools.setup(
     name="NucDetect",
-    version="0.20.0",
+    version="1.0",
     description=("Module to quantify intranuclear foci on basis of "
                  "immunofluorescence images."),
     author="Romano Weiss",
@@ -17,20 +17,25 @@ setuptools.setup(
         "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
         "Intended Audience :: Developers",
         "Intended Audience :: Science/Research",
-        "Programming Language :: Python :: 3.9"
+        "Programming Language :: Python :: 3.12"
     ],
     include_package_data=True,
     packages=setuptools.find_packages(),
     install_requires=[
-        "tensorflow>2.2.0",
-        "numpy>1.18.1",
-        "scikit-image>0.16.2",
-        "matplotlib>3.1.3",
-        "pyqt5>5.14.1",
-        "numba>0.48.0",
-        "pillow>7.0.0",
-        "qtawesome>0.6.1",
+        "tensorflow-cpu>=2.17.0",
+        "scikit-image>=0.16.2",
+        "matplotlib>=3.1.3",
+        "seaborn>=0.13.2",
+        "statannotations>=0.7.2",
+        "pyqt5>=5.14.1",
+        "numba>=0.48.0",
+        "pillow>=11.13.0",
+        "qtawesome==1.3.1",
         "piexif>=1.1.3",
-        "pyqtgraph>=0.11.1"
+        "pyqtgraph>=0.14.0",
+        "pandas>=2.1.4",
+        "imagecodecs>=2026.1.1",
+        "openpyxl>=3.1.5",
+        "PyWavelets>=1.9.0",
     ]
 )

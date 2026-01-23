@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>605</width>
-    <height>477</height>
+    <height>582</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -81,41 +81,94 @@
       </widget>
      </item>
      <item row="2" column="0">
-      <widget class="QLabel" name="label_13">
+      <widget class="QLabel" name="label_12">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
        <property name="text">
-        <string>Pre-Processing:</string>
+        <string>Noise Reduction:</string>
        </property>
       </widget>
      </item>
      <item row="2" column="1">
-      <layout class="QHBoxLayout" name="horizontalLayout_12">
+      <layout class="QHBoxLayout" name="horizontalLayout_10">
        <item>
-        <widget class="QCheckBox" name="cbx_smoothing">
-         <property name="text">
-          <string>Smoothing</string>
+        <widget class="QComboBox" name="cmbx_noise">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
          </property>
         </widget>
        </item>
        <item>
-        <widget class="QCheckBox" name="cbx_preproc">
+        <widget class="QCheckBox" name="cbx_noise">
          <property name="text">
-          <string>Contrast Enhancement</string>
-         </property>
-         <property name="checked">
-          <bool>false</bool>
+          <string/>
          </property>
         </widget>
        </item>
       </layout>
      </item>
-     <item row="3" column="0">
+     <item row="4" column="0">
+      <widget class="QLabel" name="label_16">
+       <property name="sizePolicy">
+        <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
+         <horstretch>0</horstretch>
+         <verstretch>0</verstretch>
+        </sizepolicy>
+       </property>
+       <property name="text">
+        <string>Background Reduction:</string>
+       </property>
+      </widget>
+     </item>
+     <item row="4" column="1">
+      <layout class="QHBoxLayout" name="horizontalLayout_11">
+       <item>
+        <widget class="QComboBox" name="cmbx_bckg">
+         <property name="enabled">
+          <bool>false</bool>
+         </property>
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+           <horstretch>0</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="cbx_bckg">
+         <property name="text">
+          <string/>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+     <item row="6" column="1">
+      <widget class="Line" name="line_2">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+      </widget>
+     </item>
+     <item row="7" column="0">
       <widget class="QLabel" name="label_11">
        <property name="text">
         <string>Dots per micron:</string>
        </property>
       </widget>
      </item>
-     <item row="3" column="1">
+     <item row="7" column="1">
       <widget class="QDoubleSpinBox" name="spbx_mmpd">
        <property name="toolTip">
         <string>Standard value (6.412) assumes a 1024x1024 image at 400 magnification</string>
@@ -134,7 +187,7 @@
        </property>
       </widget>
      </item>
-     <item row="4" column="1">
+     <item row="8" column="1">
       <widget class="QLabel" name="label_9">
        <property name="text">
         <string>Experiment Details</string>
@@ -144,14 +197,14 @@
        </property>
       </widget>
      </item>
-     <item row="5" column="0">
+     <item row="9" column="0">
       <widget class="QLabel" name="label">
        <property name="text">
         <string>Name</string>
        </property>
       </widget>
      </item>
-     <item row="5" column="1">
+     <item row="9" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_7">
        <item>
         <widget class="QLineEdit" name="le_name">
@@ -178,14 +231,14 @@
        </item>
       </layout>
      </item>
-     <item row="6" column="0">
+     <item row="10" column="0">
       <widget class="QLabel" name="label_8">
        <property name="text">
         <string>Details</string>
        </property>
       </widget>
      </item>
-     <item row="6" column="1">
+     <item row="10" column="1">
       <widget class="QPlainTextEdit" name="pte_details">
        <property name="enabled">
         <bool>false</bool>
@@ -198,14 +251,14 @@
        </property>
       </widget>
      </item>
-     <item row="7" column="0">
+     <item row="11" column="0">
       <widget class="QLabel" name="label_10">
        <property name="text">
         <string>Notes</string>
        </property>
       </widget>
      </item>
-     <item row="7" column="1">
+     <item row="11" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_8">
        <item>
         <widget class="QPlainTextEdit" name="pte_notes">
@@ -222,14 +275,14 @@
        </item>
       </layout>
      </item>
-     <item row="8" column="0">
+     <item row="12" column="0">
       <widget class="Line" name="line">
        <property name="orientation">
         <enum>Qt::Horizontal</enum>
        </property>
       </widget>
      </item>
-     <item row="8" column="1">
+     <item row="12" column="1">
       <widget class="QLabel" name="label_7">
        <property name="text">
         <string>Active Channels</string>
@@ -239,14 +292,14 @@
        </property>
       </widget>
      </item>
-     <item row="10" column="0">
+     <item row="14" column="0">
       <widget class="QLabel" name="label_2">
        <property name="text">
         <string>Channel 1</string>
        </property>
       </widget>
      </item>
-     <item row="10" column="1">
+     <item row="14" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_2">
        <item>
         <widget class="QLineEdit" name="le_one">
@@ -286,14 +339,14 @@
        </item>
       </layout>
      </item>
-     <item row="11" column="0">
+     <item row="15" column="0">
       <widget class="QLabel" name="label_3">
        <property name="text">
         <string>Channel 2</string>
        </property>
       </widget>
      </item>
-     <item row="11" column="1">
+     <item row="15" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_3">
        <item>
         <widget class="QLineEdit" name="le_two">
@@ -336,14 +389,14 @@
        </item>
       </layout>
      </item>
-     <item row="12" column="0">
+     <item row="16" column="0">
       <widget class="QLabel" name="label_4">
        <property name="text">
         <string>Channel 3</string>
        </property>
       </widget>
      </item>
-     <item row="12" column="1">
+     <item row="16" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_4">
        <item>
         <widget class="QLineEdit" name="le_three">
@@ -386,14 +439,14 @@
        </item>
       </layout>
      </item>
-     <item row="13" column="0">
+     <item row="17" column="0">
       <widget class="QLabel" name="label_5">
        <property name="text">
         <string>Channel 4</string>
        </property>
       </widget>
      </item>
-     <item row="13" column="1">
+     <item row="17" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_5">
        <item>
         <widget class="QLineEdit" name="le_four">
@@ -436,14 +489,14 @@
        </item>
       </layout>
      </item>
-     <item row="14" column="0">
+     <item row="18" column="0">
       <widget class="QLabel" name="label_6">
        <property name="text">
         <string>Channel 5</string>
        </property>
       </widget>
      </item>
-     <item row="14" column="1">
+     <item row="18" column="1">
       <layout class="QHBoxLayout" name="horizontalLayout_6">
        <item>
         <widget class="QLineEdit" name="le_five">
@@ -536,7 +589,7 @@
   </connection>
  </connections>
  <buttongroups>
-  <buttongroup name="detection_method_btn_group"/>
   <buttongroup name="main_channel_btn_group"/>
+  <buttongroup name="detection_method_btn_group"/>
  </buttongroups>
 </ui>

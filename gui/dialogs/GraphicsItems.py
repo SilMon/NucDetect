@@ -11,10 +11,10 @@ from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsEllipseItem, QGraph
 from pyqtgraph import HistogramLUTItem, ColorBarItem
 from skimage.draw import ellipse
 
-from DataProcessing import create_lg_lut, automatic_colorbalance
+from core.DataProcessing import create_lg_lut, automatic_colorbalance
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
-from database.connections import Requester, Inserter
+from core.database.connections import Requester, Inserter
 from gui.loader import ROIDrawerTimer
 
 
@@ -584,7 +584,7 @@ class EditorView(pg.GraphicsView):
             return
         # Calculate statistics
         roidat = (hash(roi), image_id, False, roi.ident,
-                  item.center[1], item.center[0], item.edit_rect.width,
+                  item.center[0], item.center[1], item.edit_rect.width,
                   item.edit_rect.height, None, "manual", -1, roi.colocalized)
         stats = roi.calculate_statistics(image[..., item.channel_index])
         # TODO replace for FOCI

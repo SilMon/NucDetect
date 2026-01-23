@@ -213,6 +213,9 @@ QDialog{
          </item>
          <item>
           <widget class="QPushButton" name="btn_add_group">
+           <property name="enabled">
+            <bool>false</bool>
+           </property>
            <property name="text">
             <string>+</string>
            </property>
