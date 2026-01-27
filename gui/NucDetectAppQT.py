@@ -1,5 +1,6 @@
 import multiprocessing
 import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = "2"
 import shutil
 import sys
 import threading
@@ -1432,6 +1433,7 @@ def main() -> None:
         warnings.filterwarnings("ignore")
         sys.excepthook = exception_hook
         app = QtWidgets.QApplication(sys.argv)
+        app.setWindowIcon(Icon.get_icon("LOGO"))
         pixmap = QPixmap(os.path.join(gpaths.logo_dir, "banner_norm.png"))
         splash = QSplashScreen(pixmap)
         splash.show()
@@ -1459,4 +1461,6 @@ def main() -> None:
 
 
 if __name__ == '__main__':
+    # Necessary for packaging
+    multiprocessing.freeze_support()
     main()

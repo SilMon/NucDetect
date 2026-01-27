@@ -7,7 +7,7 @@ from scipy import ndimage as ndi
 from skimage import img_as_ubyte
 from skimage.filters import threshold_local
 from skimage.filters.rank import maximum
-from skimage.morphology.binary import binary_opening
+from skimage.morphology import opening
 from skimage.segmentation import watershed
 
 from core.DataProcessing import create_circular_mask
@@ -113,8 +113,8 @@ class NucleusMapper(AreaMapper):
         thresh = threshold_local(maxi, block_size=(mask_size * local_threshold_multiplier + 1) * size_factor)
         maxi = ndi.binary_fill_holes(maxi > thresh)
         maxi = np.logical_and(maxi, binary_map)
-        maxi = binary_opening(maxi, footprint=create_circular_mask(mask_size * maximum_size_multiplier * size_factor,
-                                                                   mask_size * maximum_size_multiplier * size_factor))
+        maxi = opening(maxi, footprint=create_circular_mask(mask_size * maximum_size_multiplier * size_factor,
+                                                            mask_size * maximum_size_multiplier * size_factor))
         return maxi
 
     @staticmethod

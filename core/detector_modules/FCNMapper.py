@@ -11,7 +11,7 @@ from skimage.filters import gaussian, threshold_otsu, threshold_minimum, thresho
 from skimage.filters.rank import maximum
 from skimage.segmentation import watershed
 from scipy.ndimage import label, binary_fill_holes
-from skimage.morphology import binary_erosion, binary_opening, binary_closing, disk
+from skimage.morphology import opening
 from skimage.transform import resize
 from skimage.util import view_as_windows
 
@@ -182,7 +182,8 @@ class FCNMapper(AreaMapper):
                 x * step_width: x * step_width + tile_width] += masks[y * n_tiles_hor + x] * weight2d
                 weights[y * step_height: y * step_height + tile_height,
                 x * step_width: x * step_width + tile_width] += weight2d
-        return (np.divide(accum, weights) * np.iinfo(orig_dtype).max).astype(orig_dtype)
+        return (np.divide(np.nan_to_num(accum, nan=0),
+                          np.nan_to_num(weights, nan=0)) * np.iinfo(orig_dtype).max).astype(orig_dtype)
 
     @staticmethod
     def threshold_maps(prediction_maps: List[np.ndarray]) -> List[np.ndarray]:
@@ -197,7 +198,7 @@ class FCNMapper(AreaMapper):
             # Threshold the image
             # TODO threshold als einstellung ermöglichen
             threshold = threshold_otsu(inference)
-            binary = binary_opening(inference >= threshold)
+            binary = opening(inference >= threshold)
             # Extract the individual areas using watershed segmentation
             seed_points = peak_local_max(inference,
                                          threshold_abs=threshold,
@@ -208,6 +209,6 @@ class FCNMapper(AreaMapper):
             bin_maps.append(watershed(image=-inference,
                                       markers=labeled,
                                       mask=binary,
-                                      watershed_line=True))
+                                      watershed_line=False))
         return bin_maps
 

@@ -124,6 +124,7 @@ class ROI:
                 if not self.associated:
                     self.associated = roi.associated
                 self.add_to_area(roi.area)
+            else:
                 warnings.warn(f"The ROI {hash(self)} and  "
                               f"{hash(roi)} have different channel IDs!({self.ident}, {roi.ident})")
             return self
