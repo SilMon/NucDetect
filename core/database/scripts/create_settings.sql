@@ -33,9 +33,9 @@ INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_foci"
 -- Matching Settings
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_foc_overlap", 0.5, "float");
 -- Quality check settings
-INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_main_area", 750, "int");
-INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_foc_area", 12, "int");
-INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_main_area", 30000, "int");
+INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_main_area", 115, "int");
+INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_main_area", 4650, "int");
+INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_foc_area", 8, "int");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_foc_area", 70, "int");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_foc_int", 0.055, "float");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_foc_cont", 0.005, "float");

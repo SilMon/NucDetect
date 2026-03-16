@@ -1,6 +1,6 @@
 import time
 import warnings
-from typing import Dict, Union, List, Iterable, Tuple, Any
+from typing import Dict, Union, List, Iterable, Tuple, Any, Callable
 
 import numpy as np
 from numpy import ndarray
@@ -25,15 +25,21 @@ class QualityTester:
         "cutoff": .03,
         "size_factor": 1.0,
         "logging": False,
-        "log": []
+        "log": lambda a: print(f"Std. Logging: {a}")
     }
 
     def __init__(self, channels: List[np.ndarray] = None, channel_names: List[str] = None,
-                 roi: Iterable[ROI] = None, settings: Dict[str, Union[str, int, float]] = None):
+                 roi: Iterable[ROI] = None, settings: Dict[str, Union[str, int, float, Callable]] = None):
         self.channels = channels
         self.channel_names = channel_names
         self.roi = roi
-        self.settings = settings
+        if settings:
+            self.settings = settings
+            self.log: Callable = self.settings["log"]
+        else:
+            self.settings = self.STANDARD_SETTINGS
+            warnings.warn("No settings found, standard settings used for focus mapping")
+            self.log: Callable = self.settings["log"]
 
     def set_channels(self, channels: List[np.ndarray]) -> None:
         self.channels = channels
@@ -59,11 +65,6 @@ class QualityTester:
         # Check if the roi were set
         if not self.roi:
             raise ValueError("No roi were given!")
-        # Check if settings contain anything
-        if not self.settings:
-            self.settings = self.STANDARD_SETTINGS
-            warnings.warn("No settings found, standard settings used for focus mapping")
-        self.log = self.settings["log"]
         return self.check_quality()
 
     def check_quality(self) -> Tuple[List[ROI], List[ROI]]:
@@ -72,6 +73,7 @@ class QualityTester:
 
         :return: The checked roi
         """
+        # TODO überprüfen ob die Einstellungen so stimmen
         main, foci = self.separate_nuclei_and_foci()
         # Check size of nuclei
         lower_bound, upper_bound = self.settings["min_main_area"], self.settings["max_main_area"]
@@ -86,9 +88,9 @@ class QualityTester:
         foci = self.check_size_boundaries(foci, self.settings["min_foc_area"], self.settings["max_foc_area"])
         self.log(f"Focus Size Check: {len(foci)}")
         # Check foci for intensity
-        #foci = self.check_intensity_boundaries(foci, self.settings["min_foc_int"], 1)
+        foci = self.check_intensity_boundaries(foci, self.settings["min_foc_int"], 1)
         self.log(f"Focus Intensity Check: {len(foci)}")
-        #foci = self.check_focus_contrast(foci, self.settings["min_foc_cont"])
+        foci = self.check_focus_contrast(foci, self.settings["min_foc_cont"])
         self.log(f"Focus Contrast Check: {len(foci)}")
         return main, foci
 

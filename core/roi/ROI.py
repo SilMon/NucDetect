@@ -251,6 +251,7 @@ class ROI:
                 numba_area = numList()
                 # Add elements to area
                 [numba_area.append(x) for x in self.area]
+                # TODO
                 y, x, height, width = get_bounding_box(numba_area)
                 center = get_center(numba_area)
                 area = get_surface(numba_area)

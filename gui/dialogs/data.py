@@ -1632,7 +1632,6 @@ class StatisticsDialog(QDialog):
     Dialog to show statistical analysis of data
     """
     stat_calculation_finished_signal = pyqtSignal()
-    # TODO aktualisieren, hübsch machen, tatsächliche Statistiken einführen
     def __init__(self, experiment: str, active_channels: Dict, *args, **kwargs):
         """
         :param experiment: The experiment to show

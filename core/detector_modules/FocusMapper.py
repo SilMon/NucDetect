@@ -39,10 +39,11 @@ class FocusMapper(AreaMapper):
         "logging": False
     }
 
-    def get_foci_maps(self) -> List[np.ndarray]:
+    def get_foci_as_blobs(self) -> List[List[Tuple[int, int, int]]]:
         """
         Method to create foci maps from the given channels
-        :return: The created foci maps
+
+        :return: The detected foci as blobs
         """
         # Check if channels were set
         if not self.channels:
@@ -53,7 +54,7 @@ class FocusMapper(AreaMapper):
             warnings.warn("No settings found, standard settings used for focus mapping")
         return self.map_foci()
 
-    def map_foci(self) -> List[np.ndarray]:
+    def map_foci(self) -> List[List[Tuple[int, int, int]]]:
         """
         Method to detect foci
 
@@ -67,7 +68,7 @@ class FocusMapper(AreaMapper):
             # Detect foci on preprocessed channel
             foci = self.detect_foci_on_acc_map(self.settings, pchannel)
             # Create foci map and append
-            foci_maps.append(self.create_foci_map(pchannel.shape, foci))
+            foci_maps.append(foci)#self.create_foci_map(pchannel.shape, foci))
         return foci_maps
 
     @staticmethod

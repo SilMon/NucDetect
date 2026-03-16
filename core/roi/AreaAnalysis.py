@@ -169,6 +169,8 @@ def amin(lst: Iterable[int]) -> int:
     :param lst: The list to get the minimum from
     :return: The minimum value of the list
     """
+    # TODO Failed in nopython mode pipeline (step: nopython frontend)
+    # Cannot unify Literal[int](16777215) and readonly bytes(uint8, 1d, C) for 'min_.3',
     min_ = 0xffffff
     for x in lst:
         if x < min_:

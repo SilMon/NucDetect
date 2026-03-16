@@ -22,7 +22,6 @@ class MapComparator:
         "foci2",
         "log"
     ]
-    # TODO Größere Änderungen, Detector und sonstige Klassen anpassen
     def __init__(self,
                  main: List[ROI],
                  foci1: List[ROI],
@@ -42,7 +41,7 @@ class MapComparator:
         self.foci2: List[ROI] = foci2
         self.log = log_function
         self.log("Map Comparator:")
-
+# TODO Logging hinzufügen
     @staticmethod
     def get_match_for_nuclei(nuclei: List[ROI],
                              foci: List[List[ROI]],
@@ -55,8 +54,6 @@ class MapComparator:
         :param max_distance: Maximum distance for two foci centers to be considered co-localized
         :return: None
         """
-        # TODO Verwendet derzeit den Wert der Methoden-Übereinstimmung, nicht der Co-Localization!
-        # TODO Überprüfen ob die Methode so funktioniert
         start = time.time()
         # Create a dictionary to keep track of matched and unmatched foci
         nucleus_match = {
@@ -170,7 +167,6 @@ class MapComparator:
                 # Get the nearest neighbor as ROI
                 focus_b = foci_b[nearest_neighbor]
                 # Check if the nearest neighbor was already matched, else match it
-                # TODO Edge cases lead sometimes to overlapping foci
                 if not matched_b[nearest_neighbor] or dists[0] < pairs[hash(focus_b)][2]:
                     matched_b[nearest_neighbor] = 1
                     matched_a[ind] = 1

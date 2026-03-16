@@ -182,8 +182,8 @@ class FCNMapper(AreaMapper):
                 x * step_width: x * step_width + tile_width] += masks[y * n_tiles_hor + x] * weight2d
                 weights[y * step_height: y * step_height + tile_height,
                 x * step_width: x * step_width + tile_width] += weight2d
-        return (np.divide(np.nan_to_num(accum, nan=0),
-                          np.nan_to_num(weights, nan=0)) * np.iinfo(orig_dtype).max).astype(orig_dtype)
+        return (np.divide(accum, weights, out=np.zeros_like(accum),
+                          where=weights!=0) * np.iinfo(orig_dtype).max).astype(orig_dtype)
 
     @staticmethod
     def threshold_maps(prediction_maps: List[np.ndarray]) -> List[np.ndarray]:

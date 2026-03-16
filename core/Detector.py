@@ -14,7 +14,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 import gui.Paths as gpaths
-from core.detector_modules.AreaAndROIExtractor import extract_nuclei_from_maps, extract_foci_from_maps
+from core.detector_modules.AreaAndROIExtractor import extract_nuclei_from_maps, extract_foci_from_maps, \
+    extract_foci_from_blobs
 from core.detector_modules.FCNMapper import FCNMapper
 from core.detector_modules.FocusMapper import FocusMapper
 from core.detector_modules.ImageLoader import ImageLoader
@@ -96,7 +97,6 @@ class Detector:
         # Check if all channels are activated
         analysis_settings["names"] = [names[x] for x in range(len(names)) if active[x]]
         analysis_settings["main_channel_name"] = analysis_settings["names"][main_channel]
-
         channels = [channels[x] for x in range(len(channels)) if active[x]]
         # Adjust the index of the main channel
         for x in range(main_channel):
@@ -113,10 +113,10 @@ class Detector:
         # Check if nuclei were detected
         if main_roi:
             if detection_method == "image processing" or detection_method == "combined":
-                iproi, maps1 = self.ip_roi_extraction(main, main_map, main_roi, foc_channels, analysis_settings)
+                iproi = self.ip_roi_extraction(main_roi, foc_channels, analysis_settings)
                 self.add_log_message(f"Detected IP ROI: {len(iproi)}")
             if detection_method == "u-net" or detection_method == "combined":
-                mlroi, maps2 = self.ml_roi_extraction(main_roi, foc_channels, analysis_settings)
+                mlroi = self.ml_roi_extraction(main_roi, foc_channels, analysis_settings)
                 self.add_log_message(f"Detected ML ROI: {len(mlroi)}")
             rois = []
             if detection_method == "combined":
@@ -187,13 +187,11 @@ class Detector:
         self.add_log_message(f"Finished nuclei extraction {time.time() - s0:.4f}")
         return nucmap, nuclei
 
-    def ip_roi_extraction(self, main: np.ndarray, main_map: np.ndarray, nuclei: List[ROI],
-                          foc_channels: List[np.ndarray], analysis_settings) -> Tuple[List[ROI], List[np.ndarray]]:
+    def ip_roi_extraction(self, nuclei: List[ROI],
+                          foc_channels: List[np.ndarray], analysis_settings) -> List[ROI]:
         """
         Method to detect nuclei and foci via image processing
 
-        :param main: The channel which should contain nuclei
-        :param main_map: The detection map for the main channel
         :param nuclei: List of all detected nuclei
         :param foc_channels: All image channel which potentially contain foci
         :param analysis_settings: The analysis settings to apply
@@ -203,19 +201,20 @@ class Detector:
         # Map foci
         self.focusmapper.set_channels(foc_channels)
         self.focusmapper.set_settings(analysis_settings)
-        foc_maps = self.focusmapper.map_foci()
+        ip_foci = self.focusmapper.map_foci()
+        roi = Detector.extract_foci_from_blobs(nuclei, ip_foci,
+                                               analysis_settings["foci_channel_names"],
+                                               image_shape=foc_channels[0].shape)
         self.add_log_message(f"Finished IP foci extraction {time.time() - s0:.4f}")
-        roi = Detector.extract_foci_from_maps(nuclei, foc_maps,
-                                              analysis_settings["foci_channel_names"])
         for r in roi:
             r.detection_method = "Image Processing"
         if roi:
-            return roi, foc_maps
+            return roi
         else:
-            return [], [np.zeros(shape=main_map.shape) for _ in range(len(foc_maps))]
+            return []
 
     def ml_roi_extraction(self, nuclei: List[ROI], foc_channels,
-                          analysis_settings) -> Tuple[List[ROI], List[np.ndarray]]:
+                          analysis_settings) -> List[ROI]:
         """
         Method to detect nuclei and foci via machine learning
 
@@ -237,7 +236,7 @@ class Detector:
                                               analysis_settings["foci_channel_names"])
         for r in roi:
             r.detection_method = "Machine Learning"
-        return roi, foc_maps
+        return roi
 
     @staticmethod
     def extract_foci_from_maps(nuclei: List[ROI], foci_maps: List[np.ndarray],
@@ -254,6 +253,29 @@ class Detector:
         for ind, focmap in enumerate(foci_maps):
             foci.extend(extract_foci_from_maps(focmap, foc_names[ind], nuclei))
         return foci
+
+    @staticmethod
+    def extract_foci_from_blobs(nuclei: List[ROI],
+                                foci_blobs: List[List[Tuple[int, int, int]]],
+                                foc_names: List[str],
+                                image_shape: Tuple[int, ...]) -> List[ROI]:
+        """
+        Method to extract nuclei and foci from the given maps
+
+        :param nuclei: List of detected nuclei
+        :param foci_blobs: List of all detected foci as blobs
+        :param foc_names: List of names assigned to the foci channels
+        :param image_shape: Shape of the image
+        :return: The extracted roi
+        """
+        foci = []
+        for ind, focus_blobs in enumerate(foci_blobs):
+            foci.extend(extract_foci_from_blobs(focus_blobs,
+                                                foc_names[ind],
+                                                nuclei,
+                                                image_shape))
+        return foci
+
 
     def perform_quality_check(self, channels: List[np.ndarray],
                               names: List[str], analysis_settings: Dict, roi: List[ROI]):

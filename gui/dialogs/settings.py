@@ -229,7 +229,7 @@ class SettingsDialog(QDialog):
         if not url.lower().endswith(".json"):
             raise ValueError("Only JSON files can be loaded!")
         self.url = url
-        with open(url) as json_file:
+        with open(url, encoding="utf-8") as json_file:
             j_dat = json.load(json_file)
             self.json = j_dat
             for section, p in j_dat.items():
@@ -398,7 +398,7 @@ class SettingsDialog(QDialog):
                         except KeyError:
                             pass
                 # Dump JSON data back to file
-                with open(self.url, 'w') as file:
+                with open(self.url, 'w', encoding="utf-8") as file:
                     json.dump(self.json, file)
         else:
             raise RuntimeError("Settings not initialized!")

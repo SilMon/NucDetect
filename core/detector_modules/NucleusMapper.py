@@ -57,6 +57,7 @@ class NucleusMapper(AreaMapper):
         edm = self.calculate_edm_and_normalize(thresh)
         # Create iterative maximum map
         it_max = self.get_iterative_max_map(edm, thresh)
+        # TODO it_max anstelle von edm übergeben
         # Get the center mask based on it_max
         cmask = self.create_center_mask(it_max)
         # Perform watershed segmentation and return

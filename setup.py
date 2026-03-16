@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="UTF-8") as fh:
 
 setuptools.setup(
     name="NucDetect",
-    version="1.0.7",
+    version="1.0.13",
     description=("Module to quantify intranuclear foci on basis of "
                  "immunofluorescence images."),
     author="Romano Weiss",
@@ -24,6 +24,7 @@ setuptools.setup(
     install_requires=[
         "tensorflow-cpu>=2.17.0",
         "scikit-image>=0.16.2",
+        "scipy>=0.16.3",
         "matplotlib>=3.1.3",
         "seaborn>=0.13.2",
         "statannotations>=0.7.2",

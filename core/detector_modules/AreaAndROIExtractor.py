@@ -1,8 +1,10 @@
+import math
 from typing import List, Tuple, Dict, Iterable
 
 import numpy as np
 from matplotlib import pyplot as plt
 from numba.typed import List as nList
+from skimage.draw import disk
 
 from core.roi.AreaAnalysis import imprint_area_into_array
 from core.roi.ROI import ROI
@@ -38,6 +40,51 @@ def extract_foci_from_maps(map_: np.ndarray, channel_name: str, main: List[ROI])
     assmap = create_nucleus_hash_map(main, shape=map_.shape)
     associate_roi(foci, assmap)
     return foci
+
+def extract_foci_from_blobs(blobs: List[tuple[int, int, int]],
+                            channel_name: str,
+                            main: List[ROI],
+                            image_shape: Tuple[int, ...]) -> List[ROI]:
+    """
+
+    :param blobs: The detected roi as blobs
+    :param channel_name: The name of the channel
+    :param main: Extracted nuclei
+    :param image_shape: The shape of the original image
+    :return: The extracted ROI
+    """
+    foci = [encode_blob(x,channel_name, image_shape) for x in blobs]
+    # Create hash map for association
+    assmap = create_nucleus_hash_map(main, shape=image_shape)
+    associate_roi(foci, assmap)
+    return foci
+
+
+def encode_blob(blob: Tuple[int, int, int],
+                channel_name: str,
+                image_shape: Tuple[int, ...]) -> ROI:
+    """
+    Method to encode the area of a ROI
+
+    :param blob: The ROI as blob with y,x and sigma
+    :param channel_name: The name of the channel
+    :param image_shape: The shape of the original image
+    :return: The encoded ROI
+    """
+    # Get the pixel coordinates of the ROI
+    yy, xx = disk((blob[0], blob[1]), blob[2] * math.sqrt(2), shape=image_shape)
+    yy, xx = list(yy), list(xx)
+    yd = {
+        int(y): [] for y in np.unique(yy)
+    }
+    # Get all associated x coordinates
+    [yd[int(y)].append(int(x)) for y, x in zip(yy, xx)]
+    # Create the rle area
+    area = [(y, min(values), len(values)) for y, values in yd.items()]
+    # Create a new ROI
+    roi = ROI(channel=channel_name, main=False)
+    roi.set_area(area)
+    return roi
 
 
 def encode_areas(area_map: np.ndarray) -> Dict[int, List[Tuple[int, int, int]]]:
@@ -79,7 +126,7 @@ def encode_areas(area_map: np.ndarray) -> Dict[int, List[Tuple[int, int, int]]]:
     return areas
 
 
-def create_nucleus_hash_map(nuclei: Iterable[ROI], shape: Tuple[int, int]) -> np.ndarray:
+def create_nucleus_hash_map(nuclei: Iterable[ROI], shape: Tuple[int, ...]) -> np.ndarray:
     """
     Function to create a map containing all hashes from each extracted nucleus
     :param nuclei: The nuclei as iterable of ROI
