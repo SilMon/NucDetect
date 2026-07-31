@@ -7,11 +7,13 @@ from PyQt5 import uic, QtCore
 from PyQt5.QtWidgets import QDialog, QWidget, QScrollArea, QSizePolicy, QVBoxLayout, QMessageBox
 
 import gui.Paths as gpaths
+from core.logging_config import get_logger, reset_log_file
 from gui.definitions.icons import Icon
 from gui.settings.Widgets import SettingsShowWidget, SettingsSlider, SettingsDial, SettingsSpinner, SettingsDecimalSpinner, \
     SettingsText, SettingsComboBox, SettingsCheckBox
 
 pg.setConfigOptions(imageAxisOrder='row-major')
+LOGGER = get_logger(__name__)
 
 
 class AnalysisSettingsDialog(QDialog):
@@ -195,7 +197,7 @@ class SettingsDialog(QDialog):
         :return: None
         """
         if self.show_warning_dialog("This action will erase all saved data. Are you sure?") == QMessageBox.Yes:
-            print("Database erased")
+            LOGGER.info("Database erased")
             self.inserter.reset_database()
 
     def reset_analysis_data(self) -> None:
@@ -205,7 +207,7 @@ class SettingsDialog(QDialog):
         :return: None
         """
         if self.show_warning_dialog("This action will erase all analysis data. Are you sure?") == QMessageBox.Yes:
-            print("Analysis data erased")
+            LOGGER.info("Analysis data erased")
             self.inserter.reset_analysis_data()
 
     def reset_log_file(self) -> None:
@@ -215,9 +217,10 @@ class SettingsDialog(QDialog):
         :return: None
         """
         if self.show_warning_dialog("This action will erase all saved logs. Are you sure?") == QMessageBox.Yes:
-            print("Log file erased")
-            with open(gpaths.log_path, "w") as log_file:
-                log_file.write("")
+            # Truncating the file directly is not enough: the logger holds it open, which keeps the
+            # file locked on Windows and leaves the write position past the new end of file
+            reset_log_file(gpaths.log_path)
+            LOGGER.info("Log file erased")
 
     def initialize_from_file(self, url: str) -> None:
         """

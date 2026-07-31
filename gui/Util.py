@@ -12,7 +12,10 @@ from skimage.transform import resize
 
 from gui.definitions.icons import Color
 from core.detector_modules.ImageLoader import ImageLoader
+from core.logging_config import get_logger
 from gui import Paths
+
+LOGGER = get_logger(__name__)
 
 IMAGE_FORMATS = [
         ".tif",
@@ -62,20 +65,20 @@ def create_image_item_list_from(paths: List[str],
     Function to create a list of QStandardItems from image paths. Useful for display in ListViews
 
     :param paths: A list containing image paths
-    :param indicate_progress: If true, loading progress will be printed to the console
+    :param indicate_progress: If true, loading progress will be logged
     :param sort_items: If true, items will be sorted
     :return: A list of the created items
     """
     items = []
     if indicate_progress:
-        print(f"{len(paths)} to load")
+        LOGGER.debug("%d to load", len(paths))
         ind = 1
     if sort_items:
         paths = sorted(paths, key=os.path.basename)
     for path in paths:
         items.append(create_list_item(path))
         if indicate_progress:
-            print(f"Loading: {ind}/{len(paths)}")
+            LOGGER.debug("Loading: %d/%d", ind, len(paths))
             ind += 1
     return items
 

@@ -2,11 +2,12 @@ import copy
 import os
 import sqlite3
 import threading
+import traceback
 
 import matplotlib as mpl
 from matplotlib import font_manager
 from threading import Thread
-from typing import List, Tuple, Dict, Any, Union
+from typing import List, Tuple, Dict, Any, Union, Callable
 
 import numpy as np
 import pandas as pd
@@ -49,7 +50,8 @@ class DataExportDialog(QDialog):
         "ui",
         "req",
         "names",
-        "threads"
+        "threads",
+        "errors"
     ]
     STANDARD_OPTIONS = (
         "Selected Image",
@@ -66,6 +68,8 @@ class DataExportDialog(QDialog):
         """
         super(DataExportDialog, self).__init__()
         self.threads: List[Thread] = []
+        # Collects tracebacks of failed exports, read by NucDetect.check_for_running_threads
+        self.errors: List[str] = []
         self.cur_img = current_image
         self.disp_name = display_name
         self.req = Requester(protected=False)
@@ -146,6 +150,24 @@ class DataExportDialog(QDialog):
         """
         return self.names.get(md5, md5)
 
+    def _run_export(self, worker: Callable, *args) -> None:
+        """
+        Method to run an export body, ensuring that errors are recorded instead of lost. Meant to
+        be used as target of every export thread started by this dialog
+
+        This dialog is usually already closed when an export fails, and it must not create widgets
+        from a worker thread anyway, so the error is only collected here. The main window picks it
+        up while it waits for the exports to finish
+
+        :param worker: The export method to execute in this thread
+        :param args: The arguments to pass to the worker
+        :return: None
+        """
+        try:
+            worker(*args)
+        except Exception:
+            self.errors.append(traceback.format_exc())
+
     def export_image_as_table(self, md5: str,
                               xlsx_name: str = None,
                               include_header: bool = True,
@@ -159,8 +181,9 @@ class DataExportDialog(QDialog):
         :param sheet_name: Name of the sheet
         :return: The thread used for export
         """
-        export_thread = threading.Thread(target=self._export_image_as_table,
-                                         args=(md5, xlsx_name, include_header, sheet_name),
+        export_thread = threading.Thread(target=self._run_export,
+                                         args=(self._export_image_as_table,
+                                               md5, xlsx_name, include_header, sheet_name),
                                          daemon=True)
         export_thread.start()
         self.threads = [x for x in self.threads if x.is_alive()]
@@ -208,8 +231,9 @@ class DataExportDialog(QDialog):
         :param sheet_name: Name of the sheet
         :return: The thread used for export
         """
-        export_thread = threading.Thread(target=self._export_experiment_as_table,
-                                         args=(experiment, xlsx_name, include_header, sheet_name),
+        export_thread = threading.Thread(target=self._run_export,
+                                         args=(self._export_experiment_as_table,
+                                               experiment, xlsx_name, include_header, sheet_name),
                                          daemon=True)
         export_thread.start()
         self.threads = [x for x in self.threads if x.is_alive()]

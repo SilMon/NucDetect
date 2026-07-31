@@ -5,8 +5,11 @@ from enum import Enum
 from typing import Tuple, Dict, List, Union, Iterable, Any
 
 from core.detector_modules.ImageLoader import ImageLoader
+from core.logging_config import get_logger
 from gui import Paths
 from core.roi.ROI import ROI
+
+LOGGER = get_logger(__name__)
 
 
 class Specifiers(Enum):
@@ -748,7 +751,8 @@ class Requester(DatabaseInteractor):
             for row in img_data:
                 row.insert(2, group)
                 rows.append(row)
-            print(f"{ind + 1:04d}:{len(imgs):04d}\tGot data for: {img} in {time.time() - start:.2f} secs")
+            LOGGER.debug("%04d:%04d\tGot data for: %s in %.2f secs",
+                         ind + 1, len(imgs), img, time.time() - start)
         return rows
 
     def get_image_filename(self, md5: str) -> str:
