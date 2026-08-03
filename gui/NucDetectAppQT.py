@@ -185,7 +185,6 @@ class NucDetect(QMainWindow):
         self.hash_to_name = {}
         # Timer responsible for lazy loading
         self.update_timer = None
-        self.unsaved_changes = False
         # Highest bar fraction shown so far during the running analysis, or None when no analysis
         # is in progress. See _set_progress for why the monotonicity clamp is opt-in
         self._prg_floor: Union[float, None] = None
@@ -837,7 +836,6 @@ class NucDetect(QMainWindow):
         self._prg_floor = 0.0
         reporter = ProgressReporter(self._report_analysis_progress)
         reporter(0.0, "Starting analysis")
-        self.unsaved_changes = True
         data = self.detector.analyse_image(path, settings=analysis_settings, save_log=True,
                                            progress=reporter)
         self.roi_cache = data["handler"]
@@ -884,7 +882,6 @@ class NucDetect(QMainWindow):
         """
         self.enable_buttons(False)
         self.ui.list_images.setEnabled(False)
-        self.unsaved_changes = True
         # Get settings for this analysis
         settings = self.show_analysis_settings_dialog(show_redo_option=True)
         if not settings:
@@ -1159,12 +1156,6 @@ class NucDetect(QMainWindow):
         """
         self.prg_signal.emit(f"Create Result Table",
                              0, 100, "")
-        # Get all available channels for the image
-        chans = Requester().get_channels(handler.ident)
-        # Remove main channel and  from list
-        chans = [x[2] for x in chans if not bool(x[4]) and bool(x[3])]
-        # Sort channel list
-        chans = sorted(chans)
         # Create header
         header = copy(NucDetect.STANDARD_TABLE_HEADER)
         if experiment:
@@ -1587,7 +1578,16 @@ class NucDetect(QMainWindow):
         """
         # Let running exports finish writing before the interpreter kills them
         self.wait_for_exports()
-        self.connector.close_connection()
+        # __init__ opens TWO connections -- self.connector, and self.req_connector backing
+        # self.requester -- and only the first used to be closed here. They are closed
+        # independently so that a failure on one cannot leak the other, and neither can stop the
+        # window from closing: nothing useful remains to be done with a connection at this point
+        for name, connector in (("connector", self.connector),
+                                ("req_connector", self.req_connector)):
+            try:
+                connector.close_connection()
+            except Exception:
+                LOGGER.exception("Failed to close %s during shutdown", name)
 
 
 class TableFilterModel(QSortFilterProxyModel):
