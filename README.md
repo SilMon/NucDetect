@@ -86,7 +86,7 @@ https://github.com/SilMon/NucDetect_Additional_Data
 ___
 
 ### Transparency Note
-_Claude Code_ was used during development from version 1.0.14 onwards, in the following areas:
+_Claude Code_ was used during development from version 1.1.0 onwards, in the following areas:
 
 * Code review and static analysis
 * Bug and crash fixes
