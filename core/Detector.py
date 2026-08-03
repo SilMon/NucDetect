@@ -87,6 +87,9 @@ class Detector:
             and a callable has no business being serialised into the database
         :return: The analysis results as dict
         """
+        # An analysis that raised would otherwise leave its channels and ROI behind until the next
+        # one; clearing here as well as at the end keeps the invariant unconditional
+        self.release_transient_state()
         analysis_settings = deepcopy(settings["analysis_settings"])
         analysis_settings["log"] = self.add_log_message
         # Each stage reports 0..1 within its own slice of the bar and never learns its position in
@@ -197,6 +200,7 @@ class Detector:
             # Always clear, even when not writing: without this a worker would accumulate the
             # messages of every image it ever handled and repeat them in each result
             self.clear_log()
+        self.release_transient_state()
         return imgdat
 
     def nucleus_extraction(self, main_channel: np.ndarray, main_name: str,
@@ -360,6 +364,38 @@ class Detector:
         self.qualitytester.set_roi(roi)
         nuclei, foci = self.qualitytester.check_roi_quality()
         return nuclei + foci
+
+    def release_transient_state(self) -> None:
+        """
+        Method to drop the per-image data the mappers hold on to between analyses
+
+        The mappers keep whatever ``set_channels``/``set_roi`` were last given, purely as a side
+        effect of their setter-based API -- nothing reads it once ``analyse_image`` has returned.
+        Holding it has two costs:
+
+        * **memory** -- a Detector that has run one analysis retains the image channels and every
+          detected ROI for as long as it lives, which for the main window means the whole session;
+        * **serialisation** -- batch analysis passes the bound ``analyse_image`` to a
+          ``ProcessPoolExecutor``, which pickles this object **once per image**. Measured on a
+          1024x1024 image: 0.9 KiB when clean, **3 431 KiB** after one image-processing analysis and
+          **11 211 KiB** after one u-net analysis, the latter because ``fcnmapper`` holds a loaded
+          Keras model. Over a 100-image batch that is the difference between a rounding error and
+          roughly a gigabyte of pickling.
+
+        Invariant: outside of a running ``analyse_image``, this object holds no image data. It is
+        therefore called at both ends of an analysis -- the leading call covers an analysis that
+        raised partway through.
+
+        :return: None
+        """
+        self.nucleusmapper.set_channels(())
+        self.focusmapper.set_channels(())
+        self.qualitytester.set_channels(())
+        self.qualitytester.set_channel_names(())
+        self.qualitytester.set_roi([])
+        # Holds a loaded Keras model, which is the bulk of the u-net figure above. It is rebuilt on
+        # every ml_roi_extraction call regardless, so dropping it here costs nothing extra
+        self.fcnmapper = None
 
     def add_log_message(self, msg: str) -> None:
         """

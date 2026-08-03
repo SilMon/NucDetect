@@ -919,27 +919,27 @@ class NucDetect(QMainWindow):
                 if not self.requester.check_if_image_was_analysed(md5) or settings["re-analyse"]:
                     paths.append(image)
             LOGGER.info("Batch analysis of %d images", len(paths))
-            ind = 1
-            cur_batch = 1
-            curind = 0
-            # Define needed batch variables
-            start = batch_size + 1 if batch_size < len(paths) else len(paths) + 1
-            stop = len(paths) + batch_size if len(paths) > batch_size else len(paths) + 2
-            step = batch_size
-            # Iterate over all images in batches
-            for b in range(start, stop, step):
+            maxi = len(paths)
+            # Number of batches, rounded up -- the last one is short unless the count divides evenly
+            total_batches = math.ceil(maxi / batch_size) if batch_size > 0 else 0
+            # Counts images actually finished. Kept separate from the 1-based display counter
+            # below: reusing one variable for both is what made the ETA undercount by one and go
+            # negative on the final batch of every run
+            done = 0
+            # A plain slice loop. The previous start/stop/step arithmetic made the first batch
+            # batch_size + 1 images long, and executed once even when there was nothing to analyse
+            for batch_start in range(0, maxi, batch_size):
                 s2 = time.time()
-                tpaths = paths[curind:b if b < len(paths) else len(paths)]
+                tpaths = paths[batch_start:batch_start + batch_size]
                 t_setts = [settings for _ in range(len(tpaths))]
                 # save_log=False: the workers hand their messages back with the result instead of
                 # appending to the log file themselves, so the entries stay in image order and
                 # several processes never write the file at the same time
                 t_savelog = [False for _ in range(len(tpaths))]
                 res = e.map(self.detector.analyse_image, tpaths, t_setts, t_savelog)
-                maxi = len(paths)
                 for r in res:
-                    self.prg_signal.emit(f"Analysed images: {ind}/{maxi}",
-                                         ind, maxi, "")
+                    self.prg_signal.emit(f"Analysed images: {done + 1}/{maxi}",
+                                         done + 1, maxi, "")
                     # Replay the log of the worker that analysed this image
                     log_messages(r.get("log", ()))
                     self.save_rois_to_database(r, all_=True)
@@ -952,19 +952,20 @@ class NucDetect(QMainWindow):
                     # slot, because model items belong to the thread of the model they enter
                     self.row_signal.emit([name, r["handler"].ident,
                                           str(mnum), str(fnum), f"{fpn:.2f}"])
-                    ind += 1
-                images_left = maxi - ind
-                time_per_image = int((time.time() - start_time) / ind)
-                eta = images_left * time_per_image
+                    done += 1
+                images_left = maxi - done
+                # Not int(): truncating to whole seconds reports an ETA of zero for anything
+                # faster than a second per image
+                time_per_image = (time.time() - start_time) / done if done else 0
+                eta = int(images_left * time_per_image)
                 h = eta // 3600
                 m = eta % 3600 // 60
                 s = eta % 3600 % 60
-                msg = f"Analysed batch {cur_batch: 02d}/{maxi // step: 02d} in {time.time() - s2: 09.3f} secs\t\t"\
+                cur_batch = batch_start // batch_size + 1
+                msg = f"Analysed batch {cur_batch: 02d}/{total_batches: 02d} in {time.time() - s2: 09.3f} secs\t\t"\
                       f"Total: {time.time() - start_time: 09.3f} secs\t\t"\
                       f"ETA: {h:02d}h:{m:02d}m:{s:02d}s"
                 LOGGER.info(msg)
-                curind = b
-                cur_batch += 1
             self.enable_signal.emit(True)
             settings["analysis_settings"]["logging"] = logstate
             self.prg_signal.emit("Analysis finished -- Program ready",
@@ -1746,20 +1747,50 @@ class ImageListModel(QAbstractListModel):
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else self.current_index
 
-    def data(self, index: QModelIndex, role: int = ...) -> Any:
+    def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> Any:
+        """
+        Method to provide the data of the item at the given index for the given role
+
+        Returns None, not 0, when there is nothing to provide. Qt queries this for *every* role --
+        decoration, size hint, tooltip, check state and so on -- and None is how PyQt spells an
+        invalid QVariant, i.e. "no value for this role". A 0 is a valid answer to most of those
+        questions and would be acted on: a zero size hint, an unchecked check box, a decoration.
+
+        :param index: The index of the item
+        :param role: The role to provide data for
+        :return: The data for the given role, or None if there is none
+        """
         # Check if the index is valid
         if not index.isValid():
-            return 0
-        # Check if the row is inside teh available boundaries
+            return None
+        # Check if the row is inside the available boundaries. The comparison is >=, not >: at
+        # exactly len(self._paths) the row is one past the end, and get_item_at_index would raise
+        # an IndexError on self._paths[index] -- the case the guard exists to prevent
         row = index.row()
-        if row > len(self._paths) or row < 0:
-            return 0
+        if row >= len(self._paths) or row < 0:
+            return None
         return self.get_item_at_index(row).data(role)
 
-    def setData(self, index: QModelIndex, value, role=Qt.EditRole):
-        if role == Qt.EditRole and index.isValid():
-            item = self._cache[index.row()]
-            item.setData(value)
+    def setData(self, index: QModelIndex, value, role=Qt.EditRole) -> bool:
+        """
+        Method to set the data of the item at the given index
+
+        :param index: The index of the item to change
+        :param value: The value to set
+        :param role: The role to set the value for
+        :return: True if the value was set, False otherwise
+        """
+        if role != Qt.EditRole or not index.isValid():
+            return False
+        row = index.row()
+        if row >= len(self._paths) or row < 0:
+            return False
+        # Via get_item_at_index, not self._cache[row]: the cache is populated lazily, so a row that
+        # has not been displayed yet is simply absent and a direct lookup raises KeyError
+        self.get_item_at_index(row).setData(value, role)
+        # Without this, views keep showing the old value until something else forces a repaint
+        self.dataChanged.emit(index, index, [role])
+        return True
 
     def get_item_at_index(self, index: int) -> QStandardItem:
         """
