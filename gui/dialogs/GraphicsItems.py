@@ -12,10 +12,13 @@ from pyqtgraph import HistogramLUTItem, ColorBarItem
 from skimage.draw import ellipse
 
 from core.DataProcessing import create_lg_lut, automatic_colorbalance
+from core.logging_config import get_logger
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 from core.database.connections import Requester, Inserter
 from gui.loader import ROIDrawerTimer
+
+LOGGER = get_logger(__name__)
 
 
 class EditorView(pg.GraphicsView):
@@ -536,7 +539,7 @@ class EditorView(pg.GraphicsView):
                     # Add ROI to ROIHandler
                     new_roi.append(roi)
                 else:
-                    print("ROI does not contain any points!")
+                    LOGGER.warning("ROI does not contain any points!")
         self.roi.rois.extend(new_roi)
 
 

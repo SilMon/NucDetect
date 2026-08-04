@@ -4,8 +4,11 @@ from typing import Callable, Iterable
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QGraphicsView
 
+from core.logging_config import get_logger
 from core.roi.ROIHandler import ROIHandler
 from gui.Util import create_partial_list
+
+LOGGER = get_logger(__name__)
 
 
 class Loader(QTimer):
@@ -53,8 +56,8 @@ class Loader(QTimer):
         self.items_loaded += len(items)
         # Check if all items were loaded
         if not items:
-            print(f"\nTimer stop after loading {self.items_loaded} items")
-            print(f"Total loading time: {time.time() - self.start_time:.2f}\n")
+            LOGGER.debug("Timer stop after loading %d items, total loading time: %.2f secs",
+                         self.items_loaded, time.time() - self.start_time)
             self.stop()
         # Update the last index
         self.last_index += self.batch_size

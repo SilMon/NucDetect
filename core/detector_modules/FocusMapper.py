@@ -14,6 +14,7 @@ from skimage.filters.rank import mean, median
 from skimage.morphology import white_tophat
 
 from core.detector_modules.AreaMapper import AreaMapper
+from core.progress import FOCI_IP_BOUNDS
 
 
 class FocusMapper(AreaMapper):
@@ -58,14 +59,26 @@ class FocusMapper(AreaMapper):
         """
         Method to detect foci
 
+        Per-channel progress is the finest granularity available here: nearly all of the cost is a
+        single `blob_log` call per channel (~2 s each, 85 % of this stage), and subdividing that
+        would mean reimplementing it. With the usual two foci channels the bar therefore advances
+        twice across roughly four seconds.
+
         :return: The foci detection maps
         """
         foci_maps = []
+        channels = list(self.channels)
+        count = max(1, len(channels))
+        # Weight preprocessing against detection within each channel's share of the stage
+        pre_share = FOCI_IP_BOUNDS["blob_log"][0] / FOCI_IP_BOUNDS["blob_log"][1]
         # Detect foci on each channel
-        for channel in self.channels:
+        for ind, channel in enumerate(channels):
+            channel_progress = self.progress.sub(ind / count, (ind + 1) / count)
             # Perform pre-processing
+            channel_progress(0.0, f"Preparing channel {ind + 1}/{count} for focus detection")
             pchannel = self.preprocess_channel(channel, self.settings)
             # Detect foci on preprocessed channel
+            channel_progress(pre_share, f"Detecting foci on channel {ind + 1}/{count}")
             foci = self.detect_foci_on_acc_map(self.settings, pchannel)
             # Create foci map and append
             foci_maps.append(foci)#self.create_foci_map(pchannel.shape, foci))

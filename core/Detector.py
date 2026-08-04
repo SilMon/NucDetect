@@ -13,7 +13,9 @@ from typing import Union, Dict, List, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
 
-import gui.Paths as gpaths
+from core.logging_config import get_logger, log_messages
+from core.progress import (NO_PROGRESS, NUCLEUS_BOUNDS, FOCI_IP_BOUNDS, ProgressReporter,
+                           stage_bounds, LOAD, NUCLEUS, FOCI_IP, FOCI_ML, MERGE, QUALITY)
 from core.detector_modules.AreaAndROIExtractor import extract_nuclei_from_maps, extract_foci_from_maps, \
     extract_foci_from_blobs
 from core.detector_modules.FCNMapper import FCNMapper
@@ -24,6 +26,8 @@ from core.detector_modules.NucleusMapper import NucleusMapper
 from core.detector_modules.QualityTester import QualityTester
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
+
+LOGGER = get_logger(__name__)
 
 
 class Detector:
@@ -60,38 +64,56 @@ class Detector:
         start = time.time()
         for path in images:
             results.append(self.analyse_image(path, settings))
-            print(f"Analysed image {os.path.basename(path)}")
+            LOGGER.info("Analysed image %s", os.path.basename(path))
         self.add_log_message(f"Analysed batch with size {len(images)} in {time.time() - start} seconds")
-        self.save_log_messages(gpaths.log_path)
+        self.flush_log_messages()
         return results
 
     def analyse_image(self, path: str,
-                      settings: Dict[str, Union[List, bool]], save_log: bool = True) -> \
+                      settings: Dict[str, Union[List, bool]], save_log: bool = True,
+                      progress: ProgressReporter = NO_PROGRESS) -> \
             Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]:
         """
         Method to extract rois from the image given by path
 
         :param path: The URL of the image
         :param settings: Dictionary containing the necessary information for analysis
-        :param save_log: If true, the analysis log will be saved to gpaths.log_path
+        :param save_log: If true, the buffered log messages are written to the log. Pass False when
+            running inside a worker process and replay the returned messages in the parent instead
+        :param progress: Reporter for the stages of this analysis. Defaults to a no-op, so callers
+            that do not show a progress bar -- batch analysis, the verification harnesses, any
+            direct use of this class -- need pass nothing. It is a parameter rather than an entry
+            in ``settings`` on purpose: ``settings`` is deep-copied and stored as ``used_settings``,
+            and a callable has no business being serialised into the database
         :return: The analysis results as dict
         """
+        # An analysis that raised would otherwise leave its channels and ROI behind until the next
+        # one; clearing here as well as at the end keeps the invariant unconditional
+        self.release_transient_state()
         analysis_settings = deepcopy(settings["analysis_settings"])
         analysis_settings["log"] = self.add_log_message
+        # Each stage reports 0..1 within its own slice of the bar and never learns its position in
+        # the whole run. Weights are measured, per method -- see core/progress.py
+        bounds = stage_bounds(analysis_settings["method"])
+        prg = {stage: progress.sub(*bounds[stage]) for stage in bounds}
         start = time.time()
+        prg[LOAD](0.0, "Reading image metadata")
         imgdat = self.imageloader.get_image_data(path)
         self.analysis_log["Analysed Images"].append(os.path.basename(path))
         self.analysis_log["Messages"][self.analysis_log["Analysed Images"][-1]] = []
+        prg[LOAD](0.3, "Hashing image")
         imgdat["id"] = self.imageloader.calculate_image_id(path)
         # Check if only a grayscale image was provided
         if imgdat["channels"] == 1:
             self.add_log_message("Detector class can only analyse multichannel images, not grayscale!")
             raise ValueError("Detector class can only analyse multichannel images, not grayscale!")
+        prg[LOAD](0.6, "Loading image")
         image = self.imageloader.load_image(path)
         names = settings["names"]
         main_channel: int = settings["main"]
         detection_method = analysis_settings["method"]
         # Channel extraction
+        prg[LOAD](0.9, "Splitting channels")
         channels = self.imageloader.get_channels(image)
         active = settings["activated"]
         # Check if all channels are activated
@@ -106,23 +128,29 @@ class Detector:
         analysis_settings["foci_channel_names"] = [x for x in analysis_settings["names"]
                                                    if x is not analysis_settings["main_channel_name"]]
         # Detect roi via image processing and machine learning
-        main_map, main_roi = self.nucleus_extraction(main, names[main_channel], analysis_settings)
+        main_map, main_roi = self.nucleus_extraction(main, names[main_channel], analysis_settings,
+                                                     prg[NUCLEUS])
         # Define a handler to take the ROI
         handler = ROIHandler(ident=imgdat["id"])
         handler.idents = analysis_settings["names"]
         # Check if nuclei were detected
         if main_roi:
             if detection_method == "image processing" or detection_method == "combined":
-                iproi = self.ip_roi_extraction(main_roi, foc_channels, analysis_settings)
+                iproi = self.ip_roi_extraction(main_roi, foc_channels, analysis_settings,
+                                               prg[FOCI_IP])
                 self.add_log_message(f"Detected IP ROI: {len(iproi)}")
             if detection_method == "u-net" or detection_method == "combined":
-                mlroi = self.ml_roi_extraction(main_roi, foc_channels, analysis_settings)
+                mlroi = self.ml_roi_extraction(main_roi, foc_channels, analysis_settings,
+                                               prg[FOCI_ML])
                 self.add_log_message(f"Detected ML ROI: {len(mlroi)}")
             rois = []
             if detection_method == "combined":
                 # Merge the foci for each channel
                 foci = []
-                for channel in analysis_settings["foci_channel_names"]:
+                foci_names = analysis_settings["foci_channel_names"]
+                for ind, channel in enumerate(foci_names):
+                    prg[MERGE](ind / max(1, len(foci_names)),
+                               f"Merging foci of channel {channel}")
                     # Define map Comparator
                     mapc = MapComparator(main_roi,
                                          [x for x in iproi if x.ident == channel],
@@ -142,6 +170,7 @@ class Detector:
             rois.extend(main_roi)
             # Check for quality of roi
             if rois:
+                prg[QUALITY](0.0, "Checking ROI quality")
                 qroi = self.perform_quality_check(channels, names, analysis_settings, rois)
                 self.add_log_message(f"QR: Removed foci: {len(rois) - len(qroi)}")
             else:
@@ -161,26 +190,45 @@ class Detector:
         del analysis_settings["log"]
         imgdat["used_settings"] = analysis_settings
         self.add_log_message(f"Total analysis time: {time.time() - start: .4f}")
+        # Hand the buffered messages to the caller before the buffer is dropped. This is what lets
+        # a ProcessPoolExecutor worker get its log across to the parent process, which owns the
+        # log file -- the worker's own copy of this Detector dies with the task
+        imgdat["log"] = self.get_log_messages()
         if save_log:
-            self.save_log_messages(gpaths.log_path, True)
+            self.flush_log_messages()
+        else:
+            # Always clear, even when not writing: without this a worker would accumulate the
+            # messages of every image it ever handled and repeat them in each result
             self.clear_log()
+        self.release_transient_state()
         return imgdat
 
     def nucleus_extraction(self, main_channel: np.ndarray, main_name: str,
-                           analysis_settings) -> Tuple[np.ndarray, List[ROI]]:
+                           analysis_settings,
+                           progress: ProgressReporter = NO_PROGRESS) -> Tuple[np.ndarray, List[ROI]]:
         """
         Method to extract the nuclei from the main channel
 
         :param main_channel: The channel containing the nuclei
         :param main_name: The name assigned to the main channel
         :param analysis_settings: The analysis settings to apply
+        :param progress: Reporter owning the whole nucleus stage. The mapper reports the first five
+            sub-stages of NUCLEUS_BOUNDS, this method reports the sixth ("extract")
         :return: The main map and the list of detected ROI
         """
         s0 = time.time()
         # Map nuclei
         self.nucleusmapper.set_channels((main_channel,))
         self.nucleusmapper.set_settings(analysis_settings)
-        nucmap = self.nucleusmapper.map_nuclei()
+        self.nucleusmapper.set_progress(progress)
+        try:
+            nucmap = self.nucleusmapper.map_nuclei()
+        finally:
+            # The reporter belongs to one analysis, not to the mapper. Clearing it also keeps a
+            # live callback -- a bound method of the main window during single-image analysis --
+            # from outliving the run on a Detector that batch analysis later tries to pickle
+            self.nucleusmapper.set_progress(NO_PROGRESS)
+        progress.span("extract", NUCLEUS_BOUNDS)(0.0, "Extracting nuclei")
         nuclei = extract_nuclei_from_maps(nucmap, main_name)
         for nucleus in nuclei:
             nucleus.detection_method = "Nucleus Detection"
@@ -188,20 +236,30 @@ class Detector:
         return nucmap, nuclei
 
     def ip_roi_extraction(self, nuclei: List[ROI],
-                          foc_channels: List[np.ndarray], analysis_settings) -> List[ROI]:
+                          foc_channels: List[np.ndarray], analysis_settings,
+                          progress: ProgressReporter = NO_PROGRESS) -> List[ROI]:
         """
         Method to detect nuclei and foci via image processing
 
         :param nuclei: List of all detected nuclei
         :param foc_channels: All image channel which potentially contain foci
         :param analysis_settings: The analysis settings to apply
+        :param progress: Reporter owning the image-processing foci stage. The mapper subdivides it
+            per channel; the blob extraction that follows is the tail of each channel's share
         :return: The extracted ROI and the used detection maps
         """
         s0 = time.time()
         # Map foci
         self.focusmapper.set_channels(foc_channels)
         self.focusmapper.set_settings(analysis_settings)
-        ip_foci = self.focusmapper.map_foci()
+        # The mapper owns everything up to the blob extraction, which happens here
+        self.focusmapper.set_progress(progress.sub(0.0, FOCI_IP_BOUNDS["extract"][0]))
+        try:
+            ip_foci = self.focusmapper.map_foci()
+        finally:
+            # See nucleus_extraction: the reporter must not outlive the analysis
+            self.focusmapper.set_progress(NO_PROGRESS)
+        progress.span("extract", FOCI_IP_BOUNDS)(0.0, "Extracting foci")
         roi = Detector.extract_foci_from_blobs(nuclei, ip_foci,
                                                analysis_settings["foci_channel_names"],
                                                image_shape=foc_channels[0].shape)
@@ -214,24 +272,36 @@ class Detector:
             return []
 
     def ml_roi_extraction(self, nuclei: List[ROI], foc_channels,
-                          analysis_settings) -> List[ROI]:
+                          analysis_settings,
+                          progress: ProgressReporter = NO_PROGRESS) -> List[ROI]:
         """
         Method to detect nuclei and foci via machine learning
 
         :param nuclei: List of all detected nuclei
         :param foc_channels: All image channel which potentially contain foci
         :param analysis_settings: The analysis settings to apply
+        :param progress: Reporter owning the u-net foci stage. Only the per-channel boundaries are
+            reported; the inference itself is a single ``model.predict`` call that this method
+            cannot see into. Subdividing it would need a Keras callback and a smaller batch size,
+            which trades inference throughput for responsiveness and has not been measured
         :return: The extracted ROI
         """
         s0 = time.time()
+        progress(0.0, "Loading detection model")
         # Map nuclei
         self.fcnmapper = FCNMapper()
         self.fcnmapper.set_settings(analysis_settings)
         # Map foci
         self.fcnmapper.set_channels(foc_channels)
-        foc_maps = self.fcnmapper.get_marked_maps()
+        self.fcnmapper.set_progress(progress.sub(0.05, 0.9))
+        try:
+            foc_maps = self.fcnmapper.get_marked_maps()
+        finally:
+            # See nucleus_extraction: the reporter must not outlive the analysis
+            self.fcnmapper.set_progress(NO_PROGRESS)
         self.add_log_message(f"Finished ML foci extraction {time.time() - s0:.4f}")
         # Extract roi from maps
+        progress(0.9, "Extracting foci")
         roi = Detector.extract_foci_from_maps(nuclei, foc_maps,
                                               analysis_settings["foci_channel_names"])
         for r in roi:
@@ -295,32 +365,82 @@ class Detector:
         nuclei, foci = self.qualitytester.check_roi_quality()
         return nuclei + foci
 
+    def release_transient_state(self) -> None:
+        """
+        Method to drop the per-image data the mappers hold on to between analyses
+
+        The mappers keep whatever ``set_channels``/``set_roi`` were last given, purely as a side
+        effect of their setter-based API -- nothing reads it once ``analyse_image`` has returned.
+        Holding it has two costs:
+
+        * **memory** -- a Detector that has run one analysis retains the image channels and every
+          detected ROI for as long as it lives, which for the main window means the whole session;
+        * **serialisation** -- batch analysis passes the bound ``analyse_image`` to a
+          ``ProcessPoolExecutor``, which pickles this object **once per image**. Measured on a
+          1024x1024 image: 0.9 KiB when clean, **3 431 KiB** after one image-processing analysis and
+          **11 211 KiB** after one u-net analysis, the latter because ``fcnmapper`` holds a loaded
+          Keras model. Over a 100-image batch that is the difference between a rounding error and
+          roughly a gigabyte of pickling.
+
+        Invariant: outside of a running ``analyse_image``, this object holds no image data. It is
+        therefore called at both ends of an analysis -- the leading call covers an analysis that
+        raised partway through.
+
+        :return: None
+        """
+        self.nucleusmapper.set_channels(())
+        self.focusmapper.set_channels(())
+        self.qualitytester.set_channels(())
+        self.qualitytester.set_channel_names(())
+        self.qualitytester.set_roi([])
+        # Holds a loaded Keras model, which is the bulk of the u-net figure above. It is rebuilt on
+        # every ml_roi_extraction call regardless, so dropping it here costs nothing extra
+        self.fcnmapper = None
+
     def add_log_message(self, msg: str) -> None:
         """
         Method to add a new log message
+
+        Messages are buffered instead of logged straight away: this method also runs inside
+        ProcessPoolExecutor workers, and buffering lets the parent process replay them in image
+        order via get_log_messages instead of several processes appending to the log file at once.
 
         :param msg: The message to log
         :return: None
         """
         self.analysis_log["Messages"][self.analysis_log["Analysed Images"][-1]].append(msg)
 
-    def save_log_messages(self, file_path: str, append: bool = True) -> None:
+    def get_log_messages(self) -> List[str]:
         """
-        Method to save the logs to the given file
+        Method to get the buffered log messages as a list of formatted lines
 
-        :param file_path: Path leading to the log file
-        :param append: If true, the file will be extended instead of overwritten
+        Returned with the analysis result so the messages of a worker process can be replayed by
+        the parent, which owns the log file.
+
+        :return: The formatted log lines, in the order the messages were added
+        """
+        lines = [f"Date: {self.analysis_log['Date']}",
+                 f"Time: {self.analysis_log['Time']}",
+                 "Analysed Images:"]
+        for img in self.analysis_log["Analysed Images"]:
+            lines.append(f"{' ' * 4}{img}")
+            for msg in self.analysis_log["Messages"][img]:
+                lines.append(f"{' ' * 8}{msg}")
+        return lines
+
+    def flush_log_messages(self) -> None:
+        """
+        Method to write the buffered log messages to the log and to clear the buffer
+
+        Replaces the former save_log_messages, which opened gui.Paths.log_path itself. Output now
+        goes through the shared logger configured by core.logging_config, which owns the only
+        handle on the log file and applies the UTF-8 encoding the image file names in these
+        messages require.
+
         :return: None
         """
-        with open(file_path, "a+" if append else "rw+") as lf:
-            lf.write(f"Date: {self.analysis_log['Date']}\n")
-            lf.write(f"Time: {self.analysis_log['Time']}\n")
-            lf.write("Analysed Images:\n")
-            for img in self.analysis_log["Analysed Images"]:
-                lf.write(f"{' ' * 4}{img}\n")
-                for msg in self.analysis_log["Messages"][img]:
-                    lf.write(f"{' ' * 8}{msg}\n")
-            lf.write("#" * 20 + "\n")
+        log_messages(self.get_log_messages())
+        self.clear_log()
 
     def clear_log(self) -> None:
         """

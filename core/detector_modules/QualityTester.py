@@ -8,6 +8,23 @@ from numpy import ndarray
 from core.roi.ROI import ROI
 
 
+def default_log(message: str) -> None:
+    """
+    Fallback used when a QualityTester is constructed without settings
+
+    Module level on purpose. This used to be a lambda in the class body of QualityTester, which
+    made **every Detector instance unpicklable** -- class-body lambdas cannot be pickled -- and
+    therefore made batch analysis fail before a single image was read: `_analyze_all` hands
+    `self.detector.analyse_image` to a ProcessPoolExecutor, which pickles the bound method and with
+    it the whole Detector, including the QualityTester built in its constructor. A module-level
+    function pickles by reference and does not.
+
+    :param message: The message to report
+    :return: None
+    """
+    print(f"Std. Logging: {message}")
+
+
 class QualityTester:
     """
     Class to check the quality of found nuclei and foci
@@ -25,7 +42,7 @@ class QualityTester:
         "cutoff": .03,
         "size_factor": 1.0,
         "logging": False,
-        "log": lambda a: print(f"Std. Logging: {a}")
+        "log": default_log
     }
 
     def __init__(self, channels: List[np.ndarray] = None, channel_names: List[str] = None,

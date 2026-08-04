@@ -18,6 +18,9 @@ from skimage.util import view_as_windows
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 from tensorflow.keras import models
 import gui.Paths as gpaths
+from core.logging_config import get_logger
+
+LOGGER = get_logger(__name__)
 from core.detector_modules.AreaMapper import AreaMapper
 
 
@@ -59,7 +62,7 @@ class FCNMapper(AreaMapper):
                 for gpu in gpus:
                     tf.config.experimental.set_memory_growth(gpu, True)
             except RuntimeError as e:
-                print(e)
+                LOGGER.warning("Could not set dynamic GPU memory growth: %s", e)
 
     @staticmethod
     def load_model() -> models.Model:
@@ -90,10 +93,19 @@ class FCNMapper(AreaMapper):
         """
         Method to map the given channels
 
+        Progress is reported per channel only. The inference itself is one `model.predict` call
+        covering every tile at once, which is where essentially all of the ~21 s goes and which
+        this loop cannot see into; reporting inside it would need a Keras callback, and useful
+        granularity would also need a smaller batch size than the default, at some cost in
+        inference throughput.
+
         :return: The prediction maps
         """
         prediction_maps = []
-        for channel in self.channels:
+        channels = list(self.channels)
+        count = max(1, len(channels))
+        for ind, channel in enumerate(channels):
+            self.progress(ind / count, f"Detecting foci on channel {ind + 1}/{count} (u-net)")
             orig_shape = channel.shape
             orig_dtype = channel.dtype
             # Resize the channel to match the training size

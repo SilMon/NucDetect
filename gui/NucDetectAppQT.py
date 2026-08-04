@@ -1,18 +1,34 @@
+import math
 import multiprocessing
 import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = "2"
+import re
 import shutil
 import sys
 import threading
 import time
 import traceback
 import warnings
+# TODO Remove before final release
+# Ensure the project root (parent of this file's directory) is importable,
+# so this file can be run directly regardless of the current working directory.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 from concurrent.futures import ProcessPoolExecutor
 from copy import copy
-from datetime import datetime
-from functools import partial
 from threading import Thread
-from typing import Union, Dict, Iterable, List, Tuple, Any
+from typing import Union, Dict, Iterable, List, Tuple, Any, Callable
+
+# --- Import order below is load-bearing: TensorFlow MUST be imported before PyQt5 ---------
+# On Windows, loading Qt's DLLs first exhausts the process' static TLS budget. TensorFlow's
+# native runtime is then unable to initialise and the import fails with:
+#     ImportError: DLL load failed while importing _pywrap_tensorflow_internal
+#     _pywrap_tensorflow_common.dll: INITIALIZATION FAILED (0x45A / ERROR_DLL_INIT_FAILED)
+# The accompanying diagnostic blames AVX2/the Visual C++ Redistributable; both are red
+# herrings. Importing TensorFlow first claims its TLS slots and the conflict disappears.
+# Do NOT move this below the PyQt5 imports, and do not let an import sorter reorder it.
+import tensorflow  # noqa: F401  (unused by name; imported solely to fix DLL load order)
 
 import PyQt5
 import numpy as np
@@ -26,6 +42,8 @@ from PyQt5.QtGui import QStandardItemModel, QStandardItem, QPixmap
 from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, QMessageBox
 
 from core.Detector import Detector
+from core.logging_config import configure_logging, get_logger, init_worker_logging, log_messages
+from core.progress import ProgressReporter, stage_bounds, ELLIPSE, DATABASE, TABLE
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 from core.database.connections import Connector, Requester, Inserter
@@ -39,6 +57,72 @@ from gui import Util
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, False)
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, False)
 pg.setConfigOptions(imageAxisOrder='row-major')
+# Reference to the main window, needed to report errors of worker threads. Set by main()
+_MAIN_WINDOW = None
+LOGGER = get_logger(__name__)
+# If set, a ui operation running off the GUI thread raises instead of only being logged. Meant for
+# tests and debug runs -- in production a wrong thread should not turn into a hard crash by itself
+STRICT_THREAD_AFFINITY = os.environ.get("NUCDETECT_STRICT_THREAD_AFFINITY", "") == "1"
+# Steps the progress bar is driven at during an analysis. _set_progress truncates the bar value to
+# an int, so the maximum of 100 used elsewhere is too coarse for the sub-stage emits inside nucleus
+# extraction -- several of them would land on the same integer and the bar would still look stuck
+PRG_RESOLUTION = 1000
+# Role the precomputed sort key of a result table cell is stored under
+SORT_ROLE = Qt.UserRole
+# Splits a text into its digit and non-digit runs
+_DIGIT_RUN = re.compile(r"(\d+)")
+# Sort keys are tuples of uniform (kind, number, text) triples. The uniform shape is what keeps a
+# numeric run from ever being compared against a text run, which would raise a TypeError
+_NUMERIC_PART = 0
+_TEXT_PART = 1
+
+
+def create_sort_key(text: Union[str, None]) -> Tuple[Tuple[int, float, str], ...]:
+    """
+    Function to create the key a result table cell is sorted by.
+
+    Every cell of the result table holds a preformatted string, so comparing the displayed text
+    would order "100.00" before "9.00" and the group "10 mikM" before "5 mikM". A cell that is a
+    number as a whole -- including decimals and signs -- therefore compares numerically, every
+    other cell compares run by run: digit runs numerically, the rest case-insensitively.
+
+    :param text: The displayed text of the cell
+    :return: The sort key, comparable against every other key created by this function
+    """
+    text = str(text) if text is not None else ""
+    number = _to_finite_float(text)
+    if number is not None:
+        key = [(_NUMERIC_PART, number, "")]
+    else:
+        key = []
+        for part in _DIGIT_RUN.split(text):
+            if not part:
+                continue
+            if part.isdigit():
+                key.append((_NUMERIC_PART, float(part), ""))
+            else:
+                key.append((_TEXT_PART, 0.0, part.casefold()))
+    # Last resort tiebreak. Without it "img_1" and "img_01" -- or "5.0" and "5.00" -- share a key,
+    # and since the sorting is stable, equal keys keep their source order in BOTH directions, i.e.
+    # reversing the sort would not reverse those rows
+    key.append((_TEXT_PART, 0.0, text.casefold()))
+    return tuple(key)
+
+
+def _to_finite_float(text: str) -> Union[float, None]:
+    """
+    Function to convert the given text to a float, if it describes one in full
+
+    :param text: The text to convert
+    :return: The converted number, None if the text is not a finite number
+    """
+    try:
+        number = float(text)
+    except (TypeError, ValueError):
+        return None
+    # nan compares False against everything, which would silently destroy the ordering. Neither it
+    # nor inf are values this table can hold, so both are sorted as text
+    return number if math.isfinite(number) else None
 
 
 class NucDetect(QMainWindow):
@@ -48,10 +132,19 @@ class NucDetect(QMainWindow):
     """
     prg_signal = pyqtSignal(str, float, float, str)
     selec_signal = pyqtSignal(bool)
+    # Wired to add_item_to_list in _connect_signals but currently emitted by nothing -- kept as the
+    # thread-safe entry point for adding an image from a worker, which is the only correct way to do
+    # it. Signature matches the slot; emit it rather than calling add_item_to_list off the GUI thread
     add_signal = pyqtSignal(str)
-    aa_signal = pyqtSignal(int, int)
-    executor = Thread()
-    check_timer = QTimer()
+    # Signals used to report and recover from errors inside worker threads
+    err_signal = pyqtSignal(str, str)
+    enable_signal = pyqtSignal(bool)
+    # Signals used to apply results computed in a worker thread to the ui. Qt requires all widget
+    # and model access to happen on the GUI thread, so workers compute plain data and hand it over
+    # here instead of touching the models themselves
+    table_signal = pyqtSignal(list, list)
+    row_signal = pyqtSignal(list)
+    status_signal = pyqtSignal(bool)
     STANDARD_TABLE_HEADER = ["Image Name", "Image Identifier",
                              "ROI Identifier", "Center Y",
                              "Center X", "Area [px]", "Ellipticity[%]",
@@ -94,7 +187,17 @@ class NucDetect(QMainWindow):
         self.hash_to_name = {}
         # Timer responsible for lazy loading
         self.update_timer = None
-        self.unsaved_changes = False
+        # Highest bar fraction shown so far during the running analysis, or None when no analysis
+        # is in progress. See _set_progress for why the monotonicity clamp is opt-in
+        self._prg_floor: Union[float, None] = None
+        # Timer which polls running data exports. Instance attribute on purpose: as a class
+        # attribute it was shared between windows and accumulated one connected slot per export
+        self.check_timer = QTimer()
+        self.check_timer.setInterval(500)
+        # The export dialog whose threads are currently awaited, and when the wait started
+        self.export_dialog = None
+        self.export_start = None
+        self._closing = False
         # Setup UI
         self._setup_ui()
         self.showMaximized()
@@ -118,7 +221,7 @@ class NucDetect(QMainWindow):
         # Create the images folder
         if not os.path.isdir(gpaths.images_path):
             os.makedirs(gpaths.images_path)
-            shutil.copy2(os.path.join(os.pardir, "demo.tif"), os.path.join(gpaths.images_path, "demo.tif"))
+            shutil.copy2(os.path.join(_PROJECT_ROOT, "demo.tif"), os.path.join(gpaths.images_path, "demo.tif"))
         # Create the log folder
         if not os.path.isdir(gpaths.log_dir_path):
             os.makedirs(gpaths.log_dir_path)
@@ -127,7 +230,7 @@ class NucDetect(QMainWindow):
         """
         Method to load the saved Settings
 
-        :return: None
+        :return: The loaded settings, keyed by setting name
         """
         settings_sql = self.requester.get_all_settings()
         settings = {}
@@ -149,7 +252,7 @@ class NucDetect(QMainWindow):
         elif type_ == "float":
             return float(value)
         elif type_ == "bool":
-            return bool(value)
+            return str(value).strip().lower() in ("1", "true", "yes")
         else:
             return value
 
@@ -160,6 +263,11 @@ class NucDetect(QMainWindow):
         :param event: The closing event
         :return: None
         """
+        # Guard against re-entry: on_close() pumps the event loop while waiting for exports
+        if self._closing:
+            event.ignore()
+            return
+        self._closing = True
         self.on_close()
         event.accept()
 
@@ -187,7 +295,8 @@ class NucDetect(QMainWindow):
         :return: None
         """
         self.ui = uic.loadUi(gpaths.ui_main, self)
-        self.ui.setStyleSheet(open(os.path.join(gpaths.css_dir, "main.css")).read())
+        with open(os.path.join(gpaths.css_dir, "main.css"), "r", encoding="utf-8") as f:
+            self.ui.setStyleSheet(f.read())
         # General Window Initialization
         self.setWindowTitle("NucDetect - Focus Analysis Software")
         self.setWindowIcon(Icon.get_icon("LOGO"))
@@ -270,6 +379,140 @@ class NucDetect(QMainWindow):
         self.prg_signal.connect(self._set_progress)
         self.selec_signal.connect(self._select_next_image)
         self.add_signal.connect(self.add_item_to_list)
+        self.err_signal.connect(self._show_worker_error)
+        self.enable_signal.connect(self._set_ui_enabled)
+        self.table_signal.connect(self._apply_result_table)
+        self.row_signal.connect(self._append_result_row)
+        self.status_signal.connect(self._apply_item_status)
+        # Connected exactly once, here. The parameters the slot needs live on the instance, so
+        # save_results() does not have to (re-)connect a partial on every export
+        self.check_timer.timeout.connect(self.check_for_running_threads)
+
+    def _run_guarded(self, worker: Callable, *args) -> None:
+        """
+        Method to run a worker thread body, ensuring that errors are reported and that the ui is
+        always re-enabled. Meant to be used as target of every thread started by this window
+
+        :param worker: The method to execute in this thread
+        :param args: The arguments to pass to the worker
+        :return: None
+        """
+        try:
+            worker(*args)
+        except Exception:
+            # sys.excepthook does not cover worker threads, so the error has to be routed to the
+            # main thread manually
+            self.err_signal.emit(worker.__name__, traceback.format_exc())
+        finally:
+            # An analysis that raised never reaches its own disarm, and a still-armed clamp would
+            # silently hold every later progress bar at the value the failed run had reached
+            self._prg_floor = None
+            # Re-enable the ui via signal, since it must not be touched from this thread
+            self.enable_signal.emit(True)
+
+    def _show_worker_error(self, source: str, text: str) -> None:
+        """
+        Method to inform the user about an error which occured inside a worker thread. Connected to
+        err_signal, thus always executed on the main thread
+
+        :param source: The name of the worker the error originated from
+        :param text: The formatted traceback of the error
+        :return: None
+        """
+        LOGGER.error("Error during %s:\n%s", source, text)
+        self.prg_signal.emit(f"Error during {source} -- Program ready", 100, 100, "")
+        show_error_message(title="An error occured during execution",
+                           info=f"An error occured at {time.strftime('%Y-%m-%d, %H:%M:%S')} "
+                                f"during {source}",
+                           text=f"During the execution of the program, following error occured:\n{text}")
+
+    def _set_ui_enabled(self, state: bool) -> None:
+        """
+        Method to set the state of the buttons and the image list. Connected to enable_signal, thus
+        always executed on the main thread
+
+        :param state: The state to set the ui into
+        :return: None
+        """
+        self.enable_buttons(state)
+        self.ui.list_images.setEnabled(state)
+
+    def _assert_main_thread(self, operation: str) -> None:
+        """
+        Method to verify that a ui operation is running on the GUI thread
+
+        Touching a widget or a model from a worker thread does not fail immediately -- it corrupts
+        Qt's internal state and surfaces later as an unreproducible freeze or crash. This turns
+        that into a loud, deterministic failure at the point of the violation.
+
+        :param operation: Name of the operation, used in the message
+        :return: None
+        :raises RuntimeError: If called off the GUI thread and strict checking is enabled
+        """
+        if QtCore.QThread.currentThread() is self.thread():
+            return
+        msg = (f"{operation} was called from thread "
+               f"'{QtCore.QThread.currentThread().objectName() or threading.current_thread().name}'"
+               f" instead of the GUI thread -- route it through a signal")
+        LOGGER.critical(msg)
+        if STRICT_THREAD_AFFINITY:
+            raise RuntimeError(msg)
+
+    def _apply_result_table(self, header: List[str], rows: List[List[str]]) -> None:
+        """
+        Method to fill the result table with rows prepared by a worker thread. Connected to
+        table_signal, thus always executed on the main thread
+
+        :param header: The column labels of the table
+        :param rows: The prepared rows, as lists of cell texts
+        :return: None
+        """
+        self._assert_main_thread("_apply_result_table")
+        self.res_table_model.setRowCount(0)
+        self.create_table_rows(rows)
+        if rows:
+            self.res_table_model.setColumnCount(len(rows[0]))
+        # Set header of table
+        self.res_table_model.setHorizontalHeaderLabels(header)
+        data = [header]
+        data.extend(rows)
+        self.data = data
+
+    def _append_result_row(self, cells: List[str]) -> None:
+        """
+        Method to append a single row to the result table. Connected to row_signal, thus always
+        executed on the main thread
+
+        QStandardItems belong to the thread of the model they are added to, so they are constructed
+        here and not by the worker that produced the cell texts.
+
+        :param cells: The text each cell of the row should contain
+        :return: None
+        """
+        self._assert_main_thread("_append_result_row")
+        items = []
+        for cell in cells:
+            item = QStandardItem(cell)
+            item.setTextAlignment(QtCore.Qt.AlignCenter)
+            # Derive the sort key once here, not on every comparison the sorting performs
+            item.setData(create_sort_key(cell), SORT_ROLE)
+            items.append(item)
+        self.res_table_model.appendRow(items)
+        self.ui.table_results.scrollToBottom()
+
+    def _apply_item_status(self, all_items: bool) -> None:
+        """
+        Method to update the image list items after an analysis. Connected to status_signal, thus
+        always executed on the main thread
+
+        :param all_items: If true, every item of the list is checked, else only the selected one
+        :return: None
+        """
+        self._assert_main_thread("_apply_item_status")
+        if all_items:
+            self.check_all_item_statuses()
+        else:
+            self.reflect_item_status_changes()
 
     def reload(self) -> None:
         """
@@ -299,8 +542,24 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        for index in self.ui.list_images.selectionModel().selectedIndexes():
+        selected = self.ui.list_images.selectionModel().selectedIndexes()
+        for index in selected:
             self.cur_img = self.img_list_model.get_item_at_index(index.row()).data()
+        if not selected:
+            # The list is ExtendedSelection, so Ctrl-clicking the selected row deselects it and
+            # fires this handler with an empty selection. The loop above then does not run, and
+            # without this cur_img kept pointing at the deselected image while btn_analyse stayed
+            # enabled -- Analyse would have run against an image the user had just deselected.
+            #
+            # This does NOT cover clearing or reloading the list: those reset the model, and Qt
+            # drops the selection on a model reset without emitting selectionChanged, so this
+            # handler is never called for them.
+            self.cur_img = None
+        # Analysis needs a selected image, so the button follows that state. btn_analyse starts
+        # disabled in the .ui, as btn_modify already did: before this, a freshly launched window
+        # offered an enabled Analyse button with nothing loaded, and clicking it opened the settings
+        # dialog before failing on cur_img
+        self.ui.btn_analyse.setEnabled(self.cur_img is not None)
         if self.cur_img:
             ana = self.cur_img["analysed"]
             if ana:
@@ -351,7 +610,8 @@ class NucDetect(QMainWindow):
         :return: The exit code of the dialog
         """
         msg = QMessageBox()
-        msg.setStyleSheet(open(os.path.join(gpaths.css_dir, "messagebox.css"), "r").read())
+        with open(os.path.join(gpaths.css_dir, "messagebox.css"), "r", encoding="utf-8") as f:
+            msg.setStyleSheet(f.read())
         msg.setWindowIcon(Icon.get_icon("LOGO"))
         msg.setIcon(QMessageBox.Information)
         msg.setWindowTitle(title)
@@ -372,8 +632,8 @@ class NucDetect(QMainWindow):
         # Disable Buttons and list during loading
         self.enable_buttons(state=False)
         self.ui.list_images.setEnabled(False)
-        load_thread = threading.Thread(target=self._load_saved_data,
-                                       args=(experiment,),
+        load_thread = threading.Thread(target=self._run_guarded,
+                                       args=(self._load_saved_data, experiment),
                                        daemon=True)
         load_thread.start()
 
@@ -390,13 +650,11 @@ class NucDetect(QMainWindow):
         self.roi_cache = self.load_rois_from_database(self.cur_img["key"])
         # Create the result table from loaded data
         self.create_result_table_from_list(self.roi_cache, experiment)
-        # Re-enable buttons and list
-        self.ui.list_images.setEnabled(True)
-        self.enable_buttons()
+        # Re-enable buttons and list. Runs on this worker thread, so it has to go through the
+        # signal -- the two duplicated in-body enable calls this replaces did not
+        self.enable_signal.emit(True)
         self.prg_signal.emit(f"Data loaded from database for {self.cur_img['file_name']}",
                              100, 100, "")
-        self.enable_buttons(state=True)
-        self.ui.list_images.setEnabled(True)
 
     def show_experiment_dialog(self) -> None:
         """
@@ -422,16 +680,11 @@ class NucDetect(QMainWindow):
         """
         options = QFileDialog.Options()
         options |= QFileDialog.DontUseNativeDialog
-        pardir = os.getcwd()
-        imgdir = os.path.join(os.path.dirname(pardir),
-                              r"images")
-        file_name, _ = QFileDialog.getOpenFileName(self, "Load images..", imgdir,
+        file_name, _ = QFileDialog.getOpenFileName(self, "Load images..", gpaths.images_path,
                                                    "Image Files (*.tif *.tiff *.png *.jpg *.jpeg *.bmp)",
                                                    options=options)
         if file_name:
-            self.add_item_to_list(
-                Util.create_list_item(file_name)
-            )
+            self.add_item_to_list(file_name)
 
     def add_images_from_folder(self, url: str, reload: bool = False) -> None:
         """
@@ -442,16 +695,17 @@ class NucDetect(QMainWindow):
         :return: None
         """
         paths = []
+        loaded_set = set(self.loaded_files)
         for t in os.walk(url):
             tpaths = [os.path.join(t[0], x) for x in t[2]]
-            paths.extend([x for x in tpaths if x not in self.loaded_files])
+            paths.extend([x for x in tpaths if x not in loaded_set])
         # If no images where found, open a file dialog to add images
         if not paths:
             files = str(QFileDialog.getExistingDirectory(self, "Select Directory to load images from"))
             # Walk the folder to find all files inside it
             for t in os.walk(files):
                 tpaths = [os.path.join(t[0], x) for x in t[2]]
-                paths.extend([x for x in tpaths if x not in self.loaded_files])
+                paths.extend([x for x in tpaths if x not in loaded_set])
         self.loaded_files.extend(sorted(paths, key=lambda x: os.path.basename(x)))
         # Add new paths to database
         self.add_images_to_database(self.loaded_files)
@@ -481,26 +735,32 @@ class NucDetect(QMainWindow):
         # Get the required information
         d = ImageLoader.get_image_data(path)
         # Add the data to the database
-        self.inserter.add_new_image(md5, d["year"], d["month"], d["day"], d["hour"], d["day"],
-                                    d["channels"], d["width"], d["height"], d["x_res"],
-                                    d["y_res"], d["unit"])
+        # Passed by keyword: the signature takes eleven same-looking values in a row, which is how
+        # the minute slot silently received the day for as long as it did
+        self.inserter.add_new_image(md5,
+                                    year=d["year"], month=d["month"], day=d["day"],
+                                    hour=d["hour"], minute=d["minute"],
+                                    channels=d["channels"], width=d["width"], height=d["height"],
+                                    xres=d["x_res"], yres=d["y_res"], res_unit=d["unit"])
         self.inserter.register_image_filename(path)
         self.connector.commit_changes()
 
-    def add_item_to_list(self, item: QStandardItem) -> None:
+    def add_item_to_list(self, path: str) -> None:
         """
-        Utility method to add an item to the image list
+        Utility method to add an image to the image list
 
-        :param item: The item to add
+        The model creates the list item itself, so only the path is needed here
+
+        :param path: The path of the image to add
         :return: None
         """
-        if item is not None:
-            path = item.data()["path"]
-            if path in self.loaded_files:
-                return
-            self.img_list_model.appendRow(item)
-            self.loaded_files.append(path)
-            self.add_image_information_to_database(path)
+        if not path:
+            return
+        # Let the model own the insertion, so it can emit the required Qt signals
+        if not self.img_list_model.add_path(path):
+            return
+        self.loaded_files.append(path)
+        self.add_image_information_to_database(path)
 
     def remove_image_from_list(self) -> None:
         """
@@ -509,9 +769,13 @@ class NucDetect(QMainWindow):
         :return: None
         """
         cur_ind = self.ui.list_images.currentIndex()
-        data = self.img_list_model.item(cur_ind.row()).data()
-        self.loaded_files.remove(data["path"])
-        self.img_list_model.removeRow(cur_ind.row())
+        # Without a selection currentIndex() is invalid (row -1), which would otherwise
+        # resolve to the *last* image and delete the wrong entry
+        if not cur_ind.isValid():
+            return
+        path = self.img_list_model.get_item_at_index(cur_ind.row()).data()["path"]
+        if self.img_list_model.removeRow(cur_ind.row()):
+            self.loaded_files.remove(path)
 
     def clear_image_list(self) -> None:
         """
@@ -550,6 +814,14 @@ class NucDetect(QMainWindow):
         """
         if not self.cur_img:
             self.selec_signal.emit(True)
+        # The emit above selects the first image, but there may not be one -- an empty list leaves
+        # cur_img as None. Checked before the settings dialog opens, so the user is not asked to
+        # configure an analysis that cannot run. The button is also disabled in this state; this
+        # guard is the safeguard for the two staying out of step
+        if not self.cur_img:
+            self.prg_signal.emit("No image selected -- load and select an image first",
+                                 0, 100, "")
+            return
         # Get settings for this analysis
         self.ui.list_images.setEnabled(False)
         self.enable_buttons(False)
@@ -560,8 +832,9 @@ class NucDetect(QMainWindow):
         self.res_table_model.setRowCount(0)
         self.prg_signal.emit(f"Analysing {self.cur_img['file_name']}",
                              0, 100, "")
-        thread = Thread(target=self.analyze_image,
-                        args=(self.cur_img["path"],
+        thread = Thread(target=self._run_guarded,
+                        args=(self.analyze_image,
+                              self.cur_img["path"],
                               "Analysis finished in {} -- Program ready",
                               100, 100, settings))
         thread.start()
@@ -580,31 +853,52 @@ class NucDetect(QMainWindow):
         :param analysis_settings: The settings to apply to this analysis
         :return: None
         """
-        self.enable_buttons(False)
-        self.ui.list_images.setEnabled(False)
+        self.enable_signal.emit(False)
         start = time.time()
-        self.prg_signal.emit("Starting analysis", 0, maxi, "")
-        self.unsaved_changes = True
-        self.prg_signal.emit("Analysing image", maxi * 0.05, maxi, "")
-        data = self.detector.analyse_image(path, settings=analysis_settings, save_log=True)
+        # Weights for the three stages that run here, after the Detector has returned. The Detector
+        # gets the same table for the stages it owns, so the two halves cannot drift apart
+        bounds = stage_bounds(analysis_settings["analysis_settings"]["method"])
+        # Arm the monotonicity clamp for the duration of this analysis
+        self._prg_floor = 0.0
+        reporter = ProgressReporter(self._report_analysis_progress)
+        reporter(0.0, "Starting analysis")
+        data = self.detector.analyse_image(path, settings=analysis_settings, save_log=True,
+                                           progress=reporter)
         self.roi_cache = data["handler"]
-        self.prg_signal.emit(f"Ellipse parameter calculation", maxi * 0.75, maxi, "")
+        reporter.sub(*bounds[ELLIPSE])(0.0, "Calculating ellipse parameters")
         for roi in self.roi_cache:
             if roi.main:
                 roi.calculate_ellipse_parameters()
-        self.prg_signal.emit("Creating result table", maxi * 0.65, maxi, "")
-        #print(f"Calculation of ellipse parameters: {time.time() - s0:.4f}")
-        self.prg_signal.emit("Checking database", maxi * 0.9, maxi, "")
-        s1 = time.time()
+        reporter.sub(*bounds[DATABASE])(0.0, "Writing results to database")
         self.save_rois_to_database(data)
-        #print(f"Writing to database: {time.time() - s1:.4f} secs")
+        reporter.sub(*bounds[TABLE])(0.0, "Creating result table")
+        self.create_result_table_from_list(self.roi_cache)
+        # Only now is the analysis actually over. The previous version announced completion before
+        # building the result table, so the bar read 100 % while work was still running
+        self._prg_floor = None
         self.prg_signal.emit(message.format(f"{time.time() - start:.2f} secs"),
                              percent, maxi, "")
-        self.create_result_table_from_list(self.roi_cache)
-        #print(f"Creation result table: {time.time() - s0:.4f} secs")
-        self.enable_buttons()
-        self.ui.list_images.setEnabled(True)
-        self.reflect_item_status_changes()
+        self.enable_signal.emit(True)
+        self.status_signal.emit(False)
+
+    def _report_analysis_progress(self, fraction: float, message: str) -> None:
+        """
+        Method to forward a progress fraction from the analysis onto the progress bar
+
+        Called from the analysis thread by ProgressReporter, hence the signal rather than a direct
+        widget call. Single-image analysis runs the Detector in-process, which is what allows a
+        plain callback here; batch analysis runs it in a ProcessPoolExecutor, where Qt signals
+        cannot cross the process boundary and an IPC queue would be needed instead.
+
+        The bar is driven at PRG_RESOLUTION steps rather than 100 because `_set_progress` truncates
+        the value to an int: at a maximum of 100 the sub-stage emits inside nucleus extraction would
+        collapse onto the same handful of integers and the bar would still look frozen.
+
+        :param fraction: Progress through the whole analysis, 0..1
+        :param message: The text to show above the bar
+        :return: None
+        """
+        self.prg_signal.emit(message, fraction * PRG_RESOLUTION, PRG_RESOLUTION, "")
 
     def analyze_all(self) -> None:
         """
@@ -614,12 +908,11 @@ class NucDetect(QMainWindow):
         """
         self.enable_buttons(False)
         self.ui.list_images.setEnabled(False)
-        self.unsaved_changes = True
         # Get settings for this analysis
         settings = self.show_analysis_settings_dialog(show_redo_option=True)
         if not settings:
             return
-        thread = Thread(target=self._analyze_all, args=(settings,))
+        thread = Thread(target=self._run_guarded, args=(self._analyze_all, settings))
         thread.start()
 
     def _analyze_all(self, settings: Dict[str, Union[int, float, str, Iterable]], batch_size: int = 10) -> None:
@@ -631,13 +924,17 @@ class NucDetect(QMainWindow):
         :return: None
         """
         start_time = time.time()
-        # Use all available threads except 4
-        with ProcessPoolExecutor(max_workers=round(multiprocessing.cpu_count() * 0.25)) as e:
-            self.res_table_model.setRowCount(0)
-            self.res_table_model.setColumnCount(2)
-            self.res_table_model.setHorizontalHeaderLabels(["Image Name", "Image Hash",
-                                                            "Number of Nuclei", "Number of Foci",
-                                                            "Foci per Nucleus"])
+        # Use a quarter of the available cores, but never less than 1
+        workers = max(1, round(multiprocessing.cpu_count() * 0.25))
+        # Workers are spawned on Windows and therefore start with an unconfigured logging module.
+        # The initializer runs once per process and gives each its own handler
+        with ProcessPoolExecutor(max_workers=workers,
+                                 initializer=init_worker_logging,
+                                 initargs=(gpaths.log_path,)) as e:
+            # Clear the table and set its header on the GUI thread. The rows follow one by one via
+            # row_signal as the results come in, so no rows are passed here
+            self.table_signal.emit(["Image Name", "Image Hash", "Number of Nuclei",
+                                    "Number of Foci", "Foci per Nucleus"], [])
             logstate = settings["analysis_settings"]["logging"]
             settings["analysis_settings"]["logging"] = False
             self.prg_signal.emit("Starting multi image analysis", 0, 100, "")
@@ -647,93 +944,65 @@ class NucDetect(QMainWindow):
                 md5 = ImageLoader.calculate_image_id(image)
                 if not self.requester.check_if_image_was_analysed(md5) or settings["re-analyse"]:
                     paths.append(image)
-            self.write_to_log(f"Batch analysis of {len(paths)} images")
-            ind = 1
-            cur_batch = 1
-            curind = 0
-            # Define needed batch variables
-            start = batch_size + 1 if batch_size < len(paths) else len(paths) + 1
-            stop = len(paths) + batch_size if len(paths) > batch_size else len(paths) + 2
-            step = batch_size
-            # Iterate over all images in batches
-            for b in range(start, stop, step):
+            LOGGER.info("Batch analysis of %d images", len(paths))
+            maxi = len(paths)
+            # Number of batches, rounded up -- the last one is short unless the count divides evenly
+            total_batches = math.ceil(maxi / batch_size) if batch_size > 0 else 0
+            # Counts images actually finished. Kept separate from the 1-based display counter
+            # below: reusing one variable for both is what made the ETA undercount by one and go
+            # negative on the final batch of every run
+            done = 0
+            # A plain slice loop. The previous start/stop/step arithmetic made the first batch
+            # batch_size + 1 images long, and executed once even when there was nothing to analyse
+            for batch_start in range(0, maxi, batch_size):
                 s2 = time.time()
-                tpaths = paths[curind:b if b < len(paths) else len(paths)]
-                t_setts = [settings for _ in range(len(paths))]
-                res = e.map(self.detector.analyse_image, tpaths, t_setts)
-                maxi = len(paths)
+                tpaths = paths[batch_start:batch_start + batch_size]
+                t_setts = [settings for _ in range(len(tpaths))]
+                # save_log=False: the workers hand their messages back with the result instead of
+                # appending to the log file themselves, so the entries stay in image order and
+                # several processes never write the file at the same time
+                t_savelog = [False for _ in range(len(tpaths))]
+                res = e.map(self.detector.analyse_image, tpaths, t_setts, t_savelog)
                 for r in res:
-                    self.prg_signal.emit(f"Analysed images: {ind}/{maxi}",
-                                         ind, maxi, "")
+                    self.prg_signal.emit(f"Analysed images: {done + 1}/{maxi}",
+                                         done + 1, maxi, "")
+                    # Replay the log of the worker that analysed this image
+                    log_messages(r.get("log", ()))
                     self.save_rois_to_database(r, all_=True)
                     # Get the image hash and file name
                     name = self.requester.get_image_filename(r["handler"].ident)
-                    name_item = QStandardItem(name)
-                    ident_item = QStandardItem(r["handler"].ident)
                     mnum = len([x for x in r["handler"] if x.main])
                     fnum = len([x for x in r["handler"] if not x.main])
                     fpn = ((fnum / mnum) if mnum > 0 else 0)
-                    main_item = QStandardItem(str(mnum))
-                    focus_item = QStandardItem(str(fnum))
-                    fpn_item = QStandardItem(str(f"{fpn:.2f}"))
-                    name_item.setTextAlignment(QtCore.Qt.AlignCenter)
-                    ident_item.setTextAlignment(QtCore.Qt.AlignCenter)
-                    main_item.setTextAlignment(QtCore.Qt.AlignCenter)
-                    focus_item.setTextAlignment(QtCore.Qt.AlignCenter)
-                    fpn_item.setTextAlignment(QtCore.Qt.AlignCenter)
-                    self.res_table_model.appendRow(
-                        [name_item, ident_item,
-                         main_item, focus_item,
-                         fpn_item]
-                    )
-                    ind += 1
-                    self.ui.table_results.scrollToBottom()
-                images_left = maxi - ind
-                time_per_image = int((time.time() - start_time) / ind)
-                eta = images_left * time_per_image
+                    # Only the cell texts are produced here -- the QStandardItems are built by the
+                    # slot, because model items belong to the thread of the model they enter
+                    self.row_signal.emit([name, r["handler"].ident,
+                                          str(mnum), str(fnum), f"{fpn:.2f}"])
+                    done += 1
+                images_left = maxi - done
+                # Not int(): truncating to whole seconds reports an ETA of zero for anything
+                # faster than a second per image
+                time_per_image = (time.time() - start_time) / done if done else 0
+                eta = int(images_left * time_per_image)
                 h = eta // 3600
                 m = eta % 3600 // 60
                 s = eta % 3600 % 60
-                msg = f"Analysed batch {cur_batch: 02d}/{maxi // step: 02d} in {time.time() - s2: 09.3f} secs\t\t"\
+                cur_batch = batch_start // batch_size + 1
+                msg = f"Analysed batch {cur_batch: 02d}/{total_batches: 02d} in {time.time() - s2: 09.3f} secs\t\t"\
                       f"Total: {time.time() - start_time: 09.3f} secs\t\t"\
                       f"ETA: {h:02d}h:{m:02d}m:{s:02d}s"
-                print(msg)
-                self.write_to_log(msg)
-                curind = b
-                cur_batch += 1
-                self.detector.save_log_messages(gpaths.log_path, True)
-            self.enable_buttons()
-            self.ui.list_images.setEnabled(True)
+                LOGGER.info(msg)
+            self.enable_signal.emit(True)
             settings["analysis_settings"]["logging"] = logstate
             self.prg_signal.emit("Analysis finished -- Program ready",
                                  100,
                                  100, "")
-            # Change the status of list items to reflect that they were analysed
-            for ind in range(self.img_list_model.rowCount()):
-                item = self.img_list_model.get_item_at_index(ind)
-                data = item.data()
-                data["analysed"] = True
-                item.setData(data)
             self.selec_signal.emit(True)
-            self.check_all_item_statuses()
-        msg = f"Total analysis time: {time.time() - start_time:.3f} secs"
-        print(msg)
-        self.write_to_log(msg)
-
-    @staticmethod
-    def write_to_log(msg: str) -> None:
-        """
-        Method to write something to the log file
-
-        :param msg: The message to write to the log file
-        :return: None
-        """
-        with open(gpaths.log_path, "a+") as lf:
-            lf.write("#" * 20 + "\n")
-            lf.write(datetime.today().strftime("%Y-%m-%d") + "\n")
-            lf.write(datetime.today().strftime("%H:%M:%S") + "\n")
-            lf.write(msg + "\n")
-            lf.write("#" * 20 + "\n")
+            # Change the status of list items to reflect that they were analysed. The loop that
+            # used to precede this set "analysed" on every item from this thread; it was redundant,
+            # since check_all_item_statuses re-derives the flag from the database and overwrites it
+            self.status_signal.emit(True)
+        LOGGER.info("Total analysis time: %.3f secs", time.time() - start_time)
 
     @staticmethod
     def save_rois_to_database(data: Dict[str, Union[str, ROIHandler, np.ndarray, Dict[str, str]]],
@@ -749,32 +1018,38 @@ class NucDetect(QMainWindow):
         # Establish new connector
         req = Requester()
         ins = Inserter()
-        # Get info for image and check if image was analysed already
-        if req.get_info_for_image(key)[8]:
-            # Delete saved data
-            ins.delete_existing_image_data(key)
-        # Check if image should be added to experiment
-        if data["add to experiment"]:
-            exp_data = data["experiment details"]
-            ins.add_image_to_experiment(key, exp_data["name"], exp_data["details"],
-                                        exp_data["notes"], "Standard")
-        # Update channel info
-        for ind in range(len(data["names"])):
-            ins.add_channel(key, ind, data["names"][ind],
-                            data["active channels"][ind], data["main channel"] == ind)
-        # Save scale and scale unit
-        ins.set_image_scale(key, data["x_scale"], data["y_scale"])
-        ins.set_image_scale_unit(key, data["scale_unit"])
-        # Save data for detected ROI
-        roidat, pdat, elldat = NucDetect.prepare_roihandler_for_database(data["handler"], data["channels"])
-        # Check if there is any data to save
-        if roidat:
-            # Save data to database
-            ins.save_roi_data_for_image(key, roidat, pdat, elldat)
-        ins.commit_and_close()
-        req.commit_and_close()
+        try:
+            # Get info for image and check if image was analysed already
+            if req.get_info_for_image(key)[8]:
+                # Delete saved data
+                ins.delete_existing_image_data(key)
+            # Check if image should be added to experiment
+            if data["add to experiment"]:
+                exp_data = data["experiment details"]
+                ins.add_image_to_experiment(key, exp_data["name"], exp_data["details"],
+                                            exp_data["notes"], "Standard")
+            # Update channel info
+            for ind in range(len(data["names"])):
+                ins.add_channel(key, ind, data["names"][ind],
+                                data["active channels"][ind], data["main channel"] == ind)
+            # Save scale and scale unit
+            ins.set_image_scale(key, data["x_scale"], data["y_scale"])
+            ins.set_image_scale_unit(key, data["scale_unit"])
+            # Save data for detected ROI
+            roidat, pdat, elldat = NucDetect.prepare_roihandler_for_database(data["handler"], data["channels"])
+            # Check if there is any data to save
+            if roidat:
+                # Save data to database
+                ins.save_roi_data_for_image(key, roidat, pdat, elldat)
+            # Only commit once all writes succeeded, so a failed save doesn't persist a partial state
+            ins.commit()
+            req.commit()
+        finally:
+            # Always release both connections, even if an error interrupted the writes above
+            ins.connector.close_connection()
+            req.connector.close_connection()
         if not all_:
-            print("ROI saved to database")
+            LOGGER.info("ROI saved to database")
 
     @staticmethod
     def prepare_roihandler_for_database(handler: ROIHandler, channels: List[np.ndarray]) -> Tuple[List, List, List]:
@@ -827,7 +1102,7 @@ class NucDetect(QMainWindow):
             rois.idents.insert(name[1], name[2])
         processed_roi = self.process_roi_database_entries(entries)
         rois.add_rois(processed_roi)
-        print(f"Loaded {len(rois)} roi of image {self.cur_img['file_name']} from database")
+        LOGGER.info("Loaded %d roi of image %s from database", len(rois), self.cur_img["file_name"])
         return rois
 
     def process_roi_database_entries(self, entries: List[Tuple], ) -> List[ROI]:
@@ -897,32 +1172,23 @@ class NucDetect(QMainWindow):
         """
         Method to create the result table from a list of rois
 
+        Safe to call from a worker thread: the database queries stay on the calling thread and only
+        the finished rows are handed to the GUI thread via table_signal. Emitting from the GUI
+        thread itself keeps the old synchronous behaviour, since Qt connects a same-thread emit
+        directly.
+
         :param handler: The handler containing the rois
         :param experiment: The experiment to load
         :return: None
         """
         self.prg_signal.emit(f"Create Result Table",
                              0, 100, "")
-        self.res_table_model.setRowCount(0)
-        # Get all available channels for the image
-        chans = Requester().get_channels(handler.ident)
-        # Remove main channel and  from list
-        chans = [x[2] for x in chans if not bool(x[4]) and bool(x[3])]
-        # Sort channel list
-        chans = sorted(chans)
         # Create header
         header = copy(NucDetect.STANDARD_TABLE_HEADER)
         if experiment:
             header.insert(2, "Group")
         rows = self.prepare_main_table_rows(experiment)
-        self.create_table_rows(rows)
-        if rows:
-            self.res_table_model.setColumnCount(len(rows[0]))
-        # Set header of table
-        self.res_table_model.setHorizontalHeaderLabels(header)
-        header = [header]
-        header.extend(rows)
-        self.data = header
+        self.table_signal.emit(header, rows)
 
     def prepare_main_table_rows(self, experiment: Union[str, None] = None) -> List[List[str]]:
         """
@@ -980,6 +1246,8 @@ class NucDetect(QMainWindow):
             item.setTextAlignment(QtCore.Qt.AlignCenter)
             item.setSelectable(False)
             item.setEditable(False)
+            # Derive the sort key once here, not on every comparison the sorting performs
+            item.setData(create_sort_key(cell), SORT_ROLE)
             item_row.append(item)
         if append:
             # Append the item row to the table model
@@ -1041,6 +1309,7 @@ class NucDetect(QMainWindow):
         :param ana_buttons: Indicates if the status of the analysis buttons also should be changed
         :return: None
         """
+        self._assert_main_thread("enable_buttons")
         if ana_buttons:
             self.ui.btn_analyse.setEnabled(state)
             self.ui.btn_analyse_all.setEnabled(state)
@@ -1056,23 +1325,41 @@ class NucDetect(QMainWindow):
         """
         Method to select the next image in the list of loaded images. Selects the first image if no image is selected
 
+        Note: nothing currently asks for the *next* image -- both selec_signal emits pass
+        first=True -- so the advance path below is dead in production. Before wiring it up, settle
+        what "next" means on the last image: it wraps to the first here only because that is what
+        the code did before, which is not the same as it being right.
+
         :param first: Indicates if the first image in the list should be selected
         :return: None
         """
         max_ind = self.img_list_model.rowCount()
         cur_ind = self.ui.list_images.currentIndex()
-        if cur_ind.row() < max_ind and not first:
-            nex = self.img_list_model.index(cur_ind.row() + 1, 0)
-            self.ui.list_images.selectionModel().select(nex, QItemSelectionModel.Select)
-            self.ui.list_images.setCurrentIndex(nex)
-        else:
-            first = self.img_list_model.index(0, 0)
-            self.ui.list_images.selectionModel().select(first, QItemSelectionModel.Select)
-            self.ui.list_images.setCurrentIndex(first)
+        # An empty list has nothing to select, and index(0, 0) would be invalid
+        if not max_ind:
+            return
+        # rowCount() is a count, currentIndex().row() an index. Comparing them directly asked the
+        # model for index(rowCount, 0) while on the last row -- one past the end. Qt does not raise
+        # for that, it returns an invalid index, and select()/setCurrentIndex() read an invalid
+        # index as "no item", so the selection was silently cleared instead of wrapping round
+        wrap = first or not cur_ind.isValid() or cur_ind.row() >= max_ind - 1
+        nex = self.img_list_model.index(0 if wrap else cur_ind.row() + 1, 0)
+        self.ui.list_images.selectionModel().select(nex, QItemSelectionModel.Select)
+        self.ui.list_images.setCurrentIndex(nex)
 
     def _set_progress(self, text: str, progress: Union[int, float], maxi: Union[int, float], symbol: str) -> None:
         """
         Method to control the progress bar. Should not be called directly, emit the progress signal instead
+
+        While an analysis is running the bar is held monotonic: `_prg_floor` is armed by
+        analyze_image and the value is never allowed to fall below the highest one already shown.
+        The stage weights driving it are measured, but measured on one image on one machine, and
+        stage shares move with nucleus and foci count -- so the estimate *will* be wrong on some
+        images. The clamp is what makes a wrong estimate degrade into "the bar pauses" rather than
+        "the bar goes backwards", which is what users actually reported.
+
+        The clamp is opt-in rather than global because this method also serves loading, export and
+        ROI progress, which legitimately restart at low values without passing through zero.
 
         :param text: The text to show above the bar
         :param progress: The value of the bar
@@ -1080,6 +1367,9 @@ class NucDetect(QMainWindow):
         :param symbol: The symbol printed after the displayed values
         :return: None
         """
+        if self._prg_floor is not None:
+            progress = max(progress, self._prg_floor * maxi)
+            self._prg_floor = progress / maxi if maxi else 0.0
         self.ui.lbl_status.setText(f"{text} -- {(progress / maxi) * 100:.2f}% {symbol}")
         self.ui.prg_bar.setMaximum(int(maxi))
         self.ui.prg_bar.setValue(int(progress))
@@ -1094,42 +1384,82 @@ class NucDetect(QMainWindow):
         dial = DataExportDialog(cur.get("key", None),
                                 cur.get("file_name", None))
         code = dial.exec()
-        if code == QDialog.Accepted:
-            self.check_timer.setInterval(500)
-            start_time = time.time()
-            self.check_timer.timeout.connect(
-                partial(self.check_for_running_threads,
-                        dial.threads,
-                        "Background tasks executing, please wait...",
-                        start_time)
-            )
+        if code == QDialog.Accepted and dial.threads:
+            # Lock the ui until the export threads are done. Without this the user can close the
+            # program while an export is still writing, which truncates the file
+            self.export_dialog = dial
+            self.export_start = time.time()
+            self._set_ui_enabled(False)
+            self.check_timer.start()
 
-    def check_for_running_threads(self,
-                                  threads: List[threading.Thread],
-                                  display_msg: str = "",
-                                  starting_time: int = None) -> None:
+    def check_for_running_threads(self) -> None:
         """
-        Function to keep the program locked until all given threads are finished
+        Method to keep the program locked until the running data exports are finished. Connected to
+        check_timer, thus executed on the main thread every 500 ms while an export runs
 
-        :param threads: List of threads to check
-        :param display_msg: The message to display in the progress bar
-        :param starting_time: The time this function was called
-        :return:None
+        :return: None
         """
-        time_string = ""
-        if starting_time:
-            current_runtime = time.time() - starting_time
-            time_string = f"Runtime: {current_runtime/1000: .2f} sec"
-        msg = display_msg + "Current " + time_string
-        if [x for x in threads if x.is_alive()]:
-            self.enable_buttons(False)
-            print(msg)
-            self.prg_signal.emit(msg,
-                                 0, 100, "")
+        dial = self.export_dialog
+        if dial is None:
+            self.check_timer.stop()
+            return
+        runtime = time.time() - self.export_start
+        running = [x for x in dial.threads if x.is_alive()]
+        if running:
+            self.prg_signal.emit(f"Exporting data, please wait... "
+                                 f"({len(dial.threads) - len(running)}/{len(dial.threads)} done, "
+                                 f"{runtime:.1f} secs)", 0, 100, "")
+            return
+        # All exports finished. Stopping the timer is not optional: it would otherwise keep firing
+        # for the rest of the session, re-enabling the buttons twice a second
+        self.check_timer.stop()
+        errors = list(dial.errors)
+        self.export_dialog = None
+        self.export_start = None
+        self._set_ui_enabled(True)
+        if errors:
+            self.prg_signal.emit(f"Data export failed after {runtime:.1f} secs -- Program ready",
+                                 100, 100, "")
+            self._show_worker_error("data export", "\n".join(errors))
         else:
-            self.enable_buttons(True)
-            self.prg_signal.emit(f"Background tasks finished {time_string}",
+            self.prg_signal.emit(f"Data export finished in {runtime:.1f} secs -- Program ready",
+                                 100, 100, "")
+
+    def wait_for_exports(self, timeout: float = 30) -> bool:
+        """
+        Method to wait for still running data exports, called before the program shuts down
+
+        The export threads are daemons, so without this wait the interpreter would kill them
+        mid-write on exit and leave truncated result files behind
+
+        :param timeout: The maximum time to wait in seconds
+        :return: True if all exports finished, False if the wait timed out
+        """
+        self.check_timer.stop()
+        dial = self.export_dialog
+        if dial is None:
+            return True
+        deadline = time.time() + timeout
+        running = [x for x in dial.threads if x.is_alive()]
+        while running and time.time() < deadline:
+            self.prg_signal.emit(f"Waiting for {len(running)} running export(s) to finish...",
                                  0, 100, "")
+            # Keep the window painting while waiting. Re-entrancy is not a concern here: the ui
+            # was disabled when the export started and _closing blocks a second close
+            QtWidgets.QApplication.processEvents()
+            running[0].join(timeout=0.1)
+            running = [x for x in dial.threads if x.is_alive()]
+        if running:
+            LOGGER.warning("Shutdown with %d export(s) still running after %s secs "
+                           "-- exported files may be incomplete", len(running), timeout)
+            show_error_message(title="Data export unfinished",
+                               info=f"{len(running)} export(s) did not finish within {timeout:.0f} "
+                                    f"seconds",
+                               text="The program is closing while data is still being exported.\n"
+                                    "The affected files may be incomplete and should be exported "
+                                    "again.")
+            return False
+        return True
 
     def show_statistics(self) -> None:
         """
@@ -1143,7 +1473,8 @@ class NucDetect(QMainWindow):
             msg = QMessageBox()
             msg.setWindowIcon(Icon.get_icon("LOGO"))
             msg.setIcon(QMessageBox.Information)
-            msg.setStyleSheet(open(os.path.join(gpaths.css_dir, "messagebox.css"), "r").read())
+            with open(os.path.join(gpaths.css_dir, "messagebox.css"), "r", encoding="utf-8") as f:
+                msg.setStyleSheet(f.read())
             msg.setWindowTitle("Warning")
             msg.setText("No experiments were defined")
             msg.setInformativeText("Statistics can only be displayed, if images are assigned to an experiment")
@@ -1186,6 +1517,12 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
+        # btn_modify is disabled in the .ui until results exist, so this should be unreachable --
+        # which is exactly why the guard is cheap insurance rather than dead weight. Without it the
+        # method raises TypeError on a None cur_img
+        if not self.cur_img:
+            self.prg_signal.emit("No image selected -- nothing to modify", 0, 100, "")
+            return
         # Load channels for image from database
         channels = [(x[1], x[2]) for x in self.requester.get_channels(self.cur_img["key"])]
         editor = Editor(image=ImageLoader.load_image(self.cur_img["path"]),
@@ -1217,7 +1554,8 @@ class NucDetect(QMainWindow):
             msg.setTextFormat(Qt.RichText)
             msg.setText(f.read())
             msg.setWindowTitle("About NucDetect")
-            msg.setStyleSheet(open(os.path.join(gpaths.css_dir, "main.css")).read())
+            with open(os.path.join(gpaths.css_dir, "main.css"), "r", encoding="utf-8") as cf:
+                msg.setStyleSheet(cf.read())
             msg.exec()
 
     def reflect_item_status_changes(self) -> None:
@@ -1226,6 +1564,7 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
+        self._assert_main_thread("reflect_item_status_changes")
         # Check if image was modified
         analysed, modified = Util.check_if_image_was_analysed_and_modified(self.cur_img["key"])
         self.cur_img["analysed"] = analysed
@@ -1247,6 +1586,7 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
+        self._assert_main_thread("check_all_item_statuses")
         model = self.ui.list_images.model()
         for index in range(model.rowCount()):
             item = model.get_item_at_index(index)
@@ -1269,77 +1609,118 @@ class NucDetect(QMainWindow):
 
         :return:
         """
-        self.connector.close_connection()
+        # Let running exports finish writing before the interpreter kills them
+        self.wait_for_exports()
+        # __init__ opens TWO connections -- self.connector, and self.req_connector backing
+        # self.requester -- and only the first used to be closed here. They are closed
+        # independently so that a failure on one cannot leak the other, and neither can stop the
+        # window from closing: nothing useful remains to be done with a connection at this point
+        for name, connector in (("connector", self.connector),
+                                ("req_connector", self.req_connector)):
+            try:
+                connector.close_connection()
+            except Exception:
+                LOGGER.exception("Failed to close %s during shutdown", name)
 
 
 class TableFilterModel(QSortFilterProxyModel):
     """
-    Model used to enable tuple sorting
+    Model used to sort the result table by value instead of by displayed text
     """
 
     def __init__(self, parent):
         super(TableFilterModel, self).__init__(parent)
 
     def lessThan(self, ind1, ind2):
-        ldat = self.sourceModel().itemData(ind1)[0]
-        rdat = self.sourceModel().itemData(ind2)[0]
-        # Check if text can be converted to digit
-        if ldat.isdigit():
-            return int(ldat) < int(rdat)
-        if isinstance(ldat, tuple):
-            if ldat[1] == rdat[1]:
-                return ldat[0] < rdat[0]
-            return ldat[1] < rdat[1]
-        return ldat < rdat
+        return self.get_sort_key(ind1) < self.get_sort_key(ind2)
+
+    def get_sort_key(self, index: QModelIndex) -> Tuple[Tuple[int, float, str], ...]:
+        """
+        Method to get the sort key of the given source index
+
+        :param index: The index of the cell to get the key for
+        :return: The sort key stored for the cell, derived from its text if it has none
+        """
+        source = self.sourceModel()
+        key = source.data(index, SORT_ROLE)
+        # Rows created outside create_table_row carry no precomputed key
+        if key is None:
+            key = create_sort_key(source.data(index, Qt.DisplayRole))
+        return key
 
 
 class ImageListModel(QAbstractListModel):
     """
     Class to lazy load needed image list items
     """
-    __slots__ = (
-        "current_index",
-        "page_size",
-        "_paths",
-        "_current_paths",
-        "_cache",
-    )
 
     def __init__(self, parent=None, paths: List[str] = (), page_size: int = 30):
         """
         :param paths: The image paths that are the basis of the items
         """
         super().__init__(parent)
+        self.page_size = page_size
         self.set_paths(paths)
-        self.page_size = min(page_size, len(paths))
-        self.current_index = 0
         self._cache = {}
 
     def set_paths(self, paths: List[str]):
-        self.modelReset.emit()
-        self._paths = paths
-        self._current_paths = paths
+        # Store a copy: the model owns its path list, so callers mutating their own list
+        # (e.g. NucDetect.loaded_files) cannot silently desynchronise the model behind its back
+        self.beginResetModel()
+        self._paths = list(paths)
+        self._current_paths = self._paths
         self.current_index = 0
         self._cache = {}
+        self.endResetModel()
 
-    def filter_paths(self, keyword: str) -> None:
+    def clear(self) -> None:
         """
-        Method to filter the paths list via keyword search
+        Method to remove all paths and cached items from the model
 
-        :param keyword: The keyword to search for
         :return: None
         """
-        # Reset current index
+        self.beginResetModel()
+        self._paths = []
+        self._current_paths = self._paths
         self.current_index = 0
-        # Clear the current model
-        self.clear_data()
-        # Filter paths
-        self._current_paths = [
-            x for x in self._current_paths if keyword in os.path.splitext(x)[0].split(os.sep)[:-1]
-        ]
-        # Fetch new items
-        # TODO
-        self.fetchMore()
+        self._cache = {}
+        self.endResetModel()
+
+    def add_path(self, path: str) -> bool:
+        """
+        Method to append a single path to the model
+
+        :param path: The path to append
+        :return: True if the path was added, False if it was already present
+        """
+        if path in self._paths:
+            return False
+        # Append only, never insert: _cache is keyed by absolute row index, so inserting
+        # mid-list would make every cached item beyond it map to the wrong path
+        if self.current_index == len(self._paths):
+            # Everything is revealed, so reveal the new row as well
+            row = self.current_index
+            self.beginInsertRows(QModelIndex(), row, row)
+            self._paths.append(path)
+            self.current_index += 1
+            self.endInsertRows()
+        else:
+            # Still paginating: only extend the backing list. Announcing an insert beyond
+            # rowCount() would contradict what the view currently believes.
+            self._paths.append(path)
+        return True
+
+    def removeRows(self, row: int, count: int = 1, parent: QModelIndex = QModelIndex()) -> bool:
+        if parent.isValid() or count <= 0 or row < 0 or row + count > len(self._paths):
+            return False
+        self.beginRemoveRows(QModelIndex(), row, row + count - 1)
+        del self._paths[row:row + count]
+        # _cache is keyed by absolute row index, so every entry from `row` on now points at
+        # the wrong path -> drop them and let them be recreated lazily
+        self._cache = {k: v for k, v in self._cache.items() if k < row}
+        self.current_index = max(0, self.current_index - count)
+        self.endRemoveRows()
+        return True
 
     def clear_data(self) -> None:
         """
@@ -1347,14 +1728,15 @@ class ImageListModel(QAbstractListModel):
 
         :return: None
         """
-        self.beginResetModel()
-        self.removeRows(0, self.rowCount())
-        self.endResetModel()
+        # Delegates to clear(): nesting beginRemoveRows (inside removeRows) within a
+        # beginResetModel block would be an invalid Qt call sequence
+        self.clear()
 
     def canFetchMore(self, parent: QModelIndex) -> bool:
         if parent.isValid():
             return False
-        return self.current_index * self.page_size < len(self._current_paths)
+        # current_index is a count of revealed items, not a page number
+        return self.current_index < len(self._current_paths)
 
     def fetchMore(self, parent: QModelIndex) -> None:
         if parent.isValid():
@@ -1371,20 +1753,50 @@ class ImageListModel(QAbstractListModel):
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else self.current_index
 
-    def data(self, index: QModelIndex, role: int = ...) -> Any:
+    def data(self, index: QModelIndex, role: int = Qt.DisplayRole) -> Any:
+        """
+        Method to provide the data of the item at the given index for the given role
+
+        Returns None, not 0, when there is nothing to provide. Qt queries this for *every* role --
+        decoration, size hint, tooltip, check state and so on -- and None is how PyQt spells an
+        invalid QVariant, i.e. "no value for this role". A 0 is a valid answer to most of those
+        questions and would be acted on: a zero size hint, an unchecked check box, a decoration.
+
+        :param index: The index of the item
+        :param role: The role to provide data for
+        :return: The data for the given role, or None if there is none
+        """
         # Check if the index is valid
         if not index.isValid():
-            return 0
-        # Check if the row is inside teh available boundaries
+            return None
+        # Check if the row is inside the available boundaries. The comparison is >=, not >: at
+        # exactly len(self._paths) the row is one past the end, and get_item_at_index would raise
+        # an IndexError on self._paths[index] -- the case the guard exists to prevent
         row = index.row()
-        if row > len(self._paths) or row < 0:
-            return 0
+        if row >= len(self._paths) or row < 0:
+            return None
         return self.get_item_at_index(row).data(role)
 
-    def setData(self, index: QModelIndex, value, role=Qt.EditRole):
-        if role == Qt.EditRole and index.isValid():
-            item = self._cache[index.row()]
-            item.setData(value)
+    def setData(self, index: QModelIndex, value, role=Qt.EditRole) -> bool:
+        """
+        Method to set the data of the item at the given index
+
+        :param index: The index of the item to change
+        :param value: The value to set
+        :param role: The role to set the value for
+        :return: True if the value was set, False otherwise
+        """
+        if role != Qt.EditRole or not index.isValid():
+            return False
+        row = index.row()
+        if row >= len(self._paths) or row < 0:
+            return False
+        # Via get_item_at_index, not self._cache[row]: the cache is populated lazily, so a row that
+        # has not been displayed yet is simply absent and a direct lookup raises KeyError
+        self.get_item_at_index(row).setData(value, role)
+        # Without this, views keep showing the old value until something else forces a repaint
+        self.dataChanged.emit(index, index, [role])
+        return True
 
     def get_item_at_index(self, index: int) -> QStandardItem:
         """
@@ -1398,9 +1810,30 @@ class ImageListModel(QAbstractListModel):
         return self._cache[index]
 
 
+def show_error_message(title: str, info: str, text: str) -> None:
+    """
+    Function to display an error message. Must only be called from the main thread
+
+    :param title: The title of the message box
+    :param info: The informative text of the message box
+    :param text: The text of the message box
+    :return: None
+    """
+    msg = QMessageBox()
+    msg.setIcon(QMessageBox.Critical)
+    msg.setWindowIcon(Icon.get_icon("LOGO"))
+    with open(os.path.join(gpaths.css_dir, "messagebox.css"), "r", encoding="utf-8") as f:
+        msg.setStyleSheet(f.read())
+    msg.setText(text)
+    msg.setInformativeText(info)
+    msg.setWindowTitle(title)
+    msg.exec_()
+
+
 def exception_hook(exc_type, exc_value, traceback_obj) -> None:
     """
-    General exception hook to display error message for user
+    General exception hook to display error message for user. Only covers the main thread, worker
+    threads are covered by thread_exception_hook
     :param exc_type: Type of the exception
     :param exc_value: Value of the exception
     :param traceback_obj: The traceback object associated with the exception
@@ -1408,19 +1841,30 @@ def exception_hook(exc_type, exc_value, traceback_obj) -> None:
     """
     # Show error message in GUI
     time_string = time.strftime("%Y-%m-%d, %H:%M:%S")
-    title = "An error occured during execution"
-    info = f"An {exc_type.__name__} occured at {time_string}"
     text = "During the execution of the program, following error occured:\n" \
            f"{''.join(traceback.format_exception(exc_type, exc_value, traceback_obj))}"
-    print(text)
-    msg = QMessageBox()
-    msg.setIcon(QMessageBox.Critical)
-    msg.setWindowIcon(Icon.get_icon("LOGO"))
-    msg.setStyleSheet(open(os.path.join(gpaths.css_dir, "messagebox.css"), "r").read())
-    msg.setText(text)
-    msg.setInformativeText(info)
-    msg.setWindowTitle(title)
-    msg.exec_()
+    # Must reach the log file: started via pythonw.exe or as a packaged build there is no console,
+    # so a printed traceback would be lost and the crash could not be diagnosed afterwards
+    LOGGER.critical("Unhandled exception on the main thread:\n%s", text)
+    show_error_message(title="An error occured during execution",
+                       info=f"An {exc_type.__name__} occured at {time_string}",
+                       text=text)
+
+
+def thread_exception_hook(args) -> None:
+    """
+    Exception hook for worker threads. Routes the error into the main window, which displays it on
+    the main thread. Acts as backstop for threads which are not covered by NucDetect._run_guarded
+
+    :param args: The named tuple provided by threading.excepthook
+    :return: None
+    """
+    text = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
+    thread_name = getattr(args.thread, "name", "a background task")
+    LOGGER.critical("Unhandled exception in thread %s:\n%s", thread_name, text)
+    # The message box must not be created from this thread, so the error is emitted as signal
+    if _MAIN_WINDOW is not None:
+        _MAIN_WINDOW.err_signal.emit(thread_name, text)
 
 
 def main() -> None:
@@ -1429,16 +1873,20 @@ def main() -> None:
 
     :return: None
     """
+    global _MAIN_WINDOW
+    # Configure logging before anything else, so even a failure during start-up is recorded
+    configure_logging()
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore")
         sys.excepthook = exception_hook
+        threading.excepthook = thread_exception_hook
         app = QtWidgets.QApplication(sys.argv)
         app.setWindowIcon(Icon.get_icon("LOGO"))
         pixmap = QPixmap(os.path.join(gpaths.logo_dir, "banner_norm.png"))
         splash = QSplashScreen(pixmap)
         splash.show()
         splash.showMessage("Checking for thumbnails...")
-        print("Check files for thumbnails...")
+        LOGGER.info("Check files for thumbnails...")
         # Count number of available images
         total = 0
         for root, dirs, files in os.walk(gpaths.images_path):
@@ -1447,14 +1895,17 @@ def main() -> None:
         for root, dirs, files in os.walk(gpaths.images_path):
             for file in files:
                 msg = f"{file_index: 04d}:{total: 04d} checked..."
-                os.system('cls' if os.name == 'nt' else 'clear')
-                print(msg)
+                # Deliberately not logged: this is a transient progress indicator that overwrites
+                # itself on one console line, not a diagnostic worth a line in the log file
+                print(msg, end="\r", flush=True)
                 splash.showMessage(msg)
                 Util.create_thumbnail(os.path.join(root, file))
                 file_index += 1
-        os.system('cls' if os.name == 'nt' else 'clear')
-        print("All files checked for thumbnails, starting...")
+        # Close the in-place progress line before anything else writes to the console
+        print()
+        LOGGER.info("All files checked for thumbnails, starting...")
         main_win = NucDetect()
+        _MAIN_WINDOW = main_win
         splash.finish(main_win)
         main_win.show()
         sys.exit(app.exec_())

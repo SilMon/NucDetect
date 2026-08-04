@@ -85,6 +85,20 @@ Detailed information about the program can be found on the ![wiki](https://githu
 https://github.com/SilMon/NucDetect_Additional_Data
 ___
 
+### Transparency Note
+_Claude Code_ was used during development from version 1.1.0 onwards, in the following areas:
+
+* Code review and static analysis
+* Bug and crash fixes
+* Performance improvements
+* Resource leak fixes (file handles, database connections)
+* Development environment configuration
+* Documentation
+
+AI-assisted changes are reviewed by the authors before being merged.
+
+
+### Authors
 Author: Romano Weiss
 
 Co-Author: Stefan Rödiger
