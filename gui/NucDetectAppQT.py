@@ -132,8 +132,10 @@ class NucDetect(QMainWindow):
     """
     prg_signal = pyqtSignal(str, float, float, str)
     selec_signal = pyqtSignal(bool)
+    # Wired to add_item_to_list in _connect_signals but currently emitted by nothing -- kept as the
+    # thread-safe entry point for adding an image from a worker, which is the only correct way to do
+    # it. Signature matches the slot; emit it rather than calling add_item_to_list off the GUI thread
     add_signal = pyqtSignal(str)
-    aa_signal = pyqtSignal(int, int)
     # Signals used to report and recover from errors inside worker threads
     err_signal = pyqtSignal(str, str)
     enable_signal = pyqtSignal(bool)
@@ -540,8 +542,24 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        for index in self.ui.list_images.selectionModel().selectedIndexes():
+        selected = self.ui.list_images.selectionModel().selectedIndexes()
+        for index in selected:
             self.cur_img = self.img_list_model.get_item_at_index(index.row()).data()
+        if not selected:
+            # The list is ExtendedSelection, so Ctrl-clicking the selected row deselects it and
+            # fires this handler with an empty selection. The loop above then does not run, and
+            # without this cur_img kept pointing at the deselected image while btn_analyse stayed
+            # enabled -- Analyse would have run against an image the user had just deselected.
+            #
+            # This does NOT cover clearing or reloading the list: those reset the model, and Qt
+            # drops the selection on a model reset without emitting selectionChanged, so this
+            # handler is never called for them.
+            self.cur_img = None
+        # Analysis needs a selected image, so the button follows that state. btn_analyse starts
+        # disabled in the .ui, as btn_modify already did: before this, a freshly launched window
+        # offered an enabled Analyse button with nothing loaded, and clicking it opened the settings
+        # dialog before failing on cur_img
+        self.ui.btn_analyse.setEnabled(self.cur_img is not None)
         if self.cur_img:
             ana = self.cur_img["analysed"]
             if ana:
@@ -796,6 +814,14 @@ class NucDetect(QMainWindow):
         """
         if not self.cur_img:
             self.selec_signal.emit(True)
+        # The emit above selects the first image, but there may not be one -- an empty list leaves
+        # cur_img as None. Checked before the settings dialog opens, so the user is not asked to
+        # configure an analysis that cannot run. The button is also disabled in this state; this
+        # guard is the safeguard for the two staying out of step
+        if not self.cur_img:
+            self.prg_signal.emit("No image selected -- load and select an image first",
+                                 0, 100, "")
+            return
         # Get settings for this analysis
         self.ui.list_images.setEnabled(False)
         self.enable_buttons(False)
@@ -1491,6 +1517,12 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
+        # btn_modify is disabled in the .ui until results exist, so this should be unreachable --
+        # which is exactly why the guard is cheap insurance rather than dead weight. Without it the
+        # method raises TypeError on a None cur_img
+        if not self.cur_img:
+            self.prg_signal.emit("No image selected -- nothing to modify", 0, 100, "")
+            return
         # Load channels for image from database
         channels = [(x[1], x[2]) for x in self.requester.get_channels(self.cur_img["key"])]
         editor = Editor(image=ImageLoader.load_image(self.cur_img["path"]),
@@ -1621,13 +1653,6 @@ class ImageListModel(QAbstractListModel):
     """
     Class to lazy load needed image list items
     """
-    __slots__ = (
-        "current_index",
-        "page_size",
-        "_paths",
-        "_current_paths",
-        "_cache",
-    )
 
     def __init__(self, parent=None, paths: List[str] = (), page_size: int = 30):
         """
@@ -1696,25 +1721,6 @@ class ImageListModel(QAbstractListModel):
         self.current_index = max(0, self.current_index - count)
         self.endRemoveRows()
         return True
-
-    def filter_paths(self, keyword: str) -> None:
-        """
-        Method to filter the paths list via keyword search
-
-        :param keyword: The keyword to search for
-        :return: None
-        """
-        # Reset current index
-        self.current_index = 0
-        # Clear the current model
-        self.clear_data()
-        # Filter paths
-        self._current_paths = [
-            x for x in self._current_paths if keyword in os.path.splitext(x)[0].split(os.sep)[:-1]
-        ]
-        # Fetch new items
-        # TODO
-        self.fetchMore()
 
     def clear_data(self) -> None:
         """
