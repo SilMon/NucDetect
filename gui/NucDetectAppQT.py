@@ -75,6 +75,48 @@ _DIGIT_RUN = re.compile(r"(\d+)")
 # numeric run from ever being compared against a text run, which would raise a TypeError
 _NUMERIC_PART = 0
 _TEXT_PART = 1
+# The Detector a worker process analyses with. One per process, built by _init_worker and reused for
+# every image that process handles -- see _analyse_in_worker for why this is a module global
+_WORKER_DETECTOR = None
+
+
+def _init_worker() -> None:
+    """
+    Function to prepare a batch-analysis worker process
+
+    Installed as the ProcessPoolExecutor initializer, so it runs exactly once per process. It does
+    two things, both of which have to happen there rather than per task:
+
+    * silences logging in this process -- the parent owns the log file and worker messages come back
+      with the result instead (see core.logging_config.init_worker_logging);
+    * builds the one Detector this process will use.
+
+    :return: None
+    """
+    init_worker_logging()
+    global _WORKER_DETECTOR
+    _WORKER_DETECTOR = Detector()
+
+
+def _analyse_in_worker(task: Tuple[str, Dict, bool]) -> Dict:
+    """
+    Function to analyse one image inside a worker process
+
+    A module-level function taking a single tuple, which is what makes this arrangement work at all:
+    passing a *bound* method to ``map`` pickles the object it is bound to, so the previous
+    ``e.map(self.detector.analyse_image, ...)`` shipped a whole Detector across the process boundary
+    once per image. A module-level function pickles as a name, so nothing but the arguments travels.
+
+    Reusing one Detector for every task is safe because ``analyse_image`` already leaves no state
+    behind: it calls ``release_transient_state`` at both ends, and clears its message buffer when
+    ``save_log`` is False. Those two were written for the per-task copy and are what make a
+    process-lifetime instance equivalent.
+
+    :param task: The image path, the analysis settings, and whether the worker writes the log itself
+    :return: The analysis result, as returned by Detector.analyse_image
+    """
+    path, settings, save_log = task
+    return _WORKER_DETECTOR.analyse_image(path, settings, save_log)
 
 
 def create_sort_key(text: Union[str, None]) -> Tuple[Tuple[int, float, str], ...]:
@@ -926,11 +968,10 @@ class NucDetect(QMainWindow):
         start_time = time.time()
         # Use a quarter of the available cores, but never less than 1
         workers = max(1, round(multiprocessing.cpu_count() * 0.25))
-        # Workers are spawned on Windows and therefore start with an unconfigured logging module.
-        # The initializer runs once per process and gives each its own handler
+        # The initializer runs once per process: it silences logging there (the parent owns the log
+        # file) and builds the single Detector that process analyses with
         with ProcessPoolExecutor(max_workers=workers,
-                                 initializer=init_worker_logging,
-                                 initargs=(gpaths.log_path,)) as e:
+                                 initializer=_init_worker) as e:
             # Clear the table and set its header on the GUI thread. The rows follow one by one via
             # row_signal as the results come in, so no rows are passed here
             self.table_signal.emit(["Image Name", "Image Hash", "Number of Nuclei",
@@ -962,7 +1003,9 @@ class NucDetect(QMainWindow):
                 # appending to the log file themselves, so the entries stay in image order and
                 # several processes never write the file at the same time
                 t_savelog = [False for _ in range(len(tpaths))]
-                res = e.map(self.detector.analyse_image, tpaths, t_setts, t_savelog)
+                # One tuple per image against a module-level function: the Detector stays in the
+                # worker process instead of being pickled with every task
+                res = e.map(_analyse_in_worker, zip(tpaths, t_setts, t_savelog))
                 for r in res:
                     self.prg_signal.emit(f"Analysed images: {done + 1}/{maxi}",
                                          done + 1, maxi, "")
@@ -1771,7 +1814,12 @@ class ImageListModel(QAbstractListModel):
             return None
         # Check if the row is inside the available boundaries. The comparison is >=, not >: at
         # exactly len(self._paths) the row is one past the end, and get_item_at_index would raise
-        # an IndexError on self._paths[index] -- the case the guard exists to prevent
+        # an IndexError on self._paths[index] -- the case the guard exists to prevent.
+        #
+        # It is deliberately against _paths and NOT against rowCount(): rowCount returns
+        # current_index, the lazy-loading cursor, which is how many rows have been revealed so far,
+        # not how many exist. Guarding against it would reject valid rows that fetchMore is about
+        # to reveal
         row = index.row()
         if row >= len(self._paths) or row < 0:
             return None
