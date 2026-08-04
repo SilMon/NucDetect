@@ -245,11 +245,22 @@ def get_bounding_box(area: Union[List[tuple[int, int, int]], numba.typed.List], 
     xmin = amin([a[1] for a in area])
     yvals = [a[0] for a in area]
     ymin = amin(yvals)
-    height = len(area)
     if rle:
-        # Get the max run length
-        width = amax([a[2] for a in area])
+        # Both extents are measured across the whole area, not taken from one run. The previous
+        # version returned len(area) as the height and the longest run as the width, which is only
+        # the bounding box of a convex, gap-free shape with exactly one run per row -- and the
+        # encoder emits several runs per row for anything concave. Two callers size numpy arrays
+        # with these values, so an undersized box silently dropped pixels and, inside njit where
+        # bounds are not checked, wrote past the end of the array
+        ymax = amax(yvals)
+        # a[1] + a[2] is one past the last pixel of the run, the interval being half open
+        xmax = amax([a[1] + a[2] for a in area])
+        height = ymax - ymin + 1
+        width = xmax - xmin
     else:
+        # Untouched: no caller passes rle=False, and for a plain point list the run-length
+        # arithmetic above does not apply
+        height = len(area)
         width = amax([a[1] for a in area]) - xmin + 1
     return ymin, xmin, height, width
 
@@ -430,10 +441,14 @@ def get_perimeter(area: Iterable[Tuple[int, int, int]]) -> int:
     bb = get_bounding_box(area)
     pmap = np.zeros((bb[2] + 1, bb[3] + 1))
     cy, cx = bb[0], bb[1]
-    # Create map containing all points
+    # Create map containing all points. The whole run is filled, not just its first pixel: a run is
+    # (row, first_column, length), so writing pmap[ty][tx] alone put one point per run into the map
+    # and the transition count below then tracked the number of runs rather than the outline -- a
+    # disc of radius 12 has 23 runs and was reported with a perimeter of 23 against a true
+    # circumference of about 72
     for p in area:
         ty, tx = p[0] - cy, p[1] - cx
-        pmap[ty][tx] = 1
+        pmap[ty, tx: tx + p[2]] = 1
     perimeter = 0
     # Check for transitions between background and foreground
     for y in range(bb[2]):
