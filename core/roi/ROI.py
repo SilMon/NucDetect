@@ -37,7 +37,7 @@ class ROI:
     ]
 
     def __init__(self, main: bool = True, channel: str = "Blue", auto: bool = True,
-                 associated: Union[ROI, None] = None, marked: bool = False,
+                 associated: Union[int, None] = None, marked: bool = False,
                  method: str = "Not Set", match: float = 0):
         """
         Constructor of ROI class
@@ -45,7 +45,15 @@ class ROI:
         :param main: Indicates that this roi is on the main channel
         :param channel: Name of the channel
         :param auto: Indicates if the roi was automatically generated
-        :param associated: The ROI this ROI is associated with
+        :param associated: hash() of the nucleus this ROI lies inside, or None for a nucleus.
+                           An identifier, NOT a ROI object -- associate_roi reads it out of the
+                           nucleus hash map, so it arrives as a numpy int64, and every live
+                           consumer treats it as a number: the database column stores it, and
+                           MapComparator uses it directly as a dict key. It was annotated as a
+                           ROI for years while never holding one; the only two methods that
+                           expected an object were a CSV export superseded in 2020 and removed.
+                           A focus is always associated with a nucleus -- one that ends up
+                           without is a background artefact and is deleted, not kept.
         :param marked: Convenience flag for processing
         """
         self.main = main

@@ -188,16 +188,26 @@ class QualityTester:
             intensity = roi.calculate_statistics(channel)["intensity average"]
             dims = roi.calculate_dimensions()
             fcy, fcx = dims["center_y"], dims["center_x"]
-            # Half-extent of the focus. It sizes both the sampled window below and the mask that
-            # blanks the focus out of it, so it has to be a radius. width and height are both full
-            # pixel counts, so both need halving -- the previous
-            # max((maxX - minX) // 2, maxY - minY) halved only the X term, so the Y term won for
-            # anything not more than twice as wide as tall (i.e. every roughly circular focus) and
-            # yielded a diameter. That put the background ring a full focus diameter away from the
-            # centre, frequently outside the nucleus altogether. Rounded up, because the hole below
-            # is 2 * fr wide and a floor leaves an odd extent one pixel short -- which leaks focus
-            # pixels into a ring that is only arr pixels thick.
-            fr = (max(dims["width"], dims["height"]) + 1) // 2
+            # Half-extent of the focus, measured FROM THE CENTRE THE WINDOW IS PLACED ON. It sizes
+            # both the sampled window below and the mask that blanks the focus out of it, so it has
+            # to be a radius, and it has to be a radius about fcy/fcx specifically.
+            #
+            # Two things were wrong here. The old max((maxX - minX) // 2, maxY - minY) halved only
+            # the X term, so the Y term won for anything not more than twice as wide as tall (i.e.
+            # every roughly circular focus) and yielded a diameter -- putting the background ring a
+            # full focus diameter from the centre, frequently outside the nucleus altogether. And
+            # deriving it from the bounding box at all mixes two centres: fcy/fcx come from
+            # get_center, the run-length-weighted centroid, while the box is centred on its own
+            # midpoint. Those coincide for a symmetric focus and diverge otherwise -- measured 2.5 px
+            # for a two-lobed blob -- and the difference is focus pixels sitting outside the mask,
+            # in a ring only arr pixels thick.
+            #
+            # So take the largest distance from the centroid to the area's extremes. maxX/maxY are
+            # one past the last pixel, hence the -1; the +1 is because the mask slice below is
+            # half-open, so covering a pixel at distance d needs fr > d. Identical to the bounding
+            # box for a symmetric focus, larger only where the two centres actually disagree.
+            fr = max(fcy - dims["minY"], dims["maxY"] - 1 - fcy,
+                     fcx - dims["minX"], dims["maxX"] - 1 - fcx) + 1
             arr = 3
             if fcy < fr + arr or fcx < fr + arr:
                 continue

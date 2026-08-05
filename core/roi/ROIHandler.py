@@ -4,7 +4,7 @@ Created on 09.04.2019
 """
 from __future__ import annotations
 
-from typing import Union, Dict, List, Tuple, Iterable
+from typing import Union, List, Tuple, Iterable
 
 import numpy as np
 from numba.typed import List as numList
@@ -19,7 +19,6 @@ class ROIHandler:
         "main",
         "rois",
         "idents",
-        "stats",
     ]
 
     def __init__(self, ident: str = None):
@@ -29,7 +28,6 @@ class ROIHandler:
         self.ident: str = ident
         self.rois: List[ROI] = []
         self.idents: List[str] = []
-        self.stats: Dict[str, Union[int, float]] = {}
         self.main = ""
 
     def __len__(self):
@@ -61,7 +59,6 @@ class ROIHandler:
             self.idents.append(roi.ident)
         if roi.main:
             self.main = roi.ident
-        self.stats.clear()
 
     def add_rois(self, rois: List[ROI]) -> None:
         """
@@ -96,7 +93,6 @@ class ROIHandler:
         if roi.main and cascade:
             # If cascadian deletion is activated, delete all associated roi
             self.rois = [x for x in self.rois if x.associated is not roi]
-        self.stats.clear()
 
     def remove_roi_by_hash(self, hash_: int, cascade: bool = False) -> None:
         """
@@ -131,96 +127,6 @@ class ROIHandler:
         for hash_ in hashes:
             self.remove_roi_by_hash(hash_, cascade)
 
-    def calculate_statistics(self, img: np.ndarray) -> Dict[str, Union[int, float]]:
-        """
-        Method to calculate statistics about the saved ROIs
-
-        :param img: The image this handler is associated to
-        :return: dict -- A dictonary containing the calculated statistics
-        """
-        if not self.stats:
-            main = {
-                "num": 0,
-                "num empty": 0,
-                "area": [],
-                "intensity": [],
-                "method": [],
-                "match": []
-            }
-            sec = {}
-            channels = [img[..., x] for x in range(img.shape[2])]
-            for roi in self.rois:
-                temp_stat = roi.calculate_statistics(channels[self.idents.index(roi.ident)])
-                if roi.main:
-                    main["num"] += 1
-                    main["area"].append(temp_stat["area"])
-                    main["intensity"].append(temp_stat["intensity average"])
-                    main["method"].append(temp_stat["method"])
-                    main["match"].append(temp_stat["match"])
-                else:
-                    if roi.ident not in sec:
-                        sec[roi.ident] = {
-                            "num": 1,
-                            "area": [temp_stat["area"]],
-                            "intensity": [temp_stat["intensity average"]]
-                        }
-                        main["num empty"] -= 1
-                    else:
-                        sec[roi.ident]["num"] += 1
-                        sec[roi.ident]["area"].append(temp_stat["area"])
-                        sec[roi.ident]["intensity"].append(temp_stat["intensity average"])
-
-            sec_stat = self._calculate_secondary_statistics(sec)
-            area = main["area"]
-            match = main["match"]
-            method = main["method"]
-            inten = main["intensity"]
-            self.stats = {
-                "number": main["num"],
-                "match": np.average(match),
-                "method": np.unique(method, return_counts=True),
-                "number stats": sec_stat,
-                "area list": area,
-                "area average": np.average(area),
-                "area median": np.median(area),
-                "area std": np.std(area),
-                "area minimum": min(area),
-                "area maximum": max(area),
-                "intensity list": inten,
-                "sec idents": sec_stat.keys(),
-                "sec stats": sec_stat
-            }
-        return self.stats
-
-    @staticmethod
-    def _calculate_secondary_statistics(sec: Dict) -> Dict:
-        """
-        Private method to calculate the secondary statistics
-
-        :param sec: The dict containing information about all detected foci
-        :return: The secondary statistics dict
-        """
-        sec_stat = {}
-        for key, inf in sec.items():
-            inten = inf["intensity"]
-            area = inf["area"]
-            sec_stat[key] = {
-                "number": inf["num"],
-                "area list": area,
-                "area average": np.average(area),
-                "area median": np.median(area),
-                "area std": np.std(area),
-                "area minimum": min(area),
-                "area maximum": max(area),
-                "intensity list": inten,
-                "intensity average": np.average(inten),
-                "intensity median": np.median(inten),
-                "intensity std": np.std(inten),
-                "intensity minimum": min(inten),
-                "intensity maximum": max(inten)
-            }
-        return sec_stat
-
     def create_hash_association_maps(self, shape: Tuple[int, int]) -> Iterable[np.ndarray]:
         """
         Method to create arrays with labelling hashes for each saved ROI
@@ -248,6 +154,4 @@ class ROIHandler:
         :return: None
         """
         self.rois = [x for x in self if x.id not in hashes]
-        # Reset statistics
-        self.stats.clear()
 
