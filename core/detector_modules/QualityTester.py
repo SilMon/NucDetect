@@ -188,8 +188,16 @@ class QualityTester:
             intensity = roi.calculate_statistics(channel)["intensity average"]
             dims = roi.calculate_dimensions()
             fcy, fcx = dims["center_y"], dims["center_x"]
-            # Approximation of radius
-            fr = max((dims["maxX"] - dims["minX"]) // 2, dims["maxY"] - dims["minY"])
+            # Half-extent of the focus. It sizes both the sampled window below and the mask that
+            # blanks the focus out of it, so it has to be a radius. width and height are both full
+            # pixel counts, so both need halving -- the previous
+            # max((maxX - minX) // 2, maxY - minY) halved only the X term, so the Y term won for
+            # anything not more than twice as wide as tall (i.e. every roughly circular focus) and
+            # yielded a diameter. That put the background ring a full focus diameter away from the
+            # centre, frequently outside the nucleus altogether. Rounded up, because the hole below
+            # is 2 * fr wide and a floor leaves an odd extent one pixel short -- which leaks focus
+            # pixels into a ring that is only arr pixels thick.
+            fr = (max(dims["width"], dims["height"]) + 1) // 2
             arr = 3
             if fcy < fr + arr or fcx < fr + arr:
                 continue
@@ -198,10 +206,15 @@ class QualityTester:
                    fcx - fr - arr: fcx + fr + arr]
             # Get mask
             mask = np.ones(shape=area.shape)
-            # Get area shape
-            acy, acx = area.shape
-            acy = acy // 2
-            acx = acx // 2
+            # Focus centre in window coordinates. The slice above starts at fcy - fr - arr, which
+            # the guard guarantees is >= 0, so the focus sits at exactly fr + arr whether or not the
+            # far edge was clipped. Taking area.shape // 2 instead was wrong at the bottom and right
+            # edges of the image: numpy clips a slice that runs past the end, and the midpoint of
+            # the clipped window is no longer the focus, so the hole slid toward that edge and let
+            # focus pixels -- the brightest in the window -- into the ring that must sample
+            # background only. Harmless while fr was a diameter, because the oversized hole covered
+            # the focus anyway; a correct fr exposes it.
+            acy = acx = fr + arr
             # Set focus area to zero
             mask[acy - fr: acy + fr,
             acx - fr: acx + fr] = 0

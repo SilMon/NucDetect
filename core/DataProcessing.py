@@ -173,8 +173,17 @@ def automatic_whitebalance(image: np.ndarray, cutoff: float = 0.05) -> np.ndarra
     if "float" not in str(image.dtype):
         image = image.copy()
     else:
-        # Convert image to uint TODO
-        image = (((image - np.amin(image)) / np.amax(image)) * 255).astype("uint8")
+        # Stretch a float image onto 0..255. Divide by the RANGE, not by the maximum: image - low
+        # already starts at zero, so dividing by the maximum compresses the result by low/high --
+        # measured at 90% of the range lost for a channel spanning 3800..3999, and it let a float
+        # image holding negative values overflow the uint8 cast (a -1..1 image reached 510 pre-cast
+        # and wrapped to 254, rendering the brightest pixels dark). A uniform image has no range to
+        # stretch; it already came out all-zero here, so map it to that explicitly rather than
+        # dividing by zero and casting a nan -- note that dividing by the range alone would widen
+        # that division by zero from "maximum is 0" to "any uniform image".
+        low, high = np.amin(image), np.amax(image)
+        span = high - low
+        image = ((image - low) / span * 255).astype("uint8") if span else np.zeros(image.shape, "uint8")
     imgmin, imgmax = np.iinfo(image.dtype).min, np.iinfo(image.dtype).max
     amin, amax = imgmin, imgmax
     # Calculate histogram of image
