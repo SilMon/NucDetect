@@ -214,7 +214,7 @@ class ROIHandler:
                 "area median": np.median(area),
                 "area std": np.std(area),
                 "area minimum": min(area),
-                "area maximum": min(area),
+                "area maximum": max(area),
                 "intensity list": inten,
                 "intensity average": np.average(inten),
                 "intensity median": np.median(inten),
