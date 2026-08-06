@@ -155,7 +155,7 @@ class FocusMapper(AreaMapper):
             case _:
                 warnings.warn(f"Unknown noise reduction method '{method}', unprocessed channel returned!")
                 smoothed = channel
-        return rescale_intensity(smoothed, in_range="image", out_range=(0, 255)).astype(channel.dtype)
+        return FocusMapper._rescale_to_channel_range(smoothed, channel)
 
     @staticmethod
     def perform_background_subtraction(channel: np.ndarray,
@@ -200,8 +200,36 @@ class FocusMapper(AreaMapper):
             case _:
                 warnings.warn(f"Unknown background subtraction method '{method}', unprocessed channel returned!")
                 processed = channel
-        return rescale_intensity(processed, in_range='image', out_range=(0, 255)).astype(channel.dtype)
+        return FocusMapper._rescale_to_channel_range(processed, channel)
 
+    @staticmethod
+    def _rescale_to_channel_range(processed: np.ndarray, channel: np.ndarray) -> np.ndarray:
+        """
+        Method to stretch a processed channel back onto the value range of the original dtype
+
+        :param processed: The processed channel. Several filters return floats regardless of input
+        :param channel: The unprocessed channel, whose dtype defines the target range
+        :return: The stretched channel, converted back to the dtype of channel
+        """
+        # The target is the channel's OWN range, not a hard-coded 0-255. Every filter branch here
+        # either returns a float or rescales, so the stretch is unavoidable -- but stretching a
+        # uint16 channel onto 0..255 and then casting back to uint16 threw away 8 of its 16 bits
+        # while leaving the dtype wide, so nothing downstream could notice. Measured before the
+        # fix: all nine filter branches returned 256 distinct levels for a uint16 input spanning
+        # 4096 of them.
+        #
+        # The range is stated as a pair rather than handed to rescale_intensity as a dtype. Its
+        # dtype lookup takes the scalar TYPE (np.uint16) and rejects the dtype INSTANCE that
+        # channel.dtype actually is, with "Incorrect value for out_range" -- a distinction easy to
+        # get wrong, and it fails identically for the 8-bit case, so it would not survive review.
+        #
+        # Only integer dtypes have a full range to compute. rescale_intensity rejects float32 as an
+        # out_range outright and maps float64 to 0..1, so a float channel keeps the previous 0-255
+        # target rather than silently changing meaning -- the images this was written for are
+        # integer, and a float one is a separate question from bit depth
+        out_range = (0, np.iinfo(channel.dtype).max) if np.issubdtype(channel.dtype, np.integer) \
+            else (0, 255)
+        return rescale_intensity(processed, in_range="image", out_range=out_range).astype(channel.dtype)
 
     @staticmethod
     def check_for_preprocessing(main: np.ndarray, channel: np.ndarray) -> Tuple[bool, bool]:

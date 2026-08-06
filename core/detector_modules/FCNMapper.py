@@ -195,7 +195,7 @@ class FCNMapper(AreaMapper):
     def merge_prediction_tiles(masks: List[np.ndarray],
                                tiled_shape: Tuple[int, int],
                                overlap: float = 0.5,
-                               orig_dtype = np.uint8) -> np.ndarray:
+                               orig_dtype: np.dtype = None) -> np.ndarray:
         """
         Method to merge created prediction masks into one large image
 
@@ -207,9 +207,16 @@ class FCNMapper(AreaMapper):
                             of masks. It was named orig_shape and passed the original image shape,
                             which is what made this raise IndexError for anything above 1024x1024
                             and silently drop most of the prediction below it.
-        :param orig_dtype: The dtype of the original image
+        :param orig_dtype: The dtype of the original image. Required -- see below
         :return: The merged prediction mask, of tiled_shape
         """
+        # No default dtype. The masks are float predictions and carry no memory of the bit depth
+        # they were derived from, so the previous default of uint8 would quietly scale a 16-bit
+        # image's prediction map onto 0..255 for any caller that forgot the argument. Every caller
+        # passes it today; this makes forgetting it a failure rather than a silent one
+        if orig_dtype is None:
+            raise ValueError("orig_dtype is required: the prediction masks are floats and carry "
+                             "no source bit depth")
         # TODO Overlap einstellbar machen
         # Create an accumulator map as well as a weights map
         accum = np.zeros(tiled_shape, np.float32)
