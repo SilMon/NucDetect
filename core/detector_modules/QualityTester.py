@@ -161,12 +161,20 @@ class QualityTester:
 
         :return: The created dictionary
         """
-        names = self.channel_names[:len(self.channels)]
-        return {x: {"Channel": self.channels[names.index(x)],
-                    "Lower": np.amin(self.channels[names.index(x)]),
-                    "Upper": np.amax(self.channels[names.index(x)]),
-                    "Max. Val": np.iinfo(self.channels[names.index(x)].dtype).max}
-                for x in names}
+        # Pair by position and refuse to guess when the two lists disagree. Truncating the names
+        # to the number of channels absorbed the mismatch instead, pairing every name with the
+        # wrong channel whenever the missing one was not the trailing entry -- which surfaced as a
+        # KeyError on roi.ident two call levels away rather than here, where the cause is. Position
+        # also replaces names.index(), which returns the first match and so cross-wires two
+        # channels that happen to carry the same name
+        if len(self.channel_names) != len(self.channels):
+            raise ValueError(f"Got {len(self.channel_names)} channel names for "
+                             f"{len(self.channels)} channels: {list(self.channel_names)}")
+        return {name: {"Channel": channel,
+                       "Lower": np.amin(channel),
+                       "Upper": np.amax(channel),
+                       "Max. Val": np.iinfo(channel.dtype).max}
+                for name, channel in zip(self.channel_names, self.channels)}
 
     def check_focus_contrast(self,
                              foci: List[ROI],

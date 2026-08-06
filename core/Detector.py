@@ -181,7 +181,12 @@ class Detector:
             # Check for quality of roi
             if rois:
                 prg[QUALITY](0.0, "Checking ROI quality")
-                qroi = self.perform_quality_check(channels, names, analysis_settings, rois)
+                # The FILTERED names, to match the filtered channels. Passing the raw list paired
+                # each name with the wrong channel array, and since the ROI idents come from the
+                # filtered list the lookup missed outright -- a KeyError out of the quality check
+                # -- as soon as a deactivated channel was not the trailing one
+                qroi = self.perform_quality_check(channels, analysis_settings["names"],
+                                                  analysis_settings, rois)
                 self.add_log_message(f"QR: Removed foci: {len(rois) - len(qroi)}")
             else:
                 qroi = []

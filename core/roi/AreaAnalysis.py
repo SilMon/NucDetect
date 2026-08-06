@@ -1,4 +1,5 @@
 import math
+from collections import defaultdict
 from typing import Iterable, Tuple, List, Union
 
 import numba
@@ -16,134 +17,29 @@ def get_rle_area_intersection(area1: List[Tuple[int, int, int]],
     :param area2: The second area
     :return: The area intersection
     """
-    # Check if any of the lines contains u-turns
-    area1 = check_for_u_turn(area1)
-    area2 = check_for_u_turn(area2)
     # Check if both lists contain anything
     if not area1 or not area2:
         return []
-    # Ensure both lists are sorted by their y-coordinate
-    a = sorted(area1, key=lambda t: t[0])
-    b = sorted(area2, key=lambda t: t[0])
-    ya_start, ya_stop = a[0][0], a[-1][0]
-    yb_start, yb_stop = b[0][0], b[-1][0]
-    # Determine overlapping row range
-    y_start = max(ya_start, yb_start)
-    y_end = min(ya_stop, yb_stop)
-    # Check if there is any overlap at all
-    if y_start > y_end:
-        return []
-    # Compute offsets into a and b for row y_start
-    offset_a = y_start - ya_start
-    offset_b = y_start - yb_start
+    # Index the second area by row. A row can hold more than one run: the encoder emits one per
+    # uninterrupted stretch of pixels, so every row crossing the opening of a ring or horseshoe
+    # produces two or more. Pairing the two areas by list position instead would misalign them as
+    # soon as either has a row gap, and read past the end of the shorter one. The rows were
+    # previously forced to hold a single run each by collapsing every row to (leftmost start,
+    # summed lengths), which kept the pixel count but slid the pixels left over the gap and so
+    # corrupted every position-derived statistic of a concave ROI
+    rows2 = defaultdict(list)
+    for y, x, rl in area2:
+        rows2[y].append((x, x + rl))
     intersect = []
-    for k, y in enumerate(range(y_start, y_end + 1)):
-        ya, xa, rlea = a[offset_a + k]
-        yb, xb, rleb = b[offset_b + k]
-        # 1D intersection of [xa, xa + rlea) and [xb, xb + rleb)
-        start = max(xa, xb)
-        end = min(xa + rlea, xb + rleb)
-        if start < end:
-            intersect.append((y, start, end - start))
+    # Sorting gives scanline order -- row first, then column -- matching the output of encode_areas
+    for y, x, rl in sorted(area1):
+        for start2, end2 in rows2.get(y, ()):
+            # 1D intersection of [x, x + rl) and [start2, end2), both half open
+            start = max(x, start2)
+            end = min(x + rl, end2)
+            if start < end:
+                intersect.append((y, start, end - start))
     return intersect
-
-def check_for_u_turn(lines: List[Tuple[int, int, int]]) -> List[Tuple[int, int, int]]:
-    """
-    Method to check if the given list of lines contains lines within the same row
-
-    :param lines: The lines to test
-    :return: The tested list of lines
-    """
-    # Test if lines contains multiple lines with the same row
-    rows, counts = np.unique([x[0] for x in lines], return_counts=True)
-    tested = []
-    # Get row with multiple entries
-    for ind, count in enumerate(counts):
-        row = int(rows[ind])
-        test = [x for x in lines if x[0] == row]
-        if count > 1:
-            # Merge the lines
-            sort = sorted(test, key=lambda x: x[1])
-            tested.append((row, sort[0][1], int(np.sum([x[2] for x in sort]))))
-        else:
-            tested.extend(test)
-    return tested
-
-
-def get_potentially_overlapping_lines(area1: List[Tuple[int, int, int]],
-                                      area2: List[Tuple[int, int, int]]) -> List[int]:
-    """
-    Function to get potentially overlapping lines from rle areas
-
-    :param area1: The first area
-    :param area2: The second area
-    :return: List of rows where overlaps area possible
-    """
-    # Get unique rows of both areas
-    rows1 = np.unique([y[0] for y in area1])
-    rows2 = np.unique([y[0] for y in area2])
-    return [x for x in rows1 if x in rows2]
-
-
-def merge_sorted_rle_areas(sort1: List[Tuple[int, int, int]],
-                           sort2: List[Tuple[int, int, int]]) -> List[Tuple[int, int, int]]:
-    """
-    Function to merge two sorted, run length encoded areas
-
-    :param sort1: The area which is high or equally high
-    :param sort2: The lower area
-    :return: The merged area
-    """
-    lines = []
-    # Get the area that is left -> y, x, rl
-    if min([x[1] for x in sort1]) < min([x[1] for x in sort2]):
-        lines1 = sort1
-        lines2 = sort2
-    else:
-        lines1 = sort1
-        lines2 = sort2
-    start = lines1[0][0]
-    start_ind = -1
-    for ind, line in enumerate(lines2):
-        if line[0] == start:
-            start_ind = ind
-            break
-    # If a starting index was found, get potentially overlapping lines
-    if start_ind != -1:
-        # Add the lines that are not overlapping
-        l2 = lines2[start_ind:]
-        l1 = lines1[:len(l2)]
-        lines.extend(sort2[:start_ind])
-        lines.extend(sort1[len(l2):])
-        # Merge the lines that are overlapping
-        for line1, line2 in zip(l1, l2):
-            # Get amount of overlap
-            lines.append(merge_lines(line1, line2))
-    else:
-        lines = sort1 + sort2
-    return lines
-
-
-def merge_lines(line1: Tuple[int, int, int], line2: Tuple[int, int, int]) -> Tuple[int, int, int]:
-    """
-    Function to merge two run length encoded lines
-
-    :param line1: The first line
-    :param line2: The second line
-    :return: The merged line
-    """
-    # Check which of the lines is left
-    check = line1[1] < line2[1]
-    # Swap if line 2 is left
-    l1 = line1 if check else line2
-    l2 = line2 if check else line1
-    # Get the distance between start1 and start2
-    start_dist = l2[1] - l1[1]
-    # Is the second line encased by the first line?
-    if l1[1] + l1[2] > start_dist + l2[2]:
-        return l1
-    else:
-        return l1[0], l1[1], start_dist + l2[2]
 
 
 @njit
