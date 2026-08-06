@@ -39,6 +39,21 @@ class FCNMapper(AreaMapper):
         "fcn_certainty_nuclei": 0.95,
         "fcn_certainty_foci": 0.8
     }
+    # The resolution every channel is resized to before inference. This is SCALE NORMALISATION, not
+    # a performance or memory compromise: the network was trained on 1024x1024 material, so it
+    # learned nuclei and foci at that scale. Feeding a 2048x2048 image at native resolution would
+    # present every feature at twice the size the network recognises, which is a detection-accuracy
+    # problem. The prediction is resized back to the image's own shape afterwards.
+    #
+    # Note this normalises by PIXEL DIMENSIONS, which is only equivalent to normalising by feature
+    # scale while every image covers the same field of view at the same magnification. Making it
+    # depend on dots_per_micron instead is what the TODO in map_channels asks for; that setting is
+    # already carried in analysis_settings and is currently read but unused elsewhere.
+    TRAINING_SHAPE = (1024, 1024)
+    # The input shape of the saved detector.keras. Tiles are cut to this size and predicted in one
+    # batch; a fully convolutional network is theoretically size-agnostic, but this model object is
+    # built for a fixed input, so feeding a whole image would mean rebuilding it per image shape.
+    TILE_SHAPE = (256, 256)
 
     def __init__(self, channels: Iterable[np.ndarray] = None,
                  settings: Dict = None, main: int = 2):
@@ -110,17 +125,25 @@ class FCNMapper(AreaMapper):
             orig_dtype = channel.dtype
             # Resize the channel to match the training size
             # TODO resizen von feature größe abhängig machen, tilen übernimmt den Rest
-            channel = resize(channel, output_shape=(1024, 1024),
+            channel = resize(channel, output_shape=self.TRAINING_SHAPE,
                              preserve_range=True, anti_aliasing=True).astype(orig_dtype)
             # Split channel images into tiles
-            tiles = self.extract_subimages(channel,(256, 256))
+            tiles = self.extract_subimages(channel, self.TILE_SHAPE)
             # Predict the individual tiles
             ptiles = self.predict_tiles(tiles, self.model)
-            # Merge prediction maps and bring it back to the original size
-            pred_map = resize(self.merge_prediction_tiles(ptiles,
-                                                          orig_shape,
-                                                          orig_dtype=orig_dtype),
-                              output_shape=orig_shape,
+            # Merge the tiles back into TRAINING_SHAPE, then resize that to the image's own shape.
+            # The merge must be told the shape the tiles were CUT FROM, not the original: it derives
+            # the tile grid from that shape, and the tiles came from the resized channel. Passing
+            # orig_shape asked for a grid the tile list could not satisfy -- 225 tiles for a 2048
+            # image against the 49 that exist (IndexError), and only 9 of 49 for a 512 one, which
+            # reconstructed the top-left corner and left the rest of the map at zero.
+            #
+            # It also made the resize below a no-op, because the merge already returned orig_shape.
+            # That resize is the step that brings the prediction back into image coordinates, and it
+            # only does real work now that the merge produces TRAINING_SHAPE.
+            merged = self.merge_prediction_tiles(ptiles, self.TRAINING_SHAPE,
+                                                 orig_dtype=orig_dtype)
+            pred_map = resize(merged, output_shape=orig_shape,
                               preserve_range=True, anti_aliasing=True)
             prediction_maps.append(pred_map)
         return prediction_maps
@@ -159,12 +182,18 @@ class FCNMapper(AreaMapper):
         orig_max = np.iinfo(tiles[0].dtype).max
         tiles = np.asarray(tiles).astype("float32")
         tiles /= orig_max
-        tiles = tiles.reshape(-1, 256, 256, 1)
+        # Derived from TILE_SHAPE, not written out again. This used to read
+        # reshape(-1, 256, 256, 1) while map_channels cut the tiles with its own literal, so the
+        # tile size was stated independently in two places -- exactly the shape of the defect this
+        # class already had, where merge_prediction_tiles derived its grid from one shape while the
+        # tiles came from another. Two statements of the same fact only agree until one is edited.
+        tile_height, tile_width = FCNMapper.TILE_SHAPE
+        tiles = tiles.reshape(-1, tile_height, tile_width, 1)
         return [pred[:, :, 0] for pred in model.predict(tiles)]
 
     @staticmethod
     def merge_prediction_tiles(masks: List[np.ndarray],
-                               orig_shape: Tuple[int, int],
+                               tiled_shape: Tuple[int, int],
                                overlap: float = 0.5,
                                orig_dtype = np.uint8) -> np.ndarray:
         """
@@ -172,18 +201,23 @@ class FCNMapper(AreaMapper):
 
         :param masks: A list containing the created prediciton masks
         :param overlap: The overlap between prediction masks
-        :param orig_shape: A tuple specifying the shape of the original image
+        :param tiled_shape: The shape the tiles were CUT FROM -- i.e. the resized channel, not the
+                            original image. The tile grid is derived from it, so it has to be the
+                            shape extract_subimages was given or the grid will not match the number
+                            of masks. It was named orig_shape and passed the original image shape,
+                            which is what made this raise IndexError for anything above 1024x1024
+                            and silently drop most of the prediction below it.
         :param orig_dtype: The dtype of the original image
-        :return: The merged prediction mask
+        :return: The merged prediction mask, of tiled_shape
         """
         # TODO Overlap einstellbar machen
         # Create an accumulator map as well as a weights map
-        accum = np.zeros(orig_shape, np.float32)
-        weights = np.zeros(orig_shape, np.float32)
+        accum = np.zeros(tiled_shape, np.float32)
+        weights = np.zeros(tiled_shape, np.float32)
         tile_height, tile_width = masks[0].shape[0], masks[0].shape[1]
         step_height = step_width = int(tile_height * (1 - overlap))
-        n_tiles_vert = int(((orig_shape[0] - tile_height) / step_height)) + 1
-        n_tiles_hor = int(((orig_shape[1] - tile_width) / step_width)) + 1
+        n_tiles_vert = int(((tiled_shape[0] - tile_height) / step_height)) + 1
+        n_tiles_hor = int(((tiled_shape[1] - tile_width) / step_width)) + 1
         # Create the 1D weighting function
         weight1d = hann(masks[0].shape[0], sym=False)
         # Create the 2D weighting array
