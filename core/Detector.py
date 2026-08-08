@@ -116,19 +116,29 @@ class Detector:
         prg[LOAD](0.9, "Splitting channels")
         channels = self.imageloader.get_channels(image)
         active = settings["activated"]
-        # Check if all channels are activated
+        # From here on there are TWO index spaces and mixing them is what both defects below were.
+        # settings["main"] indexes the FULL channel list -- the main-channel radio buttons are fixed
+        # positions -- so it stays valid for names/active, while anything indexing the filtered
+        # lists needs the index shifted down by the inactive channels before it
         analysis_settings["names"] = [names[x] for x in range(len(names)) if active[x]]
-        analysis_settings["main_channel_name"] = analysis_settings["names"][main_channel]
         channels = [channels[x] for x in range(len(channels)) if active[x]]
-        # Adjust the index of the main channel
-        for x in range(main_channel):
-            main_channel -= 1 if not active[x] and x < main_channel else 0
-        main = channels[main_channel]
-        foc_channels = [channels[i] for i in range(len(channels)) if i != main_channel]
+        # Read from the RAW list with the RAW index. Reading the FILTERED list with the unadjusted
+        # index went out of range as soon as enough channels before the main one were deactivated:
+        # 32 of the 80 possible five-channel configurations raised IndexError here
+        main_channel_name = names[main_channel]
+        analysis_settings["main_channel_name"] = main_channel_name
+        # One sum, not a loop that decrements the value its own guard is compared against. The old
+        # form stopped counting after the first deduction, so with two or more inactive channels
+        # before the main one it under-shifted and selected a neighbouring channel
+        main_index = main_channel - sum(1 for x in range(main_channel) if not active[x])
+        main = channels[main_index]
+        foc_channels = [channels[i] for i in range(len(channels)) if i != main_index]
         analysis_settings["foci_channel_names"] = [x for x in analysis_settings["names"]
                                                    if x is not analysis_settings["main_channel_name"]]
         # Detect roi via image processing and machine learning
-        main_map, main_roi = self.nucleus_extraction(main, names[main_channel], analysis_settings,
+        # main_channel_name, not names[main_index]: that mixed the filtered index into the raw list
+        # and named the nucleus channel after a different channel whenever anything was deactivated
+        main_map, main_roi = self.nucleus_extraction(main, main_channel_name, analysis_settings,
                                                      prg[NUCLEUS])
         # Define a handler to take the ROI
         handler = ROIHandler(ident=imgdat["id"])
@@ -171,7 +181,12 @@ class Detector:
             # Check for quality of roi
             if rois:
                 prg[QUALITY](0.0, "Checking ROI quality")
-                qroi = self.perform_quality_check(channels, names, analysis_settings, rois)
+                # The FILTERED names, to match the filtered channels. Passing the raw list paired
+                # each name with the wrong channel array, and since the ROI idents come from the
+                # filtered list the lookup missed outright -- a KeyError out of the quality check
+                # -- as soon as a deactivated channel was not the trailing one
+                qroi = self.perform_quality_check(channels, analysis_settings["names"],
+                                                  analysis_settings, rois)
                 self.add_log_message(f"QR: Removed foci: {len(rois) - len(qroi)}")
             else:
                 qroi = []

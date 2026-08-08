@@ -12,7 +12,6 @@ from typing import Union, Dict, List, Tuple, Iterable
 import numpy as np
 from numba.typed import List as numList
 
-from core.DataProcessing import calculate_overlap_between_two_circles
 from core.roi.AreaAnalysis import get_bounding_box, get_center, get_surface, get_ellipse_radii, get_orientation_angle, \
     get_orientation_vector, get_eccentricity, get_ovality
 from core.roi import AreaAnalysis
@@ -37,7 +36,7 @@ class ROI:
     ]
 
     def __init__(self, main: bool = True, channel: str = "Blue", auto: bool = True,
-                 associated: Union[ROI, None] = None, marked: bool = False,
+                 associated: Union[int, None] = None, marked: bool = False,
                  method: str = "Not Set", match: float = 0):
         """
         Constructor of ROI class
@@ -45,7 +44,15 @@ class ROI:
         :param main: Indicates that this roi is on the main channel
         :param channel: Name of the channel
         :param auto: Indicates if the roi was automatically generated
-        :param associated: The ROI this ROI is associated with
+        :param associated: hash() of the nucleus this ROI lies inside, or None for a nucleus.
+                           An identifier, NOT a ROI object -- associate_roi reads it out of the
+                           nucleus hash map, so it arrives as a numpy int64, and every live
+                           consumer treats it as a number: the database column stores it, and
+                           MapComparator uses it directly as a dict key. It was annotated as a
+                           ROI for years while never holding one; the only two methods that
+                           expected an object were a CSV export superseded in 2020 and removed.
+                           A focus is always associated with a nucleus -- one that ends up
+                           without is a background artefact and is deleted, not kept.
         :param marked: Convenience flag for processing
         """
         self.main = main
@@ -141,17 +148,10 @@ class ROI:
         dims = self.calculate_dimensions()
         return dims["center_y"], dims["center_x"], max(dims["width"], dims["height"]), hash(self)
 
-    def calculate_overlap(self, roi: ROI) -> float:
-        """
-        Method to calculate the area overlap between this and another ROI. Assumes the ROI to be circular
-
-        :param roi: The second ROI
-        :return: The overlap as percentage (0-1)
-        """
-        # Get both ROI as circle
-        repr1 = self.get_minimal_representation()
-        repr2 = roi.get_minimal_representation()
-        return calculate_overlap_between_two_circles(repr1, repr2)
+    # calculate_overlap was removed here. It approximated both ROI as circles of diameter
+    # max(width, height) and compared those, and it had no callers. Overlap between two ROI is
+    # available exactly, from their run-length areas, via AreaAnalysis.get_rle_area_intersection --
+    # which is what add_to_area already uses.
 
     def reset_stored_values(self) -> None:
         """

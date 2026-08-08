@@ -2,11 +2,17 @@ import datetime
 import hashlib
 import os
 from fractions import Fraction
-from typing import Dict, Union, List
+from typing import Dict, Optional, Tuple, Union, List
 
 import numpy as np
 import piexif
 from skimage import io
+
+# Value written to x_res/y_res when an image declares no usable resolution. Both branches of
+# get_image_data use it, so "unknown" has one representation rather than one per file format.
+# Deliberately private: a future change replaces it with None/SQL NULL, and publishing a name
+# that is meant to be retracted would invite callers to couple to it.
+_UNKNOWN_SCALE = -1
 
 
 class ImageLoader:
@@ -30,8 +36,11 @@ class ImageLoader:
         img = ImageLoader.load_image(path)
         if file_extension in (".tiff", ".tif", ".jpg"):
             tags = piexif.load(path)
-            x_res = tags["0th"].get(piexif.ImageIFD.XResolution, (-1, -1))
-            y_res = tags["0th"].get(piexif.ImageIFD.YResolution, (-1, -1))
+            # No default here on purpose -- an absent tag is _rational_to_scale's business.
+            # Handing .get() a default is what let the two format branches disagree about
+            # what "unknown" means.
+            x_res = tags["0th"].get(piexif.ImageIFD.XResolution)
+            y_res = tags["0th"].get(piexif.ImageIFD.YResolution)
             unit = tags["0th"].get(piexif.ImageIFD.ResolutionUnit, 2)
             """
             dt = tags["0th"].get(piexif.ImageIFD.DateTime,
@@ -41,8 +50,8 @@ class ImageLoader:
                 "datetime": datetime.datetime.fromtimestamp(os.path.getctime(path)),
                 "height": tags["0th"].get(piexif.ImageIFD.ImageLength, img.shape[0]),
                 "width": tags["0th"].get(piexif.ImageIFD.ImageWidth, img.shape[1]),
-                "x_res": float(Fraction(x_res[0], x_res[1])),
-                "y_res": float(Fraction(y_res[0], y_res[1])),
+                "x_res": ImageLoader._rational_to_scale(x_res),
+                "y_res": ImageLoader._rational_to_scale(y_res),
                 "channels": tags["0th"].get(piexif.ImageIFD.SamplesPerPixel, 3),
                 "unit": ImageLoader._convert_tag_to_unit(unit)
             }
@@ -51,8 +60,8 @@ class ImageLoader:
                 "datetime": datetime.datetime.fromtimestamp(os.path.getctime(path)),
                 "height": img.shape[0],
                 "width": img.shape[1],
-                "x_res": -1,
-                "y_res": -1,
+                "x_res": _UNKNOWN_SCALE,
+                "y_res": _UNKNOWN_SCALE,
                 "channels": 1 if len(img.shape) == 2 else 3,
                 "unit": "Inch"
             }
@@ -65,6 +74,32 @@ class ImageLoader:
         image_data["minute"] = tt.tm_min
         image_data["second"] = tt.tm_sec
         return image_data
+
+    @staticmethod
+    def _rational_to_scale(value: Optional[Tuple[int, int]]) -> float:
+        """
+        Method to convert an EXIF RATIONAL (numerator, denominator) into a scale
+
+        Returns _UNKNOWN_SCALE when the tag is absent, malformed, or carries a zero
+        denominator. The previous default of (-1, -1) did not survive Fraction, which
+        normalises signs: Fraction(-1, -1) is 1, so a missing tag produced a scale of exactly
+        1.0 -- both a legal resolution and the multiplicative identity, so no consumer could
+        tell it from real metadata and no conversion visibly changed anything. A zero
+        denominator (written by some microscope software for "unset") raised ZeroDivisionError
+        out of image import instead.
+
+        :param value: The RATIONAL tag value, or None if the tag is absent
+        :return: The scale as float, or _UNKNOWN_SCALE if it cannot be determined
+        """
+        if not value:
+            return _UNKNOWN_SCALE
+        try:
+            num, den = value
+        except (TypeError, ValueError):
+            return _UNKNOWN_SCALE
+        if den == 0:
+            return _UNKNOWN_SCALE
+        return float(Fraction(num, den))
 
     @staticmethod
     def _convert_tag_to_unit(unit: int) -> str:

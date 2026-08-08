@@ -161,12 +161,20 @@ class QualityTester:
 
         :return: The created dictionary
         """
-        names = self.channel_names[:len(self.channels)]
-        return {x: {"Channel": self.channels[names.index(x)],
-                    "Lower": np.amin(self.channels[names.index(x)]),
-                    "Upper": np.amax(self.channels[names.index(x)]),
-                    "Max. Val": np.iinfo(self.channels[names.index(x)].dtype).max}
-                for x in names}
+        # Pair by position and refuse to guess when the two lists disagree. Truncating the names
+        # to the number of channels absorbed the mismatch instead, pairing every name with the
+        # wrong channel whenever the missing one was not the trailing entry -- which surfaced as a
+        # KeyError on roi.ident two call levels away rather than here, where the cause is. Position
+        # also replaces names.index(), which returns the first match and so cross-wires two
+        # channels that happen to carry the same name
+        if len(self.channel_names) != len(self.channels):
+            raise ValueError(f"Got {len(self.channel_names)} channel names for "
+                             f"{len(self.channels)} channels: {list(self.channel_names)}")
+        return {name: {"Channel": channel,
+                       "Lower": np.amin(channel),
+                       "Upper": np.amax(channel),
+                       "Max. Val": np.iinfo(channel.dtype).max}
+                for name, channel in zip(self.channel_names, self.channels)}
 
     def check_focus_contrast(self,
                              foci: List[ROI],
@@ -188,8 +196,26 @@ class QualityTester:
             intensity = roi.calculate_statistics(channel)["intensity average"]
             dims = roi.calculate_dimensions()
             fcy, fcx = dims["center_y"], dims["center_x"]
-            # Approximation of radius
-            fr = max((dims["maxX"] - dims["minX"]) // 2, dims["maxY"] - dims["minY"])
+            # Half-extent of the focus, measured FROM THE CENTRE THE WINDOW IS PLACED ON. It sizes
+            # both the sampled window below and the mask that blanks the focus out of it, so it has
+            # to be a radius, and it has to be a radius about fcy/fcx specifically.
+            #
+            # Two things were wrong here. The old max((maxX - minX) // 2, maxY - minY) halved only
+            # the X term, so the Y term won for anything not more than twice as wide as tall (i.e.
+            # every roughly circular focus) and yielded a diameter -- putting the background ring a
+            # full focus diameter from the centre, frequently outside the nucleus altogether. And
+            # deriving it from the bounding box at all mixes two centres: fcy/fcx come from
+            # get_center, the run-length-weighted centroid, while the box is centred on its own
+            # midpoint. Those coincide for a symmetric focus and diverge otherwise -- measured 2.5 px
+            # for a two-lobed blob -- and the difference is focus pixels sitting outside the mask,
+            # in a ring only arr pixels thick.
+            #
+            # So take the largest distance from the centroid to the area's extremes. maxX/maxY are
+            # one past the last pixel, hence the -1; the +1 is because the mask slice below is
+            # half-open, so covering a pixel at distance d needs fr > d. Identical to the bounding
+            # box for a symmetric focus, larger only where the two centres actually disagree.
+            fr = max(fcy - dims["minY"], dims["maxY"] - 1 - fcy,
+                     fcx - dims["minX"], dims["maxX"] - 1 - fcx) + 1
             arr = 3
             if fcy < fr + arr or fcx < fr + arr:
                 continue
@@ -198,10 +224,15 @@ class QualityTester:
                    fcx - fr - arr: fcx + fr + arr]
             # Get mask
             mask = np.ones(shape=area.shape)
-            # Get area shape
-            acy, acx = area.shape
-            acy = acy // 2
-            acx = acx // 2
+            # Focus centre in window coordinates. The slice above starts at fcy - fr - arr, which
+            # the guard guarantees is >= 0, so the focus sits at exactly fr + arr whether or not the
+            # far edge was clipped. Taking area.shape // 2 instead was wrong at the bottom and right
+            # edges of the image: numpy clips a slice that runs past the end, and the midpoint of
+            # the clipped window is no longer the focus, so the hole slid toward that edge and let
+            # focus pixels -- the brightest in the window -- into the ring that must sample
+            # background only. Harmless while fr was a diameter, because the oversized hole covered
+            # the focus anyway; a correct fr exposes it.
+            acy = acx = fr + arr
             # Set focus area to zero
             mask[acy - fr: acy + fr,
             acx - fr: acx + fr] = 0

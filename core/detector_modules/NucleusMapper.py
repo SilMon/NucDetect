@@ -99,7 +99,18 @@ class NucleusMapper(AreaMapper):
         edm = ndi.distance_transform_edt(bin_map)
         # Normalize edm
         xmax, xmin = edm.max(), edm.min()
-        return img_as_ubyte((edm - xmin) / (xmax - xmin))
+        span = xmax - xmin
+        # A constant distance map has no range to stretch, and the caller reaches this on purpose:
+        # threshold_map deliberately returns an all-zero binary map for a channel whose dynamic
+        # range is under 30, which makes the whole EDM zero and the division 0/0. Unguarded it
+        # produced an array of NaN and then cast it to uint8 -- which is UNDEFINED in C. It
+        # happens to yield the all-zero map that is in fact correct here, but only by accident of
+        # this platform; nothing promises the NaN will not land on 255 and hand the watershed a
+        # uniformly white distance map. Say the intended answer instead of relying on the cast.
+        # Note a single-pixel nucleus is NOT degenerate: it gives xmin 0, xmax 1 and normalises
+        if not span:
+            return np.zeros(edm.shape, np.uint8)
+        return img_as_ubyte((edm - xmin) / span)
 
     def get_iterative_max_map(self, edm: np.ndarray, binary_map: np.ndarray) -> np.ndarray:
         """
@@ -133,7 +144,17 @@ class NucleusMapper(AreaMapper):
             maxi = maximum(maxi, mask)
             ind += 1
         progress.span("threshold_local", ITERMAX_BOUNDS)(0.0, "Applying local threshold")
-        thresh = threshold_local(maxi, block_size=(mask_size * local_threshold_multiplier + 1) * size_factor)
+        # Scale first, then force the result odd. threshold_local requires an odd integer block
+        # size, and the +1 that supplied it used to sit INSIDE the parenthesis, so the scaling
+        # applied afterwards undid the property it was there to guarantee. Measured with the
+        # default mask_size 7 and multiplier 8: size_factor 2.0 gave 114.0 and raised "block_size
+        # must be odd!", while 1.5 gave 85.5 and was accepted silently -- the check is
+        # `block_size % 2 == 0`, which a non-integer never satisfies, so a fractional window walks
+        # straight past it. `| 1` rounds up to the next odd integer and cannot produce an even or
+        # fractional value for any positive factor. At the default size_factor of 1.0 this is 57,
+        # exactly what the old expression produced
+        block_size = int(mask_size * local_threshold_multiplier * size_factor) | 1
+        thresh = threshold_local(maxi, block_size=block_size)
         progress.span("fill", ITERMAX_BOUNDS)(0.0, "Filling holes")
         maxi = ndi.binary_fill_holes(maxi > thresh)
         maxi = np.logical_and(maxi, binary_map)

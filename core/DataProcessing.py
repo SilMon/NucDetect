@@ -173,8 +173,17 @@ def automatic_whitebalance(image: np.ndarray, cutoff: float = 0.05) -> np.ndarra
     if "float" not in str(image.dtype):
         image = image.copy()
     else:
-        # Convert image to uint TODO
-        image = (((image - np.amin(image)) / np.amax(image)) * 255).astype("uint8")
+        # Stretch a float image onto 0..255. Divide by the RANGE, not by the maximum: image - low
+        # already starts at zero, so dividing by the maximum compresses the result by low/high --
+        # measured at 90% of the range lost for a channel spanning 3800..3999, and it let a float
+        # image holding negative values overflow the uint8 cast (a -1..1 image reached 510 pre-cast
+        # and wrapped to 254, rendering the brightest pixels dark). A uniform image has no range to
+        # stretch; it already came out all-zero here, so map it to that explicitly rather than
+        # dividing by zero and casting a nan -- note that dividing by the range alone would widen
+        # that division by zero from "maximum is 0" to "any uniform image".
+        low, high = np.amin(image), np.amax(image)
+        span = high - low
+        image = ((image - low) / span * 255).astype("uint8") if span else np.zeros(image.shape, "uint8")
     imgmin, imgmax = np.iinfo(image.dtype).min, np.iinfo(image.dtype).max
     amin, amax = imgmin, imgmax
     # Calculate histogram of image
@@ -230,117 +239,21 @@ def euclidean_distance(p1: Tuple[int, int], p2: Tuple[int, int]) -> float:
     return math.sqrt(((p2[0] - p1[0]) ** 2) + ((p2[1] - p1[1]) ** 2))
 
 
-@njit
-def get_circle_area(d: int) -> float:
-    """
-    Function to calculate the area of a circle
-
-    :param d: The diameter of the circle
-    :return: The area of the circle as float
-    """
-    return math.pi * (d / 2) ** 2
-
-
-@njit
-def calculate_overlap_between_two_circles(c1: Tuple[int, int, int, int], c2: Tuple[int, int, int, int]) -> float:
-    """
-    Function to calculate the overlap between two circles
-    Adapted from:   https://stackoverflow.com/questions/4247889/area-of-intersection-between-two-circles
-                    http://mathworld.wolfram.com/Circle-CircleIntersection.html
-
-    :param c1: The center, diameter and identifier of the first circle
-    :param c2: The center, diameter and identifier of the second circle
-    :return: The overlapping area between both circles, as float
-    """
-    center_1 = (c1[0], c1[1])
-    center_2 = (c2[0], c2[1])
-    radius_1 = c1[2] / 2
-    radius_2 = c2[2] / 2
-    dist = euclidean_distance(center_1, center_2)
-    # Check if both circles overlap at all
-    if dist > radius_1 + radius_2:
-        return 0
-    # Check if one circle is inside the other
-    if dist <= abs(radius_1 - radius_2):
-        # Check for circle 2
-        if radius_1 >= radius_2:
-            return get_circle_area(c2[2])
-        # Check for circle 1
-        else:
-            return get_circle_area(c1[2])
-    # If the circles overlap and do not encapsulate each other, calculate the overlap
-    # Swap if radius_2 is larger than radius_1
-    rs = min(radius_1, radius_2)
-    rl = max(radius_1, radius_2)
-    # calculate part1
-    part1 = rs * rs * math.acos(
-        (dist * dist + rs * rs - rl * rl) / (2 * dist * rs)
-    )
-    # calculate part2
-    part2 = rl * rl * math.acos(
-        (dist * dist + rl * rl - rs * rs) / (2 * dist * rl)
-    )
-    # calculate part3
-    part3 = 0.5 * math.sqrt(
-        (-dist + rs + rl) * (dist + rs - rl) * (dist - rs + rl) * (dist + rs + rl)
-    )
-    return part1 + part2 - part3
-
-
-@njit
-def check_if_two_circles_overlap(c1: Tuple[int, int, int, int], c2: Tuple[int, int, int, int]) -> bool:
-    """
-    Method to check if the two given circles overlap
-
-    :param c1: The center, diameter and identifier of the first circle
-    :param c2: The center, diameter and identifier of the second circle
-    :return: True, if both circles are overlapping else False
-    """
-    return euclidean_distance((c1[0], c1[1]), (c2[0], c2[1])) <= abs(c1[2] / 2 - c2[2] / 2)
-        
-
-def calculate_overlap_between_two_circles_as_percentage(c1: Tuple[int, int, int, int],
-                                                        c2: Tuple[int, int, int, int],
-                                                        true_overlap: bool = False) -> float:
-    """
-    Function to calculate the overlap between two circles as a percentage of the total area
-
-    :param c1: The center and diameter of the first circle
-    :param c2: The center and diameter of the second circle
-    :param true_overlap: If true, the actual overlap in percent is returned, else the percentage of the max. possible
-    overlap is returned
-    :return: The overlapping area between both circles, as float
-    """
-    # Calculate the areas of  the circles
-    area_1 = get_circle_area(c1[2])
-    area_2 = get_circle_area(c2[2])
-    # Calculate the overlapping area between both circles
-    overlapping_area = calculate_overlap_between_two_circles(c1, c2)
-    if overlapping_area == 0:
-        return 0
-    else:
-        # Get the total area
-        ovl = overlapping_area / (area_1 + area_2 - overlapping_area)
-        if true_overlap:
-            return ovl
-        else:
-            # Adjust the overlap to represent the percentage of max possible overlap
-            return ovl / (min(area_1, area_2) / max(area_1, area_2))
-
-
-@njit
-def check_circles_for_engulfment(c1: Tuple[int, int, int, int], c2: Tuple[int, int, int, int]) -> bool:
-    """
-    Function to check if one of the circles is engulfed in the other
-    :param c1: The first circle
-    :param c2: The second circle
-    :return: True if one circle is engulfed, else False
-    """
-    # Calculate the distance between both circles
-    dist = euclidean_distance(c1[:2], c2[:2])
-    # Check if the distance is smaller than
-    # Check if one circle is inside the other
-    return dist <= abs(c1[2] / 2 - c2[2] / 2)
+# A family of circle-geometry helpers (get_circle_area,
+# calculate_overlap_between_two_circles[_as_percentage], check_if_two_circles_overlap,
+# check_circles_for_engulfment) was removed here, together with ROI.calculate_overlap, its only
+# non-dead caller-of-a-caller. They approximated each ROI by a circle of diameter
+# max(width, height) and compared those circles.
+#
+# Nothing called them. MapComparator imported four of them and used none; ROI.calculate_overlap had
+# no caller at all. They were superseded by the cKDTree pass in
+# MapComparator.get_overlap_between_lists, which is both cheaper -- a ball query instead of an
+# all-pairs circle test -- and, for the merge path, strictly more accurate: the candidate pairs it
+# produces are then intersected with get_rle_area_intersection, which uses the ROI's true run-length
+# geometry rather than a circular approximation of it.
+#
+# Do not reintroduce a circle approximation for that purpose. If a size-aware test is ever needed,
+# the run-length intersection already available on ROI is the correct primitive.
 
 
 def create_circular_mask(h: Union[int, float], w: Union[int, float],

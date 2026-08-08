@@ -9,8 +9,6 @@ from numba.typed import List as NumbaList
 from scipy.spatial import cKDTree
 
 from core.roi.AreaAnalysis import imprint_area_into_array, convert_area_to_array, get_surface
-from core.DataProcessing import calculate_overlap_between_two_circles_as_percentage, check_if_two_circles_overlap, \
-    check_circles_for_engulfment, get_circle_area
 from core.roi.ROI import ROI
 from core.roi import AreaAnalysis
 
