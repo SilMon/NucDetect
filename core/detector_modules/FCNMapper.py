@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 from typing import Iterable, Dict, List, Tuple
 import matplotlib.pyplot as plt
 import numpy as np
@@ -28,13 +27,10 @@ class FCNMapper(AreaMapper):
     """
     Class to detect foci on image channels using machine learning
     """
-    ___slots__ = (
-        "channels",
-        "settings",
-        "main",
-        "model",
-        "fcn",
-    )
+    # No __slots__ -- see the note on AreaMapper. This class is the reason: its declaration named
+    # neither `script_dir` nor `model_type`, both of which __init__ assigned, so the list could
+    # never have been activated as written. `script_dir` has since been deleted; `model_type`
+    # remains, and is itself assigned and never read.
     STANDARD_SETTING = {
         "fcn_certainty_nuclei": 0.95,
         "fcn_certainty_foci": 0.8
@@ -58,7 +54,11 @@ class FCNMapper(AreaMapper):
     def __init__(self, channels: Iterable[np.ndarray] = None,
                  settings: Dict = None, main: int = 2):
         super().__init__(channels, settings)
-        self.script_dir = Path().resolve().parent / "fcn" / "model"
+        # There was a `self.script_dir = Path().resolve().parent / "fcn" / "model"` here. It was
+        # never read, and it was wrong: it derived the model directory from the CURRENT WORKING
+        # DIRECTORY, which the application mutates at import time, so it pointed somewhere else
+        # depending on how the process was started. load_model uses gui.Paths.model_dir, which
+        # names the same directory but derives it from the package location. Use that.
         self.set_gpu_memory_growth()
         self.model = self.load_model()
         self.main = main

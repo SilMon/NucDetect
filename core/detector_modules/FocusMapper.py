@@ -21,11 +21,7 @@ class FocusMapper(AreaMapper):
     """
     Class to detect foci on image channels
     """
-    ___slots__ = (
-        "channels",
-        "settings",
-        "main"
-    )
+    # No __slots__ -- see the note on AreaMapper for why the hierarchy does not use them.
     STANDARD_SETTINGS = {
         "use_smoothing": False,
         "use_background_reduction": False,

@@ -12,7 +12,6 @@ from typing import Union, Dict, List, Tuple, Iterable
 import numpy as np
 from numba.typed import List as numList
 
-from core.DataProcessing import calculate_overlap_between_two_circles
 from core.roi.AreaAnalysis import get_bounding_box, get_center, get_surface, get_ellipse_radii, get_orientation_angle, \
     get_orientation_vector, get_eccentricity, get_ovality
 from core.roi import AreaAnalysis
@@ -149,17 +148,10 @@ class ROI:
         dims = self.calculate_dimensions()
         return dims["center_y"], dims["center_x"], max(dims["width"], dims["height"]), hash(self)
 
-    def calculate_overlap(self, roi: ROI) -> float:
-        """
-        Method to calculate the area overlap between this and another ROI. Assumes the ROI to be circular
-
-        :param roi: The second ROI
-        :return: The overlap as percentage (0-1)
-        """
-        # Get both ROI as circle
-        repr1 = self.get_minimal_representation()
-        repr2 = roi.get_minimal_representation()
-        return calculate_overlap_between_two_circles(repr1, repr2)
+    # calculate_overlap was removed here. It approximated both ROI as circles of diameter
+    # max(width, height) and compared those, and it had no callers. Overlap between two ROI is
+    # available exactly, from their run-length areas, via AreaAnalysis.get_rle_area_intersection --
+    # which is what add_to_area already uses.
 
     def reset_stored_values(self) -> None:
         """
