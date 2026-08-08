@@ -69,6 +69,15 @@ STRICT_THREAD_AFFINITY = os.environ.get("NUCDETECT_STRICT_THREAD_AFFINITY", "") 
 PRG_RESOLUTION = 1000
 # Role the precomputed sort key of a result table cell is stored under
 SORT_ROLE = Qt.UserRole
+# The result table holds one row per CHANNEL per nucleus. These two columns are the only ones whose
+# value belongs to the channel rather than to the nucleus -- Requester.get_table_data_for_image
+# builds one nucleus-level row and appends (channel, focus count) to a copy of it per channel, so
+# everything else, Co-Localization included, is computed once per nucleus and merely repeated.
+# Columns are classified by NAME and never by index: the experiment view inserts a "Group" column at
+# index 2, which shifts every index after it.
+CHANNEL_LEVEL_COLUMNS = frozenset({"Channel", "Foci"})
+# The column whose repeated value identifies a nucleus, used to decide which rows may be merged
+NUCLEUS_KEY_COLUMN = "ROI ID"
 # Splits a text into its digit and non-digit runs
 _DIGIT_RUN = re.compile(r"(\d+)")
 # Sort keys are tuples of uniform (kind, number, text) triples. The uniform shape is what keeps a
@@ -187,11 +196,15 @@ class NucDetect(QMainWindow):
     table_signal = pyqtSignal(list, list)
     row_signal = pyqtSignal(list)
     status_signal = pyqtSignal(bool)
-    STANDARD_TABLE_HEADER = ["Image Name", "Image Identifier",
-                             "ROI Identifier", "Center Y",
-                             "Center X", "Area [px]", "Ellipticity[%]",
-                             "Or. Angle [deg]", "Maj. Axis", "Min. Axis",
-                             "Co-Localization [%]", "Channel", "Foci"]
+    # Labels are kept SHORT on purpose. The table has 13 columns, and a header section only shows
+    # its sort indicator if the label leaves room for it -- measured before this was shortened,
+    # every one of the 13 sections was ~50 px wide against labels needing 52-238 px, so Qt elided
+    # every label and clipped every arrow. The user could sort but had no way to see that they had.
+    STANDARD_TABLE_HEADER = ["Image Name", "Image ID",
+                             "ROI ID", "Center Y",
+                             "Center X", "Area [px]", "Ellipt. [%]",
+                             "Angle [°]", "Maj. Axis", "Min. Axis",
+                             "Co-Loc. [%]", "Channel", "Foci"]
 
     def __init__(self):
         """
@@ -371,7 +384,25 @@ class NucDetect(QMainWindow):
         self.res_table_sort_model = TableFilterModel(self)
         self.res_table_sort_model.setSourceModel(self.res_table_model)
         self.ui.table_results.setModel(self.res_table_sort_model)
-        self.ui.table_results.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        # NOT QHeaderView.Stretch. Stretch divides the width evenly over all 13 columns, which left
+        # every section around 50 px -- narrower than every single header label, so Qt elided the
+        # text and clipped the sort indicator off the end. Sorting worked and looked like it did
+        # not. Sizing to content gives each header the room it needs and lets the table scroll
+        # sideways instead, with the last column taking up any slack
+        # Interactive rather than ResizeToContents: the widths are set once per fill (see
+        # _apply_result_table) instead of being recomputed on every data change, and the user can
+        # still drag a column, which ResizeToContents forbids outright
+        header = self.ui.table_results.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Interactive)
+        header.setStretchLastSection(True)
+        # Row banding is the second half of the same problem: without it a reordered table is hard
+        # to read as reordered, because nothing marks where one row ends and the next begins
+        self.ui.table_results.setAlternatingRowColors(True)
+        # Spans are VIEW state and Qt never moves them when the sorting reorders the rows, so they
+        # have to be rebuilt on every sort. QTableView connects its own sort slot to this signal
+        # first -- setSortingEnabled runs from the .ui, before this method -- and Qt calls slots in
+        # connection order, so by the time this one runs the rows are already in their new order
+        header.sortIndicatorChanged.connect(self._update_result_table_spans)
 
     def _connect_buttons(self) -> None:
         """
@@ -516,9 +547,94 @@ class NucDetect(QMainWindow):
             self.res_table_model.setColumnCount(len(rows[0]))
         # Set header of table
         self.res_table_model.setHorizontalHeaderLabels(header)
+        # Size the columns to what they now hold. Done here rather than by a ResizeToContents
+        # resize mode so the cost is paid once per fill instead of on every data change, and so
+        # the widths stay draggable afterwards
+        self.ui.table_results.resizeColumnsToContents()
+        # setRowCount(0) above drops every span, so they are rebuilt for the rows just added
+        self._update_result_table_spans()
         data = [header]
         data.extend(rows)
         self.data = data
+
+    def _update_result_table_spans(self, *_) -> None:
+        """
+        Method to merge the result-table cells that repeat within one nucleus
+
+        The table holds one row per channel per nucleus, so a nucleus with two focus channels
+        occupies two rows and repeats all of its own values across both. Ten rows then read as ten
+        nuclei when there are five. Merging the repeated cells makes the real count visible: five
+        merged blocks are five nuclei.
+
+        Which cells may be merged depends on how the rows are currently ordered, because merging is
+        only honest while the rows it merges are adjacent:
+
+        * ordered by a nucleus-level column, every nucleus keeps its rows together (they share the
+          value and the sort is stable), so all nucleus-level columns merge across them;
+        * ordered by a channel-level column, ``TableFilterModel.lessThan`` groups the rows into one
+          block per channel, and each block holds exactly one row per nucleus -- nothing repeats
+          except the channel itself, which is merged into a block heading instead.
+
+        **The choice is made from the row order itself, never from the sort column.** Those two
+        disagree whenever the header changes shape under an active sort: switching between the
+        single-image and experiment views changes the column count, which leaves ``sortColumn()``
+        at -1 while the rows keep the order the old sort gave them. Reading the sort column there
+        selects nucleus merging for channel-grouped rows and silently merges nothing.
+
+        Takes and ignores the arguments of ``sortIndicatorChanged``.
+
+        :return: None
+        """
+        self._assert_main_thread("_update_result_table_spans")
+        table = self.ui.table_results
+        model = table.model()
+        table.clearSpans()
+        if model is None or not model.rowCount():
+            return
+        nucleus_runs = self._get_result_table_runs(model, NUCLEUS_KEY_COLUMN)
+        if any(length > 1 for _, length in nucleus_runs):
+            runs = nucleus_runs
+            merged = [column for column in range(model.columnCount())
+                      if model.column_name(column) not in CHANNEL_LEVEL_COLUMNS]
+        else:
+            # One row per nucleus per block: only the channel repeats, as a block heading
+            runs = self._get_result_table_runs(model, "Channel")
+            merged = [model.column_index("Channel")]
+        # An order that groups by neither -- which a stale sort can produce -- merges nothing.
+        # Spanning unrelated neighbours would state a grouping that is not there
+        if not merged or merged[0] < 0:
+            return
+        # One repaint for the whole rebuild rather than one per setSpan
+        table.setUpdatesEnabled(False)
+        try:
+            for start, length in runs:
+                if length > 1:
+                    for column in merged:
+                        table.setSpan(start, column, length, 1)
+        finally:
+            table.setUpdatesEnabled(True)
+
+    @staticmethod
+    def _get_result_table_runs(model, column_name: str) -> List[Tuple[int, int]]:
+        """
+        Method to find the runs of consecutive rows sharing a value in the given column
+
+        :param model: The result table's proxy model
+        :param column_name: The header label of the column to group by
+        :return: The runs, as (first row, number of rows). Empty if the table has no such column
+        """
+        column = model.column_index(column_name)
+        if column < 0:
+            return []
+        values = [model.data(model.index(row, column), Qt.DisplayRole)
+                  for row in range(model.rowCount())]
+        runs = []
+        start = 0
+        for row in range(1, len(values) + 1):
+            if row == len(values) or values[row] != values[start]:
+                runs.append((start, row - start))
+                start = row
+        return runs
 
     def _append_result_row(self, cells: List[str]) -> None:
         """
@@ -1674,7 +1790,52 @@ class TableFilterModel(QSortFilterProxyModel):
     def __init__(self, parent):
         super(TableFilterModel, self).__init__(parent)
 
+    def column_name(self, column: int) -> str:
+        """
+        Method to get the header label of a source column
+
+        :param column: The index of the column
+        :return: The label, empty if there is no such column
+        """
+        source = self.sourceModel()
+        if source is None or column < 0 or column >= source.columnCount():
+            return ""
+        return source.headerData(column, Qt.Horizontal, Qt.DisplayRole) or ""
+
+    def column_index(self, name: str) -> int:
+        """
+        Method to find a source column by its header label
+
+        :param name: The label to look for
+        :return: The index of the column, -1 if the table does not have it
+        """
+        source = self.sourceModel()
+        if source is None:
+            return -1
+        for column in range(source.columnCount()):
+            if self.column_name(column) == name:
+                return column
+        return -1
+
     def lessThan(self, ind1, ind2):
+        # A channel-level column describes one channel of a nucleus, so ordering by it alone
+        # interleaves the channels of different nuclei -- the rows of one nucleus end up scattered
+        # down the table. Sorting by the channel FIRST turns the table into one block per channel,
+        # each holding exactly one row per nucleus, which is both readable and countable.
+        sort_column = self.column_name(self.sortColumn())
+        source = self.sourceModel()
+        if source is not None and sort_column in CHANNEL_LEVEL_COLUMNS and sort_column != "Channel":
+            channel = self.column_index("Channel")
+            if channel >= 0:
+                key1 = self.get_sort_key(source.index(ind1.row(), channel))
+                key2 = self.get_sort_key(source.index(ind2.row(), channel))
+                if key1 != key2:
+                    # Qt applies the sort ORDER to whatever this returns, so a descending sort would
+                    # reverse the blocks along with their contents. Undoing it here keeps the blocks
+                    # in one order while the chosen column sorts both ways inside them
+                    if self.sortOrder() == Qt.DescendingOrder:
+                        return key1 > key2
+                    return key1 < key2
         return self.get_sort_key(ind1) < self.get_sort_key(ind2)
 
     def get_sort_key(self, index: QModelIndex) -> Tuple[Tuple[int, float, str], ...]:
