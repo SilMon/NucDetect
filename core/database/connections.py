@@ -11,6 +11,11 @@ from core.roi.ROI import ROI
 
 LOGGER = get_logger(__name__)
 
+# Shown in the result table in place of a measurement when a nucleus has no statistics row. Every
+# cell of that table is a preformatted string and the sort key falls back to text comparison for
+# anything that is not a number, so this sorts as one block rather than breaking the column
+NO_STATISTICS = "Not calculated"
+
 
 class Specifiers(Enum):
     ALL = "*"
@@ -194,6 +199,10 @@ class Connector:
         :param many: If true, values will be seen as list of entries to insert
         :return: None
         """
+        # An empty batch is not an error -- an image in which nothing was detected produces one --
+        # and there is nothing to insert, so return before len(values[0]) below indexes into it
+        if not values:
+            return
         # Check parameters for illegal characters
         self.check_parameters(table, columns, values)
         # Check if the requested table exists
@@ -523,40 +532,11 @@ class Requester(DatabaseInteractor):
                                                        "encountered_names",
                                                        ("md5", Specifiers.EQUALS, image)))
 
-    def get_image_x_scale(self, image: str) -> float:
-        """
-        Method to get the x-axis scale of the given image
-
-        :param image: The md5 hash of the image
-        :return: The x-scale of the image as float
-        """
-        x_res = self.connector.get_view_from_table("x_res",
-                                                  "images",
-                                                  ("md5", Specifiers.EQUALS, image))[0]
-        return float(x_res[0][0]) if x_res else None
-
-    def get_image_y_scale(self, image: str) -> float:
-        """
-        Method to get the y-axis scale of the given image
-
-        :param image: The md5 hash of the image
-        :return: The y-scale of the image as float
-        """
-        x_res = self.connector.get_view_from_table("x_res",
-                                                   "images",
-                                                   ("md5", Specifiers.EQUALS, image))[0]
-        return float(x_res[0][0]) if x_res else None
-
-
-    def get_image_scale(self, image: str) -> Tuple[float, float]:
-        """
-        Method to get the y-axis and x-axis scale of the given image
-
-        :param image: The md5 hash of the image
-        :return: The y-axis and x-axis scale of the image as tuple
-        """
-        return self.get_image_y_scale(image), self.get_image_x_scale(image)
-
+    # get_image_x_scale, get_image_y_scale and get_image_scale were removed here. All three were
+    # unreachable and none of them could have worked: the y variant queried the x_res column, and
+    # both getters indexed an already-unpacked row tuple a second time, raising TypeError on the
+    # first call. Image scales are read through gui.Util.get_image_scale, which is a separate
+    # module-level function and the only live path.
 
     def get_groups_for_experiment(self, experiment: str) -> List[str]:
         """
@@ -722,10 +702,19 @@ class Requester(DatabaseInteractor):
             stats = self.get_statistics_for_roi(nuc)
             # Calculate overall match for this nucleus
             match = general[10] * 100 if general[10] else 100
-            # Create row for this nucleus
-            row = [name, str(image), str(nuc), str(stats[11]), str(stats[10]), f"{stats[15]:.2f}",
-                   f"{float(stats[18]) * 100:.2f}", f"{float(stats[14]):.2f}",
-                   f"{float(stats[12]):.2f}", f"{float(stats[13]):.2f}", f"{match:.2f}"]
+            # Create row for this nucleus. get_statistics_for_roi returns an empty tuple for a
+            # nucleus with no statistics row, so every stats[] below would raise IndexError and take
+            # the whole result table with it. The row is kept and the affected cells say so instead:
+            # the nucleus exists and its foci counts are still countable. This needs a partially
+            # committed analysis to occur at all -- statistics are written as part of every
+            # analysis -- so no recovery is attempted here
+            if stats:
+                measurements = [str(stats[11]), str(stats[10]), f"{stats[15]:.2f}",
+                                f"{float(stats[18]) * 100:.2f}", f"{float(stats[14]):.2f}",
+                                f"{float(stats[12]):.2f}", f"{float(stats[13]):.2f}"]
+            else:
+                measurements = [NO_STATISTICS] * 7
+            row = [name, str(image), str(nuc)] + measurements + [f"{match:.2f}"]
             # Count the foci
             for channel in sorted(self.get_channel_names(image, False)):
                 rows.append(row + [channel, str(self.count_foci_for_nucleus_and_channel(nuc, channel))])
@@ -942,6 +931,9 @@ class Inserter(DatabaseInteractor):
         :param roi_data: The general ROI data to save
         :return: None
         """
+        # Nothing detected in this image -- the isinstance check below indexes element 0
+        if not roi_data:
+            return
         self.connector.insert_or_replace_into("roi", ("hash", "image", "auto", "channel",
                                                       "center_x", "center_y", "width", "height",
                                                       "associated", "detection_method", "match", "co_localized"),
@@ -954,6 +946,9 @@ class Inserter(DatabaseInteractor):
         :param line_data: The line data to save
         :return: None
         """
+        # Nothing detected in this image -- the check below indexes two levels in
+        if not line_data or not line_data[0]:
+            return
         # Check if many
         many = isinstance(line_data[0][0], tuple)
         if many:
@@ -971,6 +966,9 @@ class Inserter(DatabaseInteractor):
         :param stat_data: The data to save
         :return: None
         """
+        # Nothing detected in this image -- the isinstance check below indexes element 0
+        if not stat_data:
+            return
         self.connector.insert_or_replace_into("statistics", ("hash", "image", "area", "intensity_average",
                                                              "intensity_median", "intensity_maximum",
                                                              "intensity_minimum", "intensity_std", "eccentricity",
@@ -1137,6 +1135,8 @@ class Inserter(DatabaseInteractor):
         vals = []
         for path in paths:
             md5 = ImageLoader.calculate_image_id(path)
-            filename = os.path.basename(path)
+            # Without the extension, matching register_image_filename -- the stored file_name feeds
+            # the result tables and the CSV export, so the two registration paths must agree
+            filename = os.path.splitext(os.path.basename(path))[0]
             vals.append((md5, filename))
         self.connector.insert_or_replace_into("encountered_names", ("md5", "file_name"), vals, True)

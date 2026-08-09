@@ -91,8 +91,13 @@ class ROIHandler:
         """
         self.rois.remove(roi)
         if roi.main and cascade:
-            # If cascadian deletion is activated, delete all associated roi
-            self.rois = [x for x in self.rois if x.associated is not roi]
+            # If cascadian deletion is activated, delete all associated roi.
+            # ROI.associated holds hash() of the nucleus, not the nucleus object, so the comparison
+            # has to be against the hash. The previous `x.associated is not roi` compared an int
+            # against a ROI and was therefore always true, which kept every focus and left them
+            # orphaned -- a state the domain forbids, since a focus is always inside a nucleus
+            nucleus_hash = hash(roi)
+            self.rois = [x for x in self.rois if x.associated != nucleus_hash]
 
     def remove_roi_by_hash(self, hash_: int, cascade: bool = False) -> None:
         """
@@ -104,7 +109,7 @@ class ROIHandler:
         """
         roi = self.get_roi_by_hash(hash_)
         if roi:
-            self.remove_roi(roi)
+            self.remove_roi(roi, cascade)
 
     def remove_rois(self, rois: List[ROI]) -> None:
         """

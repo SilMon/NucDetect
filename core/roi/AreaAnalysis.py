@@ -49,7 +49,13 @@ def amax(lst: Iterable[int]) -> int:
     :param lst: The list to get the maximum from
     :return: The maximum value of the list
     """
-    max_ = -0xffffff
+    # Seeded from the data rather than from a sentinel. -0xffffff was not a floor: any list whose
+    # values all lie below -16777215 reduced to the sentinel instead of to a member of the list.
+    # It is also what the numba typing note on amin was about -- an int literal cannot unify with
+    # the element type of every list this is called with
+    if len(lst) == 0:
+        raise ValueError("amax of an empty sequence")
+    max_ = lst[0]
     for x in lst:
         if x > max_:
             max_ = x
@@ -64,9 +70,13 @@ def amin(lst: Iterable[int]) -> int:
     :param lst: The list to get the minimum from
     :return: The minimum value of the list
     """
-    # TODO Failed in nopython mode pipeline (step: nopython frontend)
-    # Cannot unify Literal[int](16777215) and readonly bytes(uint8, 1d, C) for 'min_.3',
-    min_ = 0xffffff
+    # Seeded from the data rather than from a sentinel; see amax. This also retires the TODO that
+    # stood here -- "Cannot unify Literal[int](16777215) and readonly bytes(uint8, 1d, C) for
+    # 'min_'" was numba objecting to exactly this sentinel, so removing it removes the typing
+    # conflict rather than working around it
+    if len(lst) == 0:
+        raise ValueError("amin of an empty sequence")
+    min_ = lst[0]
     for x in lst:
         if x < min_:
             min_ = x
