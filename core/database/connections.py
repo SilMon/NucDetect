@@ -356,7 +356,13 @@ class Connector:
         :param quote: If true, strings will be quoted
         :return: The converted value
         """
-        if isinstance(value, (float, int)):
+        # bool BEFORE int, because bool is a subclass of int: tested the other way round the int
+        # branch wins and True converts to "True" rather than "1". SQLite only accepts the bare
+        # TRUE/FALSE literals from 3.23 onwards and only while the value is interpolated unquoted,
+        # so the old order worked by two coincidences at once
+        if isinstance(value, bool):
+            return f"{int(value)}"
+        elif isinstance(value, (float, int)):
             return f"{value}"
         elif isinstance(value, str):
             if quote:
@@ -367,8 +373,6 @@ class Connector:
             if value is Specifiers.IS or value is Specifiers.NULL:
                 return f" {value.value} "
             return f"{value.value}"
-        elif isinstance(value, bool):
-            return f"{int(value)}"
 
 
 class DatabaseInteractor:

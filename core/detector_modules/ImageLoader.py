@@ -106,10 +106,16 @@ class ImageLoader:
         """
         Method to get the name of the unit from int
 
-        :param unit: The index
+        :param unit: The TIFF ResolutionUnit tag value
         :return: The unit as string
         """
-        return ["No Unit", "Inch", "Centimeter"][unit-1]
+        # Indexed by the tag value itself. The previous `[unit - 1]` turned a ResolutionUnit of 0 --
+        # which the TIFF specification defines as "no absolute unit" -- into index -1 and silently
+        # returned "Centimeter", the most specific answer for the least specific input. An unknown
+        # value returns the no-unit case rather than raising, matching how a missing resolution tag
+        # is handled above
+        units = ("No Unit", "No Unit", "Inch", "Centimeter")
+        return units[unit] if 0 <= unit < len(units) else units[0]
 
     @staticmethod
     def load_image(path: str) -> np.ndarray:
