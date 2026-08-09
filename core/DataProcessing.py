@@ -24,7 +24,9 @@ def convert_p_values(pval: float) -> str:
     :return: The converted p-value
     """
     pv_str = "n.s."
-    if pval < 0.05:
+    # All three thresholds are inclusive, per the docstring above -- a p of exactly 0.05 is
+    # significant. The two lines below already used <=; this one did not.
+    if pval <= 0.05:
         pv_str = "*"
     if pval <= 0.01:
         pv_str = "**"
@@ -58,8 +60,11 @@ def perform_statistical_analysis_on_groups(data: pd.DataFrame,
     """
     # Get the unique pairings with each comparison group and channel
     pairs = list(product(get_unique_pairs(comparison_groups, data["Group"].unique()), data["Channel"].unique()))
-    # Clean the pairs up to create two parameter lists
-    param_a = [data.query(f"Channel == '{x[1]}'") for x in pairs]
+    # Clean the pairs up to create two parameter lists. Boolean indexing rather than
+    # DataFrame.query: group and channel names are user-supplied, and an interpolated name
+    # containing an apostrophe breaks the query expression while other query syntax silently
+    # changes which rows are selected.
+    param_a = [data[data["Channel"] == x[1]] for x in pairs]
     param_b = pairs
     # Start a ProcessPool to calculate the results
     with ProcessPoolExecutor(max_workers=(os.cpu_count() // 2) + 2) as exe:
@@ -82,8 +87,10 @@ def _perform_statistical_analysis_on_group(data: pd.DataFrame, pair: Tuple[str, 
     :return: The statistical data as pandas DataFrame
     """
     rows = []
-    control = data.query(f"Group == '{pair[0][0]}'")["Foci"].to_numpy()
-    test = data.query(f"Group == '{pair[0][1]}'")["Foci"].to_numpy()
+    # Boolean indexing rather than DataFrame.query -- see the note in the caller: group names
+    # are user-supplied and are not safe to interpolate into a query expression.
+    control = data[data["Group"] == pair[0][0]]["Foci"].to_numpy()
+    test = data[data["Group"] == pair[0][1]]["Foci"].to_numpy()
     perm_data = permutation_test(data=(control,
                                        test),
                                  rng=42,

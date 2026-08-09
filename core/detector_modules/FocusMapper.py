@@ -3,7 +3,6 @@ from math import sqrt
 from typing import Iterable, Tuple, Dict, List, Any
 
 import numpy as np
-from matplotlib import pyplot as plt
 from skimage.exposure import rescale_intensity
 from skimage.restoration import denoise_tv_chambolle, denoise_bilateral, denoise_wavelet
 from skimage.util import img_as_float

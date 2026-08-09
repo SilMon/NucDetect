@@ -3,7 +3,6 @@ import time
 import warnings
 from typing import List, Tuple, Dict, Union
 
-import matplotlib.pyplot as plt
 import numpy as np
 from numba.typed import List as NumbaList
 from scipy.spatial import cKDTree

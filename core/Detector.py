@@ -10,7 +10,6 @@ import time
 from copy import deepcopy
 from typing import Union, Dict, List, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 
 from core.logging_config import get_logger, log_messages

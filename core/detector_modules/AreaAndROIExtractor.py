@@ -2,7 +2,6 @@ import math
 from typing import List, Tuple, Dict, Iterable
 
 import numpy as np
-from matplotlib import pyplot as plt
 from numba.typed import List as nList
 from skimage.draw import disk
 

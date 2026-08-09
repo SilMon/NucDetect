@@ -2,7 +2,6 @@ import warnings
 from typing import List
 
 import numpy as np
-from matplotlib import pyplot as plt
 from scipy import ndimage as ndi
 from skimage import img_as_ubyte
 from skimage.filters import threshold_local

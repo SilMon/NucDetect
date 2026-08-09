@@ -1,6 +1,5 @@
 import os
 from typing import Iterable, Dict, List, Tuple
-import matplotlib.pyplot as plt
 import numpy as np
 import tensorflow as tf
 from scipy.signal.windows import hann
