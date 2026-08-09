@@ -106,7 +106,10 @@ class MapComparator:
         for ind_a, ind_b in pairs:
             focus_a = foci_a[ind_a]
             focus_b = foci_b[ind_b]
-            focus_a.merge(focus_b)
+            # Reduces focus_a to the area both detection methods agree on, and marks it "Merged"
+            # only if they overlap at all -- an empty intersection leaves it untouched and both
+            # foci are kept separately below.
+            focus_a.intersect_with(focus_b)
             if focus_a.detection_method != "Merged":
                 added_a.append(focus_a)
                 added_b.append(focus_b)

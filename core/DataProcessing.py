@@ -68,8 +68,9 @@ def perform_statistical_analysis_on_groups(data: pd.DataFrame,
         [rows.append(x) for x in res]
         stat_data = pd.DataFrame(rows,
                                  columns=("Group", "Channel", "Tested Against", "Statistic", "p-Value", "Significance"))
-        pd.to_numeric(stat_data["Statistic"], errors="coerce")
-        pd.to_numeric(stat_data["p-Value"], errors="coerce")
+        # pd.to_numeric is not in-place -- the return value has to be assigned back
+        stat_data["Statistic"] = pd.to_numeric(stat_data["Statistic"], errors="coerce")
+        stat_data["p-Value"] = pd.to_numeric(stat_data["p-Value"], errors="coerce")
         return stat_data
 
 def _perform_statistical_analysis_on_group(data: pd.DataFrame, pair: Tuple[str, str]) -> Tuple:
