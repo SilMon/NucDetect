@@ -146,7 +146,8 @@ class ROIHandler:
         for roi in self:
             # Create numba list
             num_area = numList()
-            [num_area.append(x) for x in roi.area]
+            for x in roi.area:
+                num_area.append(x)
             # Create the channel maps using numba
             AreaAnalysis.imprint_area_into_array(num_area, maps[self.idents.index(roi.ident)], hash(roi))
         return maps

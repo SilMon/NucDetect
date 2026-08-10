@@ -128,7 +128,10 @@ class ImageLoader:
         if os.path.splitext(path)[1] in ImageLoader.FORMATS:
             return io.imread(path)
         else:
-            raise Warning("Unsupported image format ->{}!".format(os.path.splitext(path)[1]))
+            # ValueError, not Warning. Warning is not an error type -- it reads as advisory to
+            # anyone scanning the code, and a caller guarding against bad input with the usual
+            # (ValueError, OSError) would not have caught it.
+            raise ValueError("Unsupported image format ->{}!".format(os.path.splitext(path)[1]))
 
     @staticmethod
     def calculate_image_id(path: str) -> str:
@@ -152,6 +155,11 @@ class ImageLoader:
         :param img: The image as ndarray
         :return: A list of all channels
         """
+        # A grayscale image is 2-D and has no channel axis, so img.shape[2] raises IndexError.
+        # get_image_data already treats a 2-D array as one channel, so the two disagreed about
+        # what a grayscale image is; this is the same reading of it.
+        if img.ndim == 2:
+            return [img]
         channels = []
         for ind in range(img.shape[2]):
             channels.append(img[..., ind])

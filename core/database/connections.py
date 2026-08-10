@@ -62,9 +62,16 @@ class Connector:
         commands = {}
         for root, dirs, files in os.walk(Paths.sql_dir):
             for file in files:
-                # Read file and append to command list
-                with open(os.path.join(root, file), "r") as f:
-                    commands[file[:-4]] = f.read()
+                # splitext, not file[:-4] -- that assumed a 3-character extension and silently
+                # mis-keyed anything else, so a stray .bak or an editor swap file next to the
+                # scripts was loaded as a command under a truncated name. Only .sql is a command.
+                name, extension = os.path.splitext(file)
+                if extension.lower() != ".sql":
+                    continue
+                # Explicit encoding: without it these fall back to the locale codepage, so the
+                # same script parses differently on a machine that is not cp1252
+                with open(os.path.join(root, file), "r", encoding="utf-8") as f:
+                    commands[name] = f.read()
         return commands
 
     def get_table_info_from_database(self) -> Dict[str, Dict]:

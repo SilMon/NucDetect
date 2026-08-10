@@ -177,8 +177,11 @@ class ROI:
         """
         if not rle:
             return
-        self.area.clear()
-        self.area = rle
+        # Copy rather than store the caller's list by reference, and do not clear() first: the
+        # clear() mutated the list this ROI held *previously*, which any other holder of it would
+        # have seen emptied, and it was pointless anyway given the rebind on the next line.
+        # Same aliasing hazard already fixed in ImageListModel.set_paths.
+        self.area = list(rle)
         self.reset_stored_values()
 
     def intersect_area(self, rle) -> bool:
@@ -233,12 +236,30 @@ class ROI:
                     "eccentricity": None, "roundness": None}
         # Check if the parameters are already calculated
         if not self.ell_params:
-            numba_area = numList(self.area)
+            # An empty area cannot be typed as a numba list at all -- get_surface then raises
+            # TypeError("invalid operation on untyped list") -- so it is kept away from numba
+            # rather than guarded after the fact
+            if self.is_valid():
+                numba_area = numList(self.area)
+                area = get_surface(numba_area)
+            else:
+                area = 0
+            # The measured surface divides in two places -- in get_ellipse_radii, which computes
+            # sqrt(2 * factor / surface), and again for shape_match below -- so a ROI whose runs
+            # sum to zero raised ZeroDivisionError out of the middle of the analysis. Such a ROI
+            # has no shape to describe, so every parameter is reported as unknown, exactly as for
+            # a non-main ROI above. The check is here rather than at the division because the
+            # first of the two is inside get_ellipse_radii, one frame down.
+            if not area:
+                self.ell_params.update({"center_x": None, "center_y": None, "major_axis": None,
+                                        "minor_axis": None, "angle": None, "orientation_x": None,
+                                        "orientation_y": None, "area": None, "shape_match": None,
+                                        "eccentricity": None, "roundness": None})
+                return self.ell_params
             r_maj, r_min = get_ellipse_radii(numba_area)
             or_vec = get_orientation_vector(numba_area)
             angle = get_orientation_angle(numba_area)
             center = get_center(numba_area)
-            area = get_surface(numba_area)
             self.ell_params["center_x"] = center[1]
             self.ell_params["center_y"] = center[0]
             self.ell_params["major_axis"] = r_maj
@@ -259,10 +280,11 @@ class ROI:
         :return: The calculated dimensions as dict
         """
         if not self.dims:
-            if self.area:
+            if self.is_valid():
                 numba_area = numList()
                 # Add elements to area
-                [numba_area.append(x) for x in self.area]
+                for x in self.area:
+                    numba_area.append(x)
                 # TODO
                 y, x, height, width = get_bounding_box(numba_area)
                 center = get_center(numba_area)
@@ -277,7 +299,9 @@ class ROI:
                 self.dims["center_y"] = center[0]
                 self.dims["area"] = area
             else:
-                raise Exception(f"ROI {self.id} associated to {self.associated} does not contain any points!")
+                # ValueError, not a bare Exception -- a caller cannot catch a bare Exception
+                # selectively, and is_valid() above is the check this condition was duplicating
+                raise ValueError(f"ROI {self.id} associated to {self.associated} does not contain any points!")
         return self.dims
 
     def extract_area_intensity(self,
