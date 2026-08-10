@@ -276,7 +276,7 @@ class NucDetect(QMainWindow):
         # Create the images folder
         if not os.path.isdir(gpaths.images_path):
             os.makedirs(gpaths.images_path)
-            shutil.copy2(os.path.join(_PROJECT_ROOT, "demo.tif"), os.path.join(gpaths.images_path, "demo.tif"))
+            shutil.copy2(gpaths.demo_image, os.path.join(gpaths.images_path, "demo.tif"))
         # Create the log folder
         if not os.path.isdir(gpaths.log_dir_path):
             os.makedirs(gpaths.log_dir_path)

@@ -28,6 +28,10 @@ log_path = os.path.join(nuc_detect_dir, "logs", "nucdetect.log")
 settings_path = os.path.join(gui, "settings")
 #settings_path = os.path.join(nuc_detect_dir, "settings")
 about_txt_path = os.path.join(gui, "definitions", "about.txt")
+# Inside the gui package on purpose. It used to sit at the project root and be resolved from
+# NucDetectAppQT's __file__, which works from a checkout but not from an installed copy: only files
+# inside a package are installed, so the seed image was missing wherever it was most needed.
+demo_image = os.path.join(gui, "definitions", "demo.tif")
 ui_main = os.path.join(script_dir, "nucdetect.ui")
 ui_result_image_dialog = os.path.join(script_dir, "result_image_dialog.ui")
 ui_exp_dial = os.path.join(script_dir, "experiment_dialog.ui")
