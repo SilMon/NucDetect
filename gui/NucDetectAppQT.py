@@ -264,22 +264,12 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        # Create the NucDetect folder
-        if not os.path.isdir(gpaths.nuc_detect_dir):
-            os.makedirs(gpaths.nuc_detect_dir)
-        # Create the thumbnail folder
-        if not os.path.isdir(gpaths.thumb_path):
-            os.makedirs(gpaths.thumb_path)
-        # Create the results folder
-        if not os.path.isdir(gpaths.result_path):
-            os.makedirs(gpaths.result_path)
-        # Create the images folder
-        if not os.path.isdir(gpaths.images_path):
-            os.makedirs(gpaths.images_path)
+        # The directories themselves are created by the module that declares them, so the core
+        # works without the GUI. What stays here is the part that is genuinely GUI start-up:
+        # seeding a brand-new images folder with the demo image
+        created = gpaths.ensure_directories()
+        if gpaths.images_path in created:
             shutil.copy2(gpaths.demo_image, os.path.join(gpaths.images_path, "demo.tif"))
-        # Create the log folder
-        if not os.path.isdir(gpaths.log_dir_path):
-            os.makedirs(gpaths.log_dir_path)
 
     def load_settings(self) -> Dict:
         """

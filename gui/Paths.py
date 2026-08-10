@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import List
 
 def get_main_folder_path() -> str:
     """
@@ -51,3 +52,29 @@ result_path = os.path.join(nuc_detect_dir, "results")
 images_path = os.path.join(nuc_detect_dir, "images")
 log_dir_path = os.path.join(nuc_detect_dir, "logs")
 thumb_path = os.path.join(nuc_detect_dir, "thumbnails")
+
+
+def ensure_directories() -> List[str]:
+    """
+    Function to create the working directories this module declares, if they do not exist yet
+
+    Deliberately a function and NOT run at import time. This module declares the directories, so
+    creating them belongs here rather than only in the GUI -- without it, anything using the core
+    without the GUI fails on a missing folder, and constructing a ``Connector`` against a fresh
+    HOME raises ``sqlite3.OperationalError: unable to open database file``. But doing it on import
+    would make merely importing this module create folders in the user's home, which is the same
+    class of hidden side effect as the ``os.chdir`` above and a more consequential one. Callers ask
+    for it explicitly.
+
+    :return: The directories that were created by this call, in creation order. Empty if they all
+             existed already. Callers that seed a newly created directory -- see
+             NucDetect.create_required_dirs, which copies the demo image into a new images folder --
+             must key off this rather than re-testing the directory afterwards, since by then it
+             exists either way
+    """
+    created = []
+    for directory in (nuc_detect_dir, thumb_path, result_path, images_path, log_dir_path):
+        if not os.path.isdir(directory):
+            os.makedirs(directory, exist_ok=True)
+            created.append(directory)
+    return created

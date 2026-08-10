@@ -49,6 +49,10 @@ class Connector:
         :param protected: If true, no concurrent access to the database is allowed
         :return: The connection and cursor to the database
         """
+        # sqlite3.connect creates the database file but NOT the directory holding it, so a fresh
+        # HOME raised "unable to open database file" here for anything using the core without the
+        # GUI. Asking Paths for its directories is what makes a headless Connector work
+        Paths.ensure_directories()
         connection = sqlite3.connect(Paths.database, check_same_thread=protected)
         return connection, connection.cursor()
 
