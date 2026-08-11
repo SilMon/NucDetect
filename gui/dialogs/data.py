@@ -27,7 +27,7 @@ from matplotlib.backends.backend_qt5 import NavigationToolbar2QT as NavigationTo
 from gui import Plots
 from gui import Util
 from core.DataProcessing import euclidean_distance, perform_statistical_analysis_on_groups, convert_p_values
-from gui.Plots import PoissonPlotWidget, PlotCanvas
+from gui.Plots import PlotCanvas
 from gui.Util import create_image_item_list_from
 from core.database.connections import Inserter, Requester
 from gui.definitions.icons import Icon, Color
@@ -1901,7 +1901,7 @@ class StatisticsDialog(QDialog):
     def plot_data(self) -> None:
         self.canvas.plot(self.data,
                          title=self.experiment,
-                         type=self.ui.cmbx_type.currentText(),
+                         plot_type=self.ui.cmbx_type.currentText(),
                          ordering=self.get_group_ordering(),
                          settings = self.settings,
                          specific_settings=self.general_settings)
@@ -2175,12 +2175,12 @@ class PlotSettingsDialog(QDialog):
     def update_plots(self):
         self.update_settings()
         self.canvas_violin.plot(data=self.data,
-                                type=PlotCanvas.plot_types[0],
+                                plot_type=PlotCanvas.plot_types[0],
                                 settings=self.settings,
                                 specific_settings=self.specific_settings)
         self.canvas_box.plot(data=self.data,
                              title="Box Plot",
-                             type=PlotCanvas.plot_types[1],
+                             plot_type=PlotCanvas.plot_types[1],
                              settings=self.settings,
                              specific_settings=self.specific_settings)
 
