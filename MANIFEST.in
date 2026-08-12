@@ -17,7 +17,6 @@ include gui/definitions/about.txt
 include gui/definitions/demo.tif
 include gui/settings/*.ui
 include gui/settings/settings.json
-include gui/settings/settings.ini
 
 # Include stylesheets and the images they reference
 include gui/definitions/css/*.css

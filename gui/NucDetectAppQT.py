@@ -1750,7 +1750,10 @@ class NucDetect(QMainWindow):
                 else:
                     item.setBackground(Color.ITEM_ANALYSED)
             else:
-                item.setBackground(Color.STANDARD)
+                # Clear the role rather than painting a "default" colour: there is no colour that
+                # means "no highlight" -- any brush is drawn over the row. setData(None, ...)
+                # removes the role, which is how the view falls back to the palette
+                item.setData(None, Qt.BackgroundRole)
 
     def on_close(self) -> None:
         """
