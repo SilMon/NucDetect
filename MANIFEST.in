@@ -1,18 +1,28 @@
+# Paths here are relative to this file and must NOT start with a slash -- a leading slash matches
+# nothing, silently. Every line below was verified by building an sdist and listing its contents;
+# `setup.py sdist` prints a "warning: no files found matching ..." line for any pattern that misses,
+# which is the only feedback this file gives.
+
 # Include important files
-include /README.md
-include /license.txt
-include /requirements.txt
-
-# Include demo image
-include /demo.tif
-
+include README.md
+include licence.txt
+include requirements.txt
 
 # Include UI files
-include gui/*.ui
-include gui/definitions/*.ui
-include gui/*.png
+include gui/definitions/ui/*.ui
+include gui/definitions/about.txt
+# The seed image copied into the user's image folder on first run. It lives inside the gui package
+# rather than at the project root so that it reaches a wheel -- include_package_data only installs
+# files inside a package.
+include gui/definitions/demo.tif
 include gui/settings/*.ui
 include gui/settings/settings.json
-include gui/settings/settings.ini
-include fcn/model/focus_detector.h5
-include fcn/model/nucleus_detector.h5
+
+# Include stylesheets and the images they reference
+include gui/definitions/css/*.css
+include gui/definitions/css/*.png
+include gui/definitions/images/*.png
+
+# Include the trained model. This is the file FCNMapper loads; without it an installed copy has no
+# machine-learning detection at all.
+include fcn/model/detector.keras

@@ -10,7 +10,6 @@ import time
 from copy import deepcopy
 from typing import Union, Dict, List, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 
 from core.logging_config import get_logger, log_messages
@@ -133,8 +132,11 @@ class Detector:
         main_index = main_channel - sum(1 for x in range(main_channel) if not active[x])
         main = channels[main_index]
         foc_channels = [channels[i] for i in range(len(channels)) if i != main_index]
+        # != rather than `is not`: identity holds only while both sides are the same interned
+        # string object. A channel name read from the database or built at runtime compares
+        # unequal under `is not` and the main channel would be kept as a foci channel
         analysis_settings["foci_channel_names"] = [x for x in analysis_settings["names"]
-                                                   if x is not analysis_settings["main_channel_name"]]
+                                                   if x != analysis_settings["main_channel_name"]]
         # Detect roi via image processing and machine learning
         # main_channel_name, not names[main_index]: that mixed the filtered index into the raw list
         # and named the nucleus channel after a different channel whenever anything was deactivated
@@ -170,8 +172,13 @@ class Detector:
                 # Add all foci
                 for x in foci:
                     rois.extend(x)
-                    # Check the foci for co-localisation TODO
-                    MapComparator.get_match_for_nuclei(main_roi, foci)
+                # Check the foci for co-localisation. Called ONCE, outside the loop: it takes the
+                # whole per-channel list and was previously invoked once per channel with that same
+                # list. Each call rebuilds its own match dictionary, so the repeats produced an
+                # identical result rather than a wrong one -- the cost was len(foci) times the work,
+                # which is why nothing looked broken. It reports through nucleus.match rather than a
+                # return value, which is why discarding the result here is correct
+                MapComparator.get_match_for_nuclei(main_roi, foci)
             elif detection_method == "image processing":
                 rois.extend(iproi)
             else:

@@ -106,10 +106,16 @@ class ImageLoader:
         """
         Method to get the name of the unit from int
 
-        :param unit: The index
+        :param unit: The TIFF ResolutionUnit tag value
         :return: The unit as string
         """
-        return ["No Unit", "Inch", "Centimeter"][unit-1]
+        # Indexed by the tag value itself. The previous `[unit - 1]` turned a ResolutionUnit of 0 --
+        # which the TIFF specification defines as "no absolute unit" -- into index -1 and silently
+        # returned "Centimeter", the most specific answer for the least specific input. An unknown
+        # value returns the no-unit case rather than raising, matching how a missing resolution tag
+        # is handled above
+        units = ("No Unit", "No Unit", "Inch", "Centimeter")
+        return units[unit] if 0 <= unit < len(units) else units[0]
 
     @staticmethod
     def load_image(path: str) -> np.ndarray:
@@ -122,7 +128,10 @@ class ImageLoader:
         if os.path.splitext(path)[1] in ImageLoader.FORMATS:
             return io.imread(path)
         else:
-            raise Warning("Unsupported image format ->{}!".format(os.path.splitext(path)[1]))
+            # ValueError, not Warning. Warning is not an error type -- it reads as advisory to
+            # anyone scanning the code, and a caller guarding against bad input with the usual
+            # (ValueError, OSError) would not have caught it.
+            raise ValueError("Unsupported image format ->{}!".format(os.path.splitext(path)[1]))
 
     @staticmethod
     def calculate_image_id(path: str) -> str:
@@ -146,6 +155,11 @@ class ImageLoader:
         :param img: The image as ndarray
         :return: A list of all channels
         """
+        # A grayscale image is 2-D and has no channel axis, so img.shape[2] raises IndexError.
+        # get_image_data already treats a 2-D array as one channel, so the two disagreed about
+        # what a grayscale image is; this is the same reading of it.
+        if img.ndim == 2:
+            return [img]
         channels = []
         for ind in range(img.shape[2]):
             channels.append(img[..., ind])

@@ -5,24 +5,46 @@ from typing import Dict, Union, List, Iterable, Tuple, Any, Callable
 import numpy as np
 from numpy import ndarray
 
+from core.logging_config import get_logger
 from core.roi.ROI import ROI
 
+LOGGER = get_logger(__name__)
 
+
+# Both reporting callables below are module level on purpose, and must stay that way. `default_log`
+# used to be a lambda in the class body of QualityTester, which made **every Detector instance
+# unpicklable** -- class-body lambdas cannot be pickled -- and therefore made batch analysis fail
+# before a single image was read: `_analyze_all` hands `self.detector.analyse_image` to a
+# ProcessPoolExecutor, which pickles the bound method and with it the whole Detector, including the
+# QualityTester built in its constructor. A module-level function pickles by reference and does not.
+# Anything bound to `self.log` is subject to the same constraint.
 def default_log(message: str) -> None:
     """
-    Fallback used when a QualityTester is constructed without settings
+    Fallback used when logging is enabled but no reporting callable was injected
 
-    Module level on purpose. This used to be a lambda in the class body of QualityTester, which
-    made **every Detector instance unpicklable** -- class-body lambdas cannot be pickled -- and
-    therefore made batch analysis fail before a single image was read: `_analyze_all` hands
-    `self.detector.analyse_image` to a ProcessPoolExecutor, which pickles the bound method and with
-    it the whole Detector, including the QualityTester built in its constructor. A module-level
-    function pickles by reference and does not.
+    The real flow always injects one -- Detector.analyse_image puts `add_log_message` into
+    `analysis_settings["log"]` -- so this is reached only by a caller that builds a QualityTester
+    itself. It writes through the shared logger rather than `print`, so the message reaches the log
+    file; note that in a worker process the configured NullHandler makes it a no-op by design, which
+    is why the injected buffer-and-replay callable is what the real flow uses.
 
     :param message: The message to report
     :return: None
     """
-    print(f"Std. Logging: {message}")
+    LOGGER.info(message)
+
+
+def no_log(message: str) -> None:
+    """
+    Bound to `self.log` when the `logging` setting is off, so the seven quality-check messages cost
+    a call and nothing else
+
+    A no-op function rather than a falsy attribute checked at each call site: it keeps the guard in
+    one place instead of seven, and keeps the call sites reading as plain reporting.
+
+    :param message: Ignored
+    :return: None
+    """
 
 
 class QualityTester:
@@ -50,13 +72,12 @@ class QualityTester:
         self.channels = channels
         self.channel_names = channel_names
         self.roi = roi
+        self.log: Callable = no_log
         if settings:
-            self.settings = settings
-            self.log: Callable = self.settings["log"]
+            self.set_settings(settings)
         else:
-            self.settings = self.STANDARD_SETTINGS
             warnings.warn("No settings found, standard settings used for focus mapping")
-            self.log: Callable = self.settings["log"]
+            self.set_settings(self.STANDARD_SETTINGS)
 
     def set_channels(self, channels: List[np.ndarray]) -> None:
         self.channels = channels
@@ -68,7 +89,29 @@ class QualityTester:
         self.roi = roi
 
     def set_settings(self, settings: Dict) -> None:
+        """
+        Method to set the settings, and to rebind the reporting callable that goes with them
+
+        **Rebinding `self.log` here is the point of this method, not a detail.** It used to assign
+        only `self.settings`, while `self.log` was bound once in the constructor. Detector builds a
+        QualityTester with no settings and calls this later with the real ones, so `self.log` stayed
+        on the fallback for the lifetime of that Detector and the injected reporter -- the one that
+        buffers per image for the parent to replay -- was never used. The seven quality-check
+        messages went to stdout and never reached the log file, in single-image and batch analysis
+        alike.
+
+        The `logging` setting is honoured here too, which is what `_analyze_all` has always assumed:
+        it forces `logging` off for the duration of a batch and restores it afterwards. Until now no
+        module read the flag, so that suppression -- and the user-facing *Analysis - General ->
+        Logging* checkbox behind it -- did nothing at all.
+
+        :param settings: The settings to use
+        :return: None
+        """
         self.settings = settings
+        # .get, not [], so a caller passing a partial dict falls back rather than raising; the two
+        # keys are guaranteed only in STANDARD_SETTINGS and in Detector's analysis_settings
+        self.log = settings.get("log", default_log) if settings.get("logging", False) else no_log
 
     def check_roi_quality(self) -> Tuple[List[ROI], List[ROI]]:
         """

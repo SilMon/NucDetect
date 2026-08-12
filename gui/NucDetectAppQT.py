@@ -264,22 +264,12 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        # Create the NucDetect folder
-        if not os.path.isdir(gpaths.nuc_detect_dir):
-            os.makedirs(gpaths.nuc_detect_dir)
-        # Create the thumbnail folder
-        if not os.path.isdir(gpaths.thumb_path):
-            os.makedirs(gpaths.thumb_path)
-        # Create the results folder
-        if not os.path.isdir(gpaths.result_path):
-            os.makedirs(gpaths.result_path)
-        # Create the images folder
-        if not os.path.isdir(gpaths.images_path):
-            os.makedirs(gpaths.images_path)
-            shutil.copy2(os.path.join(_PROJECT_ROOT, "demo.tif"), os.path.join(gpaths.images_path, "demo.tif"))
-        # Create the log folder
-        if not os.path.isdir(gpaths.log_dir_path):
-            os.makedirs(gpaths.log_dir_path)
+        # The directories themselves are created by the module that declares them, so the core
+        # works without the GUI. What stays here is the part that is genuinely GUI start-up:
+        # seeding a brand-new images folder with the demo image
+        created = gpaths.ensure_directories()
+        if gpaths.images_path in created:
+            shutil.copy2(gpaths.demo_image, os.path.join(gpaths.images_path, "demo.tif"))
 
     def load_settings(self) -> Dict:
         """
@@ -1760,7 +1750,10 @@ class NucDetect(QMainWindow):
                 else:
                     item.setBackground(Color.ITEM_ANALYSED)
             else:
-                item.setBackground(Color.STANDARD)
+                # Clear the role rather than painting a "default" colour: there is no colour that
+                # means "no highlight" -- any brush is drawn over the row. setData(None, ...)
+                # removes the role, which is how the view falls back to the palette
+                item.setData(None, Qt.BackgroundRole)
 
     def on_close(self) -> None:
         """

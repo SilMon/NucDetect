@@ -70,11 +70,9 @@ class ROI:
         self.colocalized = False
         self.id = None
 
-    def __add__(self, other):
-        if isinstance(other, ROI):
-            self.merge(other)
-        else:
-            raise AttributeError("Addition only supported for ROI class!")
+    # __add__ was removed here. It delegated to what is now intersect_with, so `a + b` read as a
+    # union while computing an intersection, mutated its left operand in place and evaluated to
+    # None. It had no callers. Use intersect_with, whose name states what actually happens.
 
     def __eq__(self, other: Union[int, ROI]):
         if isinstance(other, ROI):
@@ -119,18 +117,22 @@ class ROI:
             self.id = int(f"0x{md5.hexdigest()}", 0)
         return self.id
 
-    def merge(self, roi: ROI) -> ROI:
+    def intersect_with(self, roi: ROI) -> ROI:
         """
-        Method to merge this roi with another ROI
+        Method to reduce this roi to the area it shares with another ROI
 
-        :param roi: The roi to merge with this
+        This is deliberately NOT a union -- see intersect_area for the reasoning. The two ROI are
+        the same focus as seen by the two detection methods, and what survives is the area both
+        methods agree on.
+
+        :param roi: The roi to intersect this one with
         :return: Reference to self
         """
         if isinstance(roi, ROI):
             if roi.ident == self.ident:
                 if not self.associated:
                     self.associated = roi.associated
-                self.add_to_area(roi.area)
+                self.intersect_area(roi.area)
             else:
                 warnings.warn(f"The ROI {hash(self)} and  "
                               f"{hash(roi)} have different channel IDs!({self.ident}, {roi.ident})")
@@ -151,7 +153,7 @@ class ROI:
     # calculate_overlap was removed here. It approximated both ROI as circles of diameter
     # max(width, height) and compared those, and it had no callers. Overlap between two ROI is
     # available exactly, from their run-length areas, via AreaAnalysis.get_rle_area_intersection --
-    # which is what add_to_area already uses.
+    # which is what intersect_area already uses.
 
     def reset_stored_values(self) -> None:
         """
@@ -175,21 +177,34 @@ class ROI:
         """
         if not rle:
             return
-        self.area.clear()
-        self.area = rle
+        # Copy rather than store the caller's list by reference, and do not clear() first: the
+        # clear() mutated the list this ROI held *previously*, which any other holder of it would
+        # have seen emptied, and it was pointless anyway given the rebind on the next line.
+        # Same aliasing hazard already fixed in ImageListModel.set_paths.
+        self.area = list(rle)
         self.reset_stored_values()
 
-    def add_to_area(self, rle) -> bool:
+    def intersect_area(self, rle) -> bool:
         """
-        Method to extend the area of this ROI with the given area
+        Method to reduce the area of this ROI to the part it shares with the given area
 
-        :param rle: RL encoded area to add to this ROI
-        :return: True, the areas were merged
+        This SHRINKS the ROI -- it is an intersection, not a union, and that is intended. For
+        detection_method "combined" the same focus is detected twice, once per method, and what is
+        kept is the area both methods agree on. A union was implemented earlier and deliberately
+        replaced: it produced non-circular foci, which does not reflect the biology. Foci are
+        circular, and a non-circular blob usually means several overlapping foci, which this
+        program is not meant to report as one. Do NOT "fix" this back to a union.
+
+        :param rle: RL encoded area to intersect this ROI with
+        :return: True, if the two areas overlap and this ROI was reduced to the shared part.
+                 False leaves the ROI untouched, including its detection_method.
         """
         # Get the intersecting area
         intersect = AreaAnalysis.get_rle_area_intersection(self.area, rle)
         if intersect:
             self.area = intersect
+            # Kept as "Merged" rather than renamed with the methods: the value is persisted in the
+            # roi table, so changing it would invalidate stored results.
             self.detection_method = "Merged"
             self.reset_stored_values()
             return True
@@ -221,12 +236,30 @@ class ROI:
                     "eccentricity": None, "roundness": None}
         # Check if the parameters are already calculated
         if not self.ell_params:
-            numba_area = numList(self.area)
+            # An empty area cannot be typed as a numba list at all -- get_surface then raises
+            # TypeError("invalid operation on untyped list") -- so it is kept away from numba
+            # rather than guarded after the fact
+            if self.is_valid():
+                numba_area = numList(self.area)
+                area = get_surface(numba_area)
+            else:
+                area = 0
+            # The measured surface divides in two places -- in get_ellipse_radii, which computes
+            # sqrt(2 * factor / surface), and again for shape_match below -- so a ROI whose runs
+            # sum to zero raised ZeroDivisionError out of the middle of the analysis. Such a ROI
+            # has no shape to describe, so every parameter is reported as unknown, exactly as for
+            # a non-main ROI above. The check is here rather than at the division because the
+            # first of the two is inside get_ellipse_radii, one frame down.
+            if not area:
+                self.ell_params.update({"center_x": None, "center_y": None, "major_axis": None,
+                                        "minor_axis": None, "angle": None, "orientation_x": None,
+                                        "orientation_y": None, "area": None, "shape_match": None,
+                                        "eccentricity": None, "roundness": None})
+                return self.ell_params
             r_maj, r_min = get_ellipse_radii(numba_area)
             or_vec = get_orientation_vector(numba_area)
             angle = get_orientation_angle(numba_area)
             center = get_center(numba_area)
-            area = get_surface(numba_area)
             self.ell_params["center_x"] = center[1]
             self.ell_params["center_y"] = center[0]
             self.ell_params["major_axis"] = r_maj
@@ -247,10 +280,11 @@ class ROI:
         :return: The calculated dimensions as dict
         """
         if not self.dims:
-            if self.area:
+            if self.is_valid():
                 numba_area = numList()
                 # Add elements to area
-                [numba_area.append(x) for x in self.area]
+                for x in self.area:
+                    numba_area.append(x)
                 # TODO
                 y, x, height, width = get_bounding_box(numba_area)
                 center = get_center(numba_area)
@@ -265,7 +299,9 @@ class ROI:
                 self.dims["center_y"] = center[0]
                 self.dims["area"] = area
             else:
-                raise Exception(f"ROI {self.id} associated to {self.associated} does not contain any points!")
+                # ValueError, not a bare Exception -- a caller cannot catch a bare Exception
+                # selectively, and is_valid() above is the check this condition was duplicating
+                raise ValueError(f"ROI {self.id} associated to {self.associated} does not contain any points!")
         return self.dims
 
     def extract_area_intensity(self,
@@ -281,7 +317,12 @@ class ROI:
             # Iterate over saved points
             for x in range(row[2]):
                 vals.append(
-                    channel[row[0]][row[1] + x - 1] # Starting point is part of the run length
+                    # Runs are (row, first_col, length) with first_col INCLUSIVE, so the run covers
+                    # first_col .. first_col + length - 1. Do not reintroduce a "- 1" here: it shifts
+                    # every run one pixel left, and for a run starting at column 0 it indexes -1,
+                    # which numpy wraps to the last column of the same row -- a value from the
+                    # opposite side of the image silently entering the statistic.
+                    channel[row[0]][row[1] + x]
                 )
         return vals
 

@@ -11,6 +11,11 @@ from core.roi.ROI import ROI
 
 LOGGER = get_logger(__name__)
 
+# Shown in the result table in place of a measurement when a nucleus has no statistics row. Every
+# cell of that table is a preformatted string and the sort key falls back to text comparison for
+# anything that is not a number, so this sorts as one block rather than breaking the column
+NO_STATISTICS = "Not calculated"
+
 
 class Specifiers(Enum):
     ALL = "*"
@@ -44,6 +49,10 @@ class Connector:
         :param protected: If true, no concurrent access to the database is allowed
         :return: The connection and cursor to the database
         """
+        # sqlite3.connect creates the database file but NOT the directory holding it, so a fresh
+        # HOME raised "unable to open database file" here for anything using the core without the
+        # GUI. Asking Paths for its directories is what makes a headless Connector work
+        Paths.ensure_directories()
         connection = sqlite3.connect(Paths.database, check_same_thread=protected)
         return connection, connection.cursor()
 
@@ -57,9 +66,16 @@ class Connector:
         commands = {}
         for root, dirs, files in os.walk(Paths.sql_dir):
             for file in files:
-                # Read file and append to command list
-                with open(os.path.join(root, file), "r") as f:
-                    commands[file[:-4]] = f.read()
+                # splitext, not file[:-4] -- that assumed a 3-character extension and silently
+                # mis-keyed anything else, so a stray .bak or an editor swap file next to the
+                # scripts was loaded as a command under a truncated name. Only .sql is a command.
+                name, extension = os.path.splitext(file)
+                if extension.lower() != ".sql":
+                    continue
+                # Explicit encoding: without it these fall back to the locale codepage, so the
+                # same script parses differently on a machine that is not cp1252
+                with open(os.path.join(root, file), "r", encoding="utf-8") as f:
+                    commands[name] = f.read()
         return commands
 
     def get_table_info_from_database(self) -> Dict[str, Dict]:
@@ -194,6 +210,10 @@ class Connector:
         :param many: If true, values will be seen as list of entries to insert
         :return: None
         """
+        # An empty batch is not an error -- an image in which nothing was detected produces one --
+        # and there is nothing to insert, so return before len(values[0]) below indexes into it
+        if not values:
+            return
         # Check parameters for illegal characters
         self.check_parameters(table, columns, values)
         # Check if the requested table exists
@@ -347,7 +367,13 @@ class Connector:
         :param quote: If true, strings will be quoted
         :return: The converted value
         """
-        if isinstance(value, (float, int)):
+        # bool BEFORE int, because bool is a subclass of int: tested the other way round the int
+        # branch wins and True converts to "True" rather than "1". SQLite only accepts the bare
+        # TRUE/FALSE literals from 3.23 onwards and only while the value is interpolated unquoted,
+        # so the old order worked by two coincidences at once
+        if isinstance(value, bool):
+            return f"{int(value)}"
+        elif isinstance(value, (float, int)):
             return f"{value}"
         elif isinstance(value, str):
             if quote:
@@ -358,8 +384,6 @@ class Connector:
             if value is Specifiers.IS or value is Specifiers.NULL:
                 return f" {value.value} "
             return f"{value.value}"
-        elif isinstance(value, bool):
-            return f"{int(value)}"
 
 
 class DatabaseInteractor:
@@ -523,40 +547,11 @@ class Requester(DatabaseInteractor):
                                                        "encountered_names",
                                                        ("md5", Specifiers.EQUALS, image)))
 
-    def get_image_x_scale(self, image: str) -> float:
-        """
-        Method to get the x-axis scale of the given image
-
-        :param image: The md5 hash of the image
-        :return: The x-scale of the image as float
-        """
-        x_res = self.connector.get_view_from_table("x_res",
-                                                  "images",
-                                                  ("md5", Specifiers.EQUALS, image))[0]
-        return float(x_res[0][0]) if x_res else None
-
-    def get_image_y_scale(self, image: str) -> float:
-        """
-        Method to get the y-axis scale of the given image
-
-        :param image: The md5 hash of the image
-        :return: The y-scale of the image as float
-        """
-        x_res = self.connector.get_view_from_table("x_res",
-                                                   "images",
-                                                   ("md5", Specifiers.EQUALS, image))[0]
-        return float(x_res[0][0]) if x_res else None
-
-
-    def get_image_scale(self, image: str) -> Tuple[float, float]:
-        """
-        Method to get the y-axis and x-axis scale of the given image
-
-        :param image: The md5 hash of the image
-        :return: The y-axis and x-axis scale of the image as tuple
-        """
-        return self.get_image_y_scale(image), self.get_image_x_scale(image)
-
+    # get_image_x_scale, get_image_y_scale and get_image_scale were removed here. All three were
+    # unreachable and none of them could have worked: the y variant queried the x_res column, and
+    # both getters indexed an already-unpacked row tuple a second time, raising TypeError on the
+    # first call. Image scales are read through gui.Util.get_image_scale, which is a separate
+    # module-level function and the only live path.
 
     def get_groups_for_experiment(self, experiment: str) -> List[str]:
         """
@@ -722,10 +717,19 @@ class Requester(DatabaseInteractor):
             stats = self.get_statistics_for_roi(nuc)
             # Calculate overall match for this nucleus
             match = general[10] * 100 if general[10] else 100
-            # Create row for this nucleus
-            row = [name, str(image), str(nuc), str(stats[11]), str(stats[10]), f"{stats[15]:.2f}",
-                   f"{float(stats[18]) * 100:.2f}", f"{float(stats[14]):.2f}",
-                   f"{float(stats[12]):.2f}", f"{float(stats[13]):.2f}", f"{match:.2f}"]
+            # Create row for this nucleus. get_statistics_for_roi returns an empty tuple for a
+            # nucleus with no statistics row, so every stats[] below would raise IndexError and take
+            # the whole result table with it. The row is kept and the affected cells say so instead:
+            # the nucleus exists and its foci counts are still countable. This needs a partially
+            # committed analysis to occur at all -- statistics are written as part of every
+            # analysis -- so no recovery is attempted here
+            if stats:
+                measurements = [str(stats[11]), str(stats[10]), f"{stats[15]:.2f}",
+                                f"{float(stats[18]) * 100:.2f}", f"{float(stats[14]):.2f}",
+                                f"{float(stats[12]):.2f}", f"{float(stats[13]):.2f}"]
+            else:
+                measurements = [NO_STATISTICS] * 7
+            row = [name, str(image), str(nuc)] + measurements + [f"{match:.2f}"]
             # Count the foci
             for channel in sorted(self.get_channel_names(image, False)):
                 rows.append(row + [channel, str(self.count_foci_for_nucleus_and_channel(nuc, channel))])
@@ -942,6 +946,9 @@ class Inserter(DatabaseInteractor):
         :param roi_data: The general ROI data to save
         :return: None
         """
+        # Nothing detected in this image -- the isinstance check below indexes element 0
+        if not roi_data:
+            return
         self.connector.insert_or_replace_into("roi", ("hash", "image", "auto", "channel",
                                                       "center_x", "center_y", "width", "height",
                                                       "associated", "detection_method", "match", "co_localized"),
@@ -954,6 +961,9 @@ class Inserter(DatabaseInteractor):
         :param line_data: The line data to save
         :return: None
         """
+        # Nothing detected in this image -- the check below indexes two levels in
+        if not line_data or not line_data[0]:
+            return
         # Check if many
         many = isinstance(line_data[0][0], tuple)
         if many:
@@ -971,6 +981,9 @@ class Inserter(DatabaseInteractor):
         :param stat_data: The data to save
         :return: None
         """
+        # Nothing detected in this image -- the isinstance check below indexes element 0
+        if not stat_data:
+            return
         self.connector.insert_or_replace_into("statistics", ("hash", "image", "area", "intensity_average",
                                                              "intensity_median", "intensity_maximum",
                                                              "intensity_minimum", "intensity_std", "eccentricity",
@@ -1137,6 +1150,8 @@ class Inserter(DatabaseInteractor):
         vals = []
         for path in paths:
             md5 = ImageLoader.calculate_image_id(path)
-            filename = os.path.basename(path)
+            # Without the extension, matching register_image_filename -- the stored file_name feeds
+            # the result tables and the CSV export, so the two registration paths must agree
+            filename = os.path.splitext(os.path.basename(path))[0]
             vals.append((md5, filename))
         self.connector.insert_or_replace_into("encountered_names", ("md5", "file_name"), vals, True)
