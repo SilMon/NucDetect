@@ -1,19 +1,16 @@
 from typing import List, Any, Tuple
 
-import pyqtgraph as pg
-import os
 from PyQt5 import QtCore, uic
 from PyQt5.QtCore import QItemSelectionModel
 from PyQt5.QtGui import QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import QDialog, QCheckBox, QProgressBar
 
 from gui import Paths
+from gui import Util
 from gui.Util import create_image_item_list_from
 from core.database.connections import Requester
 from gui.definitions.icons import Icon
 from gui.loader import Loader
-
-pg.setConfigOptions(imageAxisOrder='row-major')
 
 
 class ExperimentSelectionDialog(QDialog):
@@ -47,7 +44,10 @@ class ExperimentSelectionDialog(QDialog):
         # Add experiments to combo box
         for experiment in exps:
             self.ui.cbx_exp.addItem(experiment)
-        self.on_experiment_selection_change(exps[0])
+        # A fresh database has no experiments, and exps[0] made opening this dialog an IndexError
+        # before the window was ever shown -- reachable from the statistics button on a new install
+        if exps:
+            self.on_experiment_selection_change(exps[0])
         self.ui.cbx_exp.currentTextChanged.connect(self.on_experiment_selection_change)
 
     def on_experiment_selection_change(self, current_text) -> None:
@@ -142,7 +142,7 @@ class ImageSelectionDialog(QDialog):
         self.prg_bar.setMaximum(100)
         self.ui.lv_images.setEnabled(False)
         self.ui.buttonBox.setEnabled(False)
-        self.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css")).read())
+        self.setStyleSheet(Util.load_stylesheet("main.css"))
         self.setWindowIcon(Icon.get_icon("LOGO"))
         self.setWindowTitle("Image Selection Dialog")
         self.setWindowFlags(self.windowFlags() |

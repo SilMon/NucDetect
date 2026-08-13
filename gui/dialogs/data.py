@@ -40,8 +40,6 @@ from core.roi.AreaAnalysis import imprint_area_into_array
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 
-pg.setConfigOptions(imageAxisOrder='row-major')
-
 
 class DataExportDialog(QDialog):
     __slots__ = [
@@ -95,7 +93,7 @@ class DataExportDialog(QDialog):
         )
         self.setWindowIcon(Icon.get_icon("LOGO"))
         self.setWindowTitle("Data Saving Dialog")
-        self.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css"), "r").read())
+        self.setStyleSheet(Util.load_stylesheet("main.css"))
         # Connect buttons to functions
         ui.btn_export.clicked.connect(self.accept)
         ui.btn_cancel.clicked.connect(self.close)
@@ -363,7 +361,7 @@ class Editor(QDialog):
         """
         self.ui = uic.loadUi(Paths.ui_editor_dial, self)
         # Load css file
-        self.ui.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css")).read())
+        self.ui.setStyleSheet(Util.load_stylesheet("main.css"))
         self.setWindowTitle(f"Modification Dialog for {self.img_name}")
         self.setWindowIcon(Icon.get_icon("LOGO"))
         self.setWindowFlags(self.windowFlags() |
@@ -1295,7 +1293,7 @@ class ExperimentDialog(QDialog):
         dial = QInputDialog()
         dial.setWindowTitle("Add new Experiment...")
         dial.setWindowIcon(Icon.get_icon("LOGO"))
-        dial.setStyleSheet(open(os.path.join(Paths.css_dir, "inputbox.css"), "r").read())
+        dial.setStyleSheet(Util.load_stylesheet("inputbox.css"))
         name, ok = QInputDialog.getText(dial, "Experiment Dialog", "Enter experiment name: ")
         if ok:
             add_item = QStandardItem()
@@ -1705,7 +1703,7 @@ class StatisticsDialog(QDialog):
         # Set window and style
         self.setWindowIcon(Icon.get_icon("LOGO"))
         self.setWindowTitle(f"Statistics for {self.experiment}")
-        self.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css"), "r").read())
+        self.setStyleSheet(Util.load_stylesheet("main.css"))
         self._initialize_plot_widgets()
         self.ui.tv_group_data.setModel(DataFrameModel(self.data))
         self.ui.tv_group_data.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -1787,7 +1785,7 @@ class StatisticsDialog(QDialog):
         msg = QMessageBox()
         msg.setWindowIcon(Icon.get_icon("LOGO"))
         msg.setIcon(QMessageBox.Information)
-        msg.setStyleSheet(open(os.path.join(Paths.css_dir, "messagebox.css"), "r").read())
+        msg.setStyleSheet(Util.load_stylesheet("messagebox.css"))
         msg.setWindowTitle("Data exported!")
         msg.setText("Data successfully exported!")
         msg.setInformativeText(f"CSV files can be found at {Paths.result_path}")
@@ -2126,7 +2124,7 @@ class PlotSettingsDialog(QDialog):
         # Set window and style
         self.setWindowIcon(Icon.get_icon("LOGO"))
         self.setWindowTitle("Diagram Settings")
-        self.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css"), "r").read())
+        self.setStyleSheet(Util.load_stylesheet("main.css"))
         self.setWindowFlags(self.windowFlags() |
                             QtCore.Qt.WindowSystemMenuHint |
                             QtCore.Qt.WindowMinMaxButtonsHint)
@@ -2239,7 +2237,7 @@ class GroupDialog(QDialog):
         self.ui.lv_groups.selectionModel().selectionChanged.connect(self.on_group_selection_change)
         self.ui.btn_add_images.clicked.connect(self.add_images_to_group)
         self.ui.btn_remove_image.clicked.connect(self.remove_selected_image)
-        self.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css")).read())
+        self.setStyleSheet(Util.load_stylesheet("main.css"))
         self.setWindowTitle("Group Dialog")
         self.setWindowIcon(Icon.get_icon("LOGO"))
         self.setWindowFlags(self.windowFlags() |
@@ -2421,7 +2419,7 @@ class GroupDialog(QDialog):
         :return: None
         """
         dial = QInputDialog()
-        dial.setStyleSheet(open(os.path.join(Paths.css_dir, "inputbox.css"), "r").read())
+        dial.setStyleSheet(Util.load_stylesheet("inputbox.css"))
         dial.setWindowIcon(Icon.get_icon("LOGO"))
         name, ok = QInputDialog.getText(dial, "Group Dialog", "Enter the new group: ")
         if ok:

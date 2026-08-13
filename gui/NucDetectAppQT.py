@@ -1648,16 +1648,11 @@ class NucDetect(QMainWindow):
         """
         sett = SettingsDialog(self.inserter)
         sett.initialize_from_file(os.path.join(gpaths.settings_path, "settings.json"))
-        code = sett.exec()
-        if code == QDialog.Accepted:
-            if sett.changed:
-                for key, value in sett.changed.items():
-                    self.settings[key] = value[0]
-                    self.inserter.update_setting(key, value[0])
-            sett.save_menu_settings()
-            self.inserter.commit()
+        # SettingsDialog.accept() performs the database update, the commit and the JSON save
+        # itself; this block used to repeat all three. It was unreachable until accept() started
+        # returning Accepted, so the repetition was never visible
+        sett.exec()
         self.check_all_item_statuses()
-        # TODO check
         self.settings = self.load_settings()
 
     def show_modification_window(self) -> None:
