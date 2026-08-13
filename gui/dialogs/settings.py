@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import QDialog, QWidget, QScrollArea, QSizePolicy, QVBoxLay
 import gui.Paths as gpaths
 from core.logging_config import get_logger, reset_log_file
 from gui.definitions.icons import Icon
-from gui.settings.Widgets import SettingsShowWidget, SettingsSlider, SettingsDial, SettingsSpinner, SettingsDecimalSpinner, \
+from gui.settings.Widgets import SettingsSlider, SettingsDial, SettingsSpinner, SettingsDecimalSpinner, \
     SettingsText, SettingsComboBox, SettingsCheckBox
 
 pg.setConfigOptions(imageAxisOrder='row-major')
@@ -280,12 +280,7 @@ class SettingsDialog(QDialog):
                     t = mp["type"].lower()
                     p = None
                     self.data[section][mp["id"]] = mp["value"]
-                    if t == "show":
-                        # TODO
-                        p = SettingsShowWidget(
-                            mp["widget"]
-                        )
-                    elif t == "slider":
+                    if t == "slider":
                         p = SettingsSlider(
                             _id=mp["id"],
                             title=mp["title"],
