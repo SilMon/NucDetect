@@ -114,8 +114,13 @@ class ExperimentSelectionDialog(QDialog):
 
         :return: None
         """
+        # deleteLater, not just removeWidget: QLayout.removeWidget unparents the widget from the
+        # LAYOUT only. The QCheckBox keeps its parent and stays visible at its last position, so
+        # switching experiment stacked the old channel boxes on top of the new ones
         for item in self.check_boxes:
             self.ui.vb_channels.removeWidget(item)
+            item.setParent(None)
+            item.deleteLater()
         self.check_boxes.clear()
 
 

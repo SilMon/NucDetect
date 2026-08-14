@@ -159,7 +159,7 @@ class FocusMapper(AreaMapper):
                                        min_size: float,
                                        max_size: float,
                                        order: int,
-                                       micron_per_pixel: float) -> np.ndarray:
+                                       dots_per_micron: float) -> np.ndarray:
         """
         Method to perform background subtraction
 
@@ -169,7 +169,7 @@ class FocusMapper(AreaMapper):
         :param min_size: The min focus size to keep. Used for Butterworth filtering
         :param max_size: The max focus size to keep. Used for Butterworth filtering
         :param order: The order to use. Used for Butterworth filtering
-        :param micron_per_pixel: Conversion rate between microns and pixels
+        :param dots_per_micron: Pixels per micron -- multiply a um size by it to get pixels
         :return: The channel with subtracted background
         """
         # Check the respective method
@@ -180,8 +180,14 @@ class FocusMapper(AreaMapper):
                 processed = unsharp_mask(channel, filter_size)
             case "Butterworth-Filtering":
                 # Convert the size to pixels
-                d_min_px = min_size / micron_per_pixel
-                d_max_px = max_size / micron_per_pixel
+                # MULTIPLY. dots_per_micron is pixels per micron, so a size in um becomes pixels
+                # by multiplying. The parameter used to be named micron_per_pixel -- the arithmetic
+                # was right for the name and wrong for the argument, which is almost certainly how
+                # the reciprocal got in, so the name is corrected in the same change. The unit
+                # convention is not inferred: the figure scale bar at gui/dialogs/GraphicsItems.py
+                # multiplies the same quantity, and it is the one that is right
+                d_min_px = min_size * dots_per_micron
+                d_max_px = max_size * dots_per_micron
                 # Ratios to Nyquist (0…0.5)
                 r_hp = np.clip(2.0 / d_max_px, 1e-4, 0.49)  # high-pass cutoff
                 r_lp = np.clip(2.0 / d_min_px, r_hp + 1e-4, 0.5)  # low-pass cutoff

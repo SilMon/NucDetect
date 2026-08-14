@@ -20,6 +20,13 @@ from gui.loader import ROIDrawerTimer
 
 LOGGER = get_logger(__name__)
 
+# Channel index meaning "the composite view", i.e. no single channel is active. Named
+# rather than written as a literal because the producer and the consumer used to disagree:
+# show_channel passed image.shape[2] and ROIDrawer.change_channel tested against 3, so the
+# two only agreed for a 3-channel image. With four or five channels every ROI failed the
+# channel test and the composite view of a 5-channel image drew no foci at all
+COMPOSITE_CHANNEL = -1
+
 
 class EditorView(pg.GraphicsView):
     COLORS = [
@@ -172,7 +179,7 @@ class EditorView(pg.GraphicsView):
         if channel == "Composite":
             self.img_item.setImage(self.image if not self.adjust_whitebalance else self.image_adj)
             #self.hist.setLevelMode("rgba")
-            index = self.image.shape[2]
+            index = COMPOSITE_CHANNEL
         else:
             # Check to which index the name corresponds
             index = self.active_channels[channel]
@@ -282,17 +289,20 @@ class EditorView(pg.GraphicsView):
 
     def clear_and_update(self) -> None:
         """
-        Method to display new roi
+        Method to redraw the roi of this view from the handler
 
-        :param rois: The new roi to show
         :return: None
         """
-        # Get list of changed items
-        changed = [x.roi_id for x in self.items]
-        # Clear item lists
+        # Taken out of the SCENE, not just out of the bookkeeping list. items.clear() on its own
+        # left every ellipse on the plot, so draw_roi painted a second full set over the first
+        for item in self.items:
+            item.remove_from_view(self)
         self.items.clear()
         self.draw_roi()
-        self.mark_as_changed(changed)
+        # Only the items the user actually edited. This used to pass every item's roi_id -- the
+        # list was called "changed" but was built from self.items in full -- so a redraw marked the
+        # whole image as edited
+        self.mark_as_changed([x.roi_id for x in self.temp_items])
         self.show_channel("Composite")
 
     def draw_roi(self) -> None:
@@ -333,11 +343,22 @@ class EditorView(pg.GraphicsView):
             self.shift_down = True
         if event.key() == Qt.Key_Delete:
             if self.selected_item:
+                item = self.selected_item
                 # Remove item from scene
-                self.selected_item.remove_from_view(self)
+                item.remove_from_view(self)
                 # Add item to deletion list to remove it from the database
-                if self.selected_item.roi_id != -1:
-                    self.delete.append(self.selected_item.roi_id)
+                if item.roi_id != -1:
+                    self.delete.append(item.roi_id)
+                # Drop it from the bookkeeping too, and stop treating it as selected. Without this
+                # the removed item stayed in self.items and stayed self.selected_item, so a second
+                # Delete appended the same roi_id again and the editing spin boxes went on driving
+                # an item that is no longer in the scene
+                if item in self.items:
+                    self.items.remove(item)
+                if item in self.temp_items:
+                    self.temp_items.remove(item)
+                self.selected_item = None
+                self.parent.enable_editing_widgets(False)
         elif event.key() == Qt.Key_1:
             self.change_mode(-1)
         elif event.key() == Qt.Key_2:
@@ -740,7 +761,7 @@ class ROIDrawer:
     # ROIItem, not QGraphicsItem: the body reads channel_index/is_active/update_indicators, none
     # of which the Qt base class has. Quoted because ROIItem is declared further down this file
     def change_channel(items: Iterable["ROIItem"],
-                       active_channel: int = 3,
+                       active_channel: int = COMPOSITE_CHANNEL,
                        draw_additional: bool = False) -> None:
         """
         Method to change the drawing of foci and nuclei according to the active channel
@@ -751,7 +772,7 @@ class ROIDrawer:
         :return: None
         """
         for item in items:
-            if item.channel_index != active_channel and active_channel != 3:
+            if item.channel_index != active_channel and active_channel != COMPOSITE_CHANNEL:
                 if isinstance(item, NucleusItem) and draw_additional:
                     item.is_active(True)
                 else:

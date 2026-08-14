@@ -39,7 +39,8 @@ from PyQt5 import uic
 from PyQt5.QtCore import QSize, pyqtSignal, QItemSelectionModel, QSortFilterProxyModel, QModelIndex, \
     QAbstractListModel, QTimer, Qt
 from PyQt5.QtGui import QStandardItemModel, QStandardItem, QPixmap
-from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, QMessageBox
+from PyQt5.QtWidgets import QMainWindow, QFileDialog, QHeaderView, QDialog, QSplashScreen, \
+    QMessageBox, QAbstractItemView
 
 from core.Detector import Detector
 from core.logging_config import configure_logging, get_logger, init_worker_logging, log_messages
@@ -360,6 +361,12 @@ class NucDetect(QMainWindow):
         self.img_list_model = ImageListModel(self.ui.list_images, paths=self.loaded_files)
         self.ui.list_images.setModel(self.img_list_model)
         self.ui.list_images.selectionModel().selectionChanged.connect(self.on_image_selection_change)
+        # SingleSelection: the list was ExtendedSelection -- Qt's default for a QListView, set
+        # nowhere deliberately -- so a shift-click range let on_image_selection_change assign
+        # cur_img once per selected index, and the LAST row silently won. Every consumer of cur_img
+        # assumes one current image, so the ambiguity is removed rather than handled. Analysing a
+        # chosen subset is a feature and would need its own control
+        self.ui.list_images.setSelectionMode(QAbstractItemView.SingleSelection)
         self.ui.list_images.setWordWrap(True)
         self.ui.list_images.setIconSize(QSize(75, 75))
         self.ui.list_images.verticalScrollBar().valueChanged.connect(self.fetch_more_images_if_needed)
@@ -391,6 +398,11 @@ class NucDetect(QMainWindow):
         # Row banding is the second half of the same problem: without it a reordered table is hard
         # to read as reordered, because nothing marks where one row ends and the next begins
         self.ui.table_results.setAlternatingRowColors(True)
+        # Hidden, not renumbered. QStandardItemModel supplies the row numbers and the proxy maps them
+        # through, so they follow the SOURCE order: measured after one sort, [3, 4, 5, 6, 1, 2].
+        # They were also never a nucleus count, because the table holds one row per channel per
+        # nucleus. The merged row blocks carry the grouping now, so the numbers add nothing
+        self.ui.table_results.verticalHeader().setVisible(False)
         # Spans are VIEW state and Qt never moves them when the sorting reorders the rows, so they
         # have to be rebuilt on every sort. QTableView connects its own sort slot to this signal
         # first -- setSortingEnabled runs from the .ui, before this method -- and Qt calls slots in
@@ -1013,8 +1025,12 @@ class NucDetect(QMainWindow):
         self._prg_floor = 0.0
         reporter = ProgressReporter(self._report_analysis_progress)
         reporter(0.0, "Starting analysis")
-        data = self.detector.analyse_image(path, settings=analysis_settings, save_log=True,
-                                           progress=reporter)
+        # save_log follows the same "logging" setting the batch path honours, rather than being
+        # hardcoded True -- otherwise the menu point would silence a batch run and not a single one
+        data = self.detector.analyse_image(
+            path, settings=analysis_settings,
+            save_log=bool(analysis_settings["analysis_settings"].get("logging", True)),
+            progress=reporter)
         self.roi_cache = data["handler"]
         reporter.sub(*bounds[ELLIPSE])(0.0, "Calculating ellipse parameters")
         for roi in self.roi_cache:
@@ -1085,8 +1101,15 @@ class NucDetect(QMainWindow):
             # row_signal as the results come in, so no rows are passed here
             self.table_signal.emit(["Image Name", "Image Hash", "Number of Nuclei",
                                     "Number of Foci", "Foci per Nucleus"], [])
-            logstate = settings["analysis_settings"]["logging"]
-            settings["analysis_settings"]["logging"] = False
+            # The "logging" setting drives the message replay below. It used to be saved here,
+            # overwritten with False and restored at the end -- a save/suppress/restore dance around
+            # a flag that no module in core/ or gui/ ever read, so batch analysis neither silenced
+            # nor emitted anything on account of it. Since the 2026-07-28 logging consolidation the
+            # mechanism that exists is the replay: workers buffer their messages and the parent
+            # writes them, which is what the menu point ("Activates console logging during
+            # analysis") actually promises. .get with a default, as for quality_check: the settings
+            # come from a user-editable JSON file and from callers that build the dict by hand
+            log_analysis = settings["analysis_settings"].get("logging", True)
             self.prg_signal.emit("Starting multi image analysis", 0, 100, "")
             paths = []
             for image in self.loaded_files:
@@ -1118,8 +1141,11 @@ class NucDetect(QMainWindow):
                 for r in res:
                     self.prg_signal.emit(f"Analysed images: {done + 1}/{maxi}",
                                          done + 1, maxi, "")
-                    # Replay the log of the worker that analysed this image
-                    log_messages(r.get("log", ()))
+                    # Replay the log of the worker that analysed this image, if the user asked for
+                    # analysis logging. The messages are discarded rather than buffered when off --
+                    # they have already been produced, and holding them would only defer the cost
+                    if log_analysis:
+                        log_messages(r.get("log", ()))
                     self.save_rois_to_database(r, all_=True)
                     # Get the image hash and file name
                     name = self.requester.get_image_filename(r["handler"].ident)
@@ -1145,7 +1171,6 @@ class NucDetect(QMainWindow):
                       f"ETA: {h:02d}h:{m:02d}m:{s:02d}s"
                 LOGGER.info(msg)
             self.enable_signal.emit(True)
-            settings["analysis_settings"]["logging"] = logstate
             self.prg_signal.emit("Analysis finished -- Program ready",
                                  100,
                                  100, "")

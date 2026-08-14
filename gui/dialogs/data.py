@@ -7,7 +7,7 @@ import traceback
 import matplotlib as mpl
 from matplotlib import font_manager
 from threading import Thread
-from typing import List, Tuple, Dict, Any, Union, Callable
+from typing import List, Tuple, Dict, Any, Optional, Union, Callable
 
 import numpy as np
 import pandas as pd
@@ -404,9 +404,15 @@ class Editor(QDialog):
         self.ui.btn_coords.toggled.connect(
             lambda: self.set_status(f"Coordinate Tracking: {self.ui.btn_coords.isChecked()}")
         )
-        # Fill combobox with available channels
+        # Filled from the channels the editor can actually SHOW, not from every ident in the
+        # handler. show_channel looks the chosen name up in EditorView.active_channels, which is
+        # built from the active_channels argument -- so a channel present in roi.idents but absent
+        # from it raised KeyError the moment the user picked it. The idents order is kept, so the
+        # combo still reads in channel order; only the unshowable entries are left out
+        showable = {name for _, name in self.active_channels}
         for ident in self.roi.idents:
-            self.ui.cbx_channel.addItem(ident)
+            if ident in showable:
+                self.ui.cbx_channel.addItem(ident)
         self.ui.cbx_channel.addItem("Composite")
         self.ui.cbx_channel.setCurrentText("Composite")
         self.ui.cbx_channel.currentIndexChanged.connect(
@@ -514,7 +520,10 @@ class Editor(QDialog):
             rois = auto_edit_dialog.extracted_roi
             # Remove all involved old roi
             self.roi.remove_rois(auto_edit_dialog.deletion_list)
-            self.editor.delete.append(auto_edit_dialog.deletion_list)
+            # extend, not append: deletion_list is a LIST of roi ids, and appending nested it, so
+            # the membership test in delete_items_in_list never matched its contents and
+            # Inserter.delete_roi_from_database received a list where sqlite expects a scalar
+            self.editor.delete.extend(auto_edit_dialog.deletion_list)
             self.roi.add_rois(rois)
             self.editor.clear_and_update()
 
@@ -1340,8 +1349,14 @@ class ExperimentDialog(QDialog):
         :return: None
         """
         # Get selected images
-        keys, paths = self.open_image_selection_dialog()
-        if keys and paths:
+        # The selection is the COMPLETE intended set: the dialog is pre-seeded with the images the
+        # experiment already has and get_selected_images returns everything selected, so assigning
+        # it is right and a union would make deselection impossible. What was wrong is the guard --
+        # `if keys and paths` discarded an empty selection, so removing the last image silently did
+        # nothing. An accepted dialog with nothing selected is now honoured; only a cancel is not
+        selection = self.open_image_selection_dialog()
+        if selection is not None:
+            keys, paths = selection
             # Get selected experiment
             selected_exp = self.exp_model.item(self.ui.lv_experiments.selectionModel().selectedIndexes()[0].row())
             data = selected_exp.data()
@@ -1429,11 +1444,12 @@ class ExperimentDialog(QDialog):
         # Clear image model
         self.img_model.clear()
 
-    def open_image_selection_dialog(self) -> Tuple[List[str], List[str]]:
+    def open_image_selection_dialog(self) -> Optional[Tuple[List[str], List[str]]]:
         """
         Method to open the image selection dialog
 
-        :return: None
+        :return: The selected (keys, paths), or None if the user cancelled. An accepted dialog with
+            nothing selected returns two EMPTY lists, which is a real answer and not the same thing
         """
         # Get hashes of images in img_model
         image_hashs = []
@@ -1446,8 +1462,9 @@ class ExperimentDialog(QDialog):
         code = sel_dialog.exec()
         if code == QDialog.Accepted:
             return sel_dialog.get_selected_images()
-        else:
-            return [], []
+        # None, not ([], []): the caller has to tell "cancelled" from "accepted with nothing
+        # selected", and both used to arrive as a pair of empty lists
+        return None
 
     def load_experiments(self) -> None:
         """
@@ -2312,8 +2329,11 @@ class GroupDialog(QDialog):
         :return: None
         """
         # Get selected images
-        keys, paths = self.open_image_selection_dialog()
-        if keys and paths:
+        # See ExperimentDialog.add_images_to_experiment: the returned selection is the complete
+        # intended set, and an accepted-but-empty one must clear the group rather than be ignored
+        selection = self.open_image_selection_dialog()
+        if selection is not None:
+            keys, paths = selection
             # Get selected group
             index = self.ui.lv_groups.selectionModel().selectedIndexes()[0]
             # Change group data
@@ -2350,11 +2370,12 @@ class GroupDialog(QDialog):
             self.setEnabled(True)
         self.refresh_image_buttons()
 
-    def open_image_selection_dialog(self) -> Tuple[List[str], List[str]]:
+    def open_image_selection_dialog(self) -> Optional[Tuple[List[str], List[str]]]:
         """
-        Method to open a dialog to add images to the selected group
+        Method to open the image selection dialog
 
-        :return: None
+        :return: The selected (keys, paths), or None if the user cancelled. An accepted dialog with
+            nothing selected returns two EMPTY lists, which is a real answer and not the same thing
         """
         # Get selected group
         index = self.ui.lv_groups.selectionModel().selectedIndexes()[0]
@@ -2364,8 +2385,8 @@ class GroupDialog(QDialog):
         code = sel_dialog.exec()
         if code == QDialog.Accepted:
             return sel_dialog.get_selected_images()
-        else:
-            return [], []
+        # None, not ([], []) -- see ExperimentDialog.open_image_selection_dialog
+        return None
 
     def remove_selected_image(self) -> None:
         """
