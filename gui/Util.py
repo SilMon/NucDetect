@@ -1,3 +1,10 @@
+# pyright: reportAttributeAccessIssue=false
+# ^ PyQt5's stubs nest enum members inside their enum class (Qt.ItemDataRole.DisplayRole)
+# while the C++ runtime also exposes them flat on Qt, which is what this file uses. The
+# code is correct PyQt5 and a rewrite to the scoped form was declined -- PyQt6 is not
+# planned (Romano, 2026-08-13). Suppressed at FILE level only because every hit of this
+# rule here is that stub artefact; measured, not assumed. Re-check with the rule enabled
+# before adding attribute access to a non-Qt object in this file.
 import datetime
 import os
 import sqlite3

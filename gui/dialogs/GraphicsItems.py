@@ -1,6 +1,6 @@
 import threading
 import time
-from typing import List, Iterable, Dict, Tuple
+from typing import List, Iterable, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 import pyqtgraph as pg
@@ -59,7 +59,10 @@ class EditorView(pg.GraphicsView):
         self.image_adj = None
         self.hcimg = None
         self.hcimg_adj = None
-        self.active_channel: int = None
+        # A channel NAME, not an index -- it is used as a key into self.active_channels (~:390),
+        # which maps name -> index. The previous ": int" annotation named the value on the other
+        # side of that lookup
+        self.active_channel: Optional[str] = None
         self.roi: ROIHandler = roi
         self.requester = Requester()
         self.inserter = Inserter()
@@ -74,13 +77,13 @@ class EditorView(pg.GraphicsView):
         self.plot_vb = self.plot_item.vb
         # Set proxy to detect mouse movement
         self.proxy = pg.SignalProxy(self.scene().sigMouseMoved, rateLimit=45, slot=self.mouse_moved)
-        self.mpos: QPointF = None
+        self.mpos: Optional[QPointF] = None
         # Activate mouse tracking for widget
         self.setMouseTracking(True)
         self.setCentralWidget(self.plot_item)
         self.draw_additional = True
         # List of existing items
-        self.loading_timer: ROIDrawerTimer = None
+        self.loading_timer: Optional[ROIDrawerTimer] = None
         self.items = []
         self.draw_roi()
         # List for newly created items
@@ -88,9 +91,9 @@ class EditorView(pg.GraphicsView):
         # List for items that should be removed
         self.delete: List[int] = []
         self.item_changes = {}
-        self.selected_item: ROIItem = None
+        self.selected_item: Optional[ROIItem] = None
         self.shift_down = False
-        self.saved_values: Dict = None
+        self.saved_values: Optional[Dict] = None
         """
         # Add histogram widget to this view
         self.hist = HistogramLUTItem(image=self.img_item)
@@ -519,9 +522,17 @@ class EditorView(pg.GraphicsView):
                 # Process width/height
                 height = round(item.height)
                 width = round(item.width)
-                height = height / 2 + 1 if height % 2 == 0 else item.height / 2
-                width = width / 2 + 1  if width % 2 == 0 else item.width / 2
-                rr, cc = ellipse(item.center[1], item.center[0], height, width,
+                # skimage's ellipse() spans an ODD number of pixels around an integer centre
+                # (2r-1 for integer r), so an even requested size cannot be drawn on one. That is
+                # what the previous `+ 1` was reaching for -- but inflating the radius OVERSHOOTS by
+                # a whole pixel: measured, a size of 4 drew 5 px, 46 drew 47, 90 drew 91, so a
+                # default 4 px focus was stored 25 % larger than it was drawn. Halving alone
+                # undershoots by one instead (4 -> 3). Offsetting the CENTRE by half a pixel is what
+                # actually makes the span even: centre + 0.5 with r = 2.0 draws exactly 4 px.
+                # The old form also mixed the rounded local with the unrounded item.height/width
+                cy = item.center[1] + (0.5 if height % 2 == 0 else 0.0)
+                cx = item.center[0] + (0.5 if width % 2 == 0 else 0.0)
+                rr, cc = ellipse(cy, cx, height / 2, width / 2,
                                  self.image.shape, np.deg2rad(-item.angle))
                 # Get encoded area for item
                 rle = self.encode_new_roi(rr, cc, maps[item.channel_index])
@@ -726,7 +737,9 @@ class ROIDrawer:
             item.setOpacity(opacity / 100)
     
     @staticmethod
-    def change_channel(items: Iterable[QGraphicsItem],
+    # ROIItem, not QGraphicsItem: the body reads channel_index/is_active/update_indicators, none
+    # of which the Qt base class has. Quoted because ROIItem is declared further down this file
+    def change_channel(items: Iterable["ROIItem"],
                        active_channel: int = 3,
                        draw_additional: bool = False) -> None:
         """
@@ -748,7 +761,9 @@ class ROIDrawer:
             item.update_indicators(draw_additional)
 
     @staticmethod
-    def draw_roi(view: pg.PlotItem, rois: Iterable[ROI], idents: Iterable[str]) -> List[QGraphicsEllipseItem]:
+    # idents is a Sequence, not an Iterable: the body calls idents.index(), which no plain
+    # iterable has -- a generator or a set would raise AttributeError at that line
+    def draw_roi(view: pg.PlotItem, rois: Iterable[ROI], idents: Sequence[str]) -> List[QGraphicsEllipseItem]:
         """
         Method to populate the given plot with the roi stored in the handler
 
@@ -819,7 +834,8 @@ class ROIDrawer:
         return nucleus
 
     @staticmethod
-    def draw_additional_items(items: List[QGraphicsItem], draw_additional: bool = True) -> None:
+    # ROIItem for the same reason as change_channel above
+    def draw_additional_items(items: List["ROIItem"], draw_additional: bool = True) -> None:
         """
         Method to activate the drawing of additional items
 
@@ -923,7 +939,7 @@ class ROIItem(QGraphicsEllipseItem):
         self.main_color = None
         self.hover_color = None
         self.sel_color = None
-        self.view: EditorView = None
+        self.view: Optional[EditorView] = None
         self.edit_rect = None
         self.setEnabled(False)
 
@@ -1043,7 +1059,7 @@ class NucleusItem(ROIItem):
         self.orientation = orientation
         self.indicators = []
         self.edit = False
-        self.edit_rect: EditingRectangle = None
+        self.edit_rect: Optional[EditingRectangle] = None
         self.iapen: pg.mkPen = None
         self.initialize()
 

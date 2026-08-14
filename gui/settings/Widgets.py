@@ -1,4 +1,5 @@
 import os
+from typing import Any
 
 import gui.Paths as gpaths
 from PyQt5 import uic
@@ -71,7 +72,9 @@ class SettingsWidget(QWidget):
         self._initialize_ui(ui_file)
 
     def _initialize_ui(self, ui_file):
-        self.ui = uic.loadUi(os.path.join(gpaths.settings_path, ui_file), self)
+        # Annotated Any deliberately -- see the comment on the same assignment in
+        # gui/NucDetectAppQT.py: uic has no stubs, so the inferred type is "Unknown | None"
+        self.ui: Any = uic.loadUi(os.path.join(gpaths.settings_path, ui_file), self)
         self.ui.title.setText(self._title)
         self.ui.description.setText(self._description)
 

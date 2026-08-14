@@ -339,7 +339,10 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        self.ui = uic.loadUi(gpaths.ui_main, self)
+        # Annotated Any deliberately: PyQt5 ships no stubs for uic, so a type checker reads
+        # loadUi's source and infers "Unknown | None" from its baseinstance parameter. Every
+        # self.ui.<widget> access is then reported as an error on a possibly-None object
+        self.ui: Any = uic.loadUi(gpaths.ui_main, self)
         with open(os.path.join(gpaths.css_dir, "main.css"), "r", encoding="utf-8") as f:
             self.ui.setStyleSheet(f.read())
         # General Window Initialization
@@ -1846,7 +1849,7 @@ class ImageListModel(QAbstractListModel):
     Class to lazy load needed image list items
     """
 
-    def __init__(self, parent=None, paths: List[str] = (), page_size: int = 30):
+    def __init__(self, parent=None, paths: List[str] = [], page_size: int = 30):
         """
         :param paths: The image paths that are the basis of the items
         """

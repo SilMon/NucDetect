@@ -20,6 +20,7 @@ from core.logging_config import get_logger
 
 LOGGER = get_logger(__name__)
 from core.detector_modules.AreaMapper import AreaMapper
+from core.detector_modules.ImageLoader import dtype_max
 
 
 class FCNMapper(AreaMapper):
@@ -178,7 +179,7 @@ class FCNMapper(AreaMapper):
         :param model: The model to use for the prediction
         :return: Predictions for all tiles
         """
-        orig_max = np.iinfo(tiles[0].dtype).max
+        orig_max = dtype_max(tiles[0].dtype)
         tiles = np.asarray(tiles).astype("float32")
         tiles /= orig_max
         # Derived from TILE_SHAPE, not written out again. This used to read
@@ -235,7 +236,7 @@ class FCNMapper(AreaMapper):
                 weights[y * step_height: y * step_height + tile_height,
                 x * step_width: x * step_width + tile_width] += weight2d
         return (np.divide(accum, weights, out=np.zeros_like(accum),
-                          where=weights!=0) * np.iinfo(orig_dtype).max).astype(orig_dtype)
+                          where=weights!=0) * dtype_max(orig_dtype)).astype(orig_dtype)
 
     @staticmethod
     def threshold_maps(prediction_maps: List[np.ndarray]) -> List[np.ndarray]:

@@ -6,6 +6,7 @@ import numpy as np
 from numpy import ndarray
 
 from core.logging_config import get_logger
+from core.detector_modules.ImageLoader import dtype_max
 from core.roi.ROI import ROI
 
 LOGGER = get_logger(__name__)
@@ -216,7 +217,7 @@ class QualityTester:
         return {name: {"Channel": channel,
                        "Lower": np.amin(channel),
                        "Upper": np.amax(channel),
-                       "Max. Val": np.iinfo(channel.dtype).max}
+                       "Max. Val": dtype_max(channel.dtype)}
                 for name, channel in zip(self.channel_names, self.channels)}
 
     def check_focus_contrast(self,

@@ -1,6 +1,13 @@
+# pyright: reportAttributeAccessIssue=false
+# ^ PyQt5's stubs nest enum members inside their enum class (Qt.ItemDataRole.DisplayRole)
+# while the C++ runtime also exposes them flat on Qt, which is what this file uses. The
+# code is correct PyQt5 and a rewrite to the scoped form was declined -- PyQt6 is not
+# planned (Romano, 2026-08-13). Suppressed at FILE level only because every hit of this
+# rule here is that stub artefact; measured, not assumed. Re-check with the rule enabled
+# before adding attribute access to a non-Qt object in this file.
 import json
 import os
-from typing import Dict, Union, List
+from typing import Any, Dict, NotRequired, Optional, TypedDict, Union, List
 
 from PyQt5 import uic, QtCore
 from PyQt5.QtWidgets import QDialog, QWidget, QScrollArea, QSizePolicy, QVBoxLayout, QMessageBox
@@ -13,6 +20,38 @@ from gui.settings.Widgets import SettingsSlider, SettingsDial, SettingsSpinner, 
     SettingsText, SettingsComboBox, SettingsCheckBox
 
 LOGGER = get_logger(__name__)
+
+
+class MenuPoint(TypedDict):
+    """
+    One entry of ``gui/settings/settings.json``
+
+    The file is a mapping of section name -> list of these. Written down here because it is written
+    down nowhere else: the JSON has no schema, and ``add_menu_point`` below is the only reader.
+
+    ``values`` is a per-widget-type bag rather than a fixed shape, which is why it is typed loosely.
+    Which keys each ``type`` reads, as of 2026-08-13 (36 menu points, five types in use):
+
+    ==========  ===================================================
+    type        keys read from ``values``
+    ==========  ===================================================
+    slider      min, max, step, unit
+    dial        min, max, step, unit
+    spin        min, max, step, prefix, suffix
+    decspin     min, max, step, decimals, prefix, suffix
+    check       tristate
+    combo       data (a JSON list of the options)
+    text        -- (the two text points carry no ``values`` at all)
+    ==========  ===================================================
+    """
+    id: str
+    title: str
+    desc: str
+    type: str
+    #: str for text points, int or float for the rest
+    value: Union[str, int, float]
+    #: Absent on the two "text" points, which never read it -- hence NotRequired
+    values: NotRequired[Dict[str, Any]]
 
 
 class AnalysisSettingsDialog(QDialog):
@@ -105,7 +144,9 @@ class AnalysisSettingsDialog(QDialog):
         :return: None
         """
         # Load UI definition
-        self.ui = uic.loadUi(gpaths.ui_analysis_settings_dial, self)
+        # Annotated Any deliberately -- see the comment on the same assignment in
+        # gui/NucDetectAppQT.py: uic has no stubs, so the inferred type is "Unknown | None"
+        self.ui: Any = uic.loadUi(gpaths.ui_analysis_settings_dial, self)
         # Load css file
         self.ui.setStyleSheet(Util.load_stylesheet("main.css"))
         self.setWindowIcon(Icon.get_icon("LOGO"))
@@ -193,13 +234,15 @@ class SettingsDialog(QDialog):
         self.tabs = {}
         self.sections = {}
         self.ui = None
-        self.json = None
+        self.json: Optional[Dict[str, List[MenuPoint]]] = None
         self.url = None
         self.inserter = inserter
         self._initialize_ui()
 
     def _initialize_ui(self) -> None:
-        self.ui = uic.loadUi(gpaths.ui_settings_dial, self)
+        # Annotated Any deliberately -- see the comment on the same assignment in
+        # gui/NucDetectAppQT.py: uic has no stubs, so the inferred type is "Unknown | None"
+        self.ui: Any = uic.loadUi(gpaths.ui_settings_dial, self)
         # Load css file
         self.setWindowFlags(
             self.windowFlags() |
@@ -320,30 +363,34 @@ class SettingsDialog(QDialog):
             self.tabs[section] = tab
         return self.tabs[section]
 
-    def add_menu_point(self, section: str, menupoint: Dict[str, Union[str, float, int]]) -> None:
+    def add_menu_point(self, section: str, menupoints: List[MenuPoint]) -> None:
         """
-        Method to add a menu point to the settings section
+        Method to add the menu points of one section
 
         :param section: The name of the section
-        :param menupoint: The menupoint to add
+        :param menupoints: The menu points of that section, as read from settings.json
         :return: None
         """
         # add_section hands back the tab it built or already had, so there is nothing to search for
         tab = self.add_section(section)
         base = tab.findChildren(QVBoxLayout, "base")
-        for mp in menupoint:
+        for mp in menupoints:
             t = mp["type"].lower()
+            # Read once rather than values[...] per argument: "values" is absent on text menu
+            # points, and .get keeps a genuinely missing sub-key a KeyError below rather than turning
+            # the whole menu point into one here
+            values = mp.get("values", {})
             p = None
             if t == "slider":
                 p = SettingsSlider(
                     _id=mp["id"],
                     title=mp["title"],
                     desc=mp["desc"],
-                    min_val=mp["values"]["min"],
-                    max_val=mp["values"]["max"],
-                    step=mp["values"]["step"],
+                    min_val=values["min"],
+                    max_val=values["max"],
+                    step=values["step"],
                     value=mp["value"],
-                    unit=mp["values"]["unit"],
+                    unit=values["unit"],
                     parent=self,
                     callback=self.menupoint_changed
                 )
@@ -352,11 +399,11 @@ class SettingsDialog(QDialog):
                     _id=mp["id"],
                     title=mp["title"],
                     desc=mp["desc"],
-                    min_val=mp["values"]["min"],
-                    max_val=mp["values"]["max"],
-                    step=mp["values"]["step"],
+                    min_val=values["min"],
+                    max_val=values["max"],
+                    step=values["step"],
                     value=mp["value"],
-                    unit=mp["values"]["unit"],
+                    unit=values["unit"],
                     parent=self,
                     callback=self.menupoint_changed
                 )
@@ -365,12 +412,12 @@ class SettingsDialog(QDialog):
                     _id=mp["id"],
                     title=mp["title"],
                     desc=mp["desc"],
-                    min_val=mp["values"]["min"],
-                    max_val=mp["values"]["max"],
-                    step=mp["values"]["step"],
+                    min_val=values["min"],
+                    max_val=values["max"],
+                    step=values["step"],
                     value=mp["value"],
-                    prefix=mp["values"]["prefix"],
-                    suffix=mp["values"]["suffix"],
+                    prefix=values["prefix"],
+                    suffix=values["suffix"],
                     parent=self,
                     callback=self.menupoint_changed
                 )
@@ -379,13 +426,13 @@ class SettingsDialog(QDialog):
                     _id=mp["id"],
                     title=mp["title"],
                     desc=mp["desc"],
-                    min_val=mp["values"]["min"],
-                    max_val=mp["values"]["max"],
-                    step=mp["values"]["step"],
+                    min_val=values["min"],
+                    max_val=values["max"],
+                    step=values["step"],
                     value=mp["value"],
-                    decimals=mp["values"]["decimals"],
-                    prefix=mp["values"]["prefix"],
-                    suffix=mp["values"]["suffix"],
+                    decimals=values["decimals"],
+                    prefix=values["prefix"],
+                    suffix=values["suffix"],
                     parent=self,
                     callback=self.menupoint_changed
                 )
@@ -399,7 +446,14 @@ class SettingsDialog(QDialog):
                     callback=self.menupoint_changed
                 )
             elif t == "combo":
-                dat = mp["values"].split(",")
+                # values["data"], a JSON list. The branch used to do values.split(",") -- but
+                # "values" is a JSON object in every menu point that carries one, so that was an
+                # AttributeError the moment it ran, and no menu point declares type "combo" at all,
+                # so it never did. Kept rather than deleted (Romano, 2026-08-13) and made to read
+                # from "values" the way every other branch does. A list, not a delimited string:
+                # JSON has lists, and SettingsComboBox iterates what it is given -- which is how
+                # verify_gui_dialogs' checks 23/24 already construct it
+                dat = values["data"]
                 p = SettingsComboBox(
                     _id=mp["id"],
                     title=mp["title"],
@@ -415,7 +469,7 @@ class SettingsDialog(QDialog):
                     title=mp["title"],
                     desc=mp["desc"],
                     value=mp["value"],
-                    tristate=mp["values"]["tristate"],
+                    tristate=values["tristate"],
                     parent=self,
                     callback=self.menupoint_changed
                 )

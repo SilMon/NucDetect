@@ -532,8 +532,14 @@ class Requester(DatabaseInteractor):
         :param image: The md5 hash of the image
         :return: True if the image was analysed
         """
-        return bool(self.connector.get_view_from_table("analysed", "images",
-                                                       ("md5", Specifiers.EQUALS, image))[0][0])
+        rows = self.connector.get_view_from_table("analysed", "images",
+                                                  ("md5", Specifiers.EQUALS, image))
+        # An unknown hash returns an empty list, and [0][0] raised IndexError instead of answering
+        # "no". Found by verify_batch_partitioning, which drives _analyze_all over paths that were
+        # never registered -- one such path used to take the whole batch run down before the loop
+        if not rows:
+            return False
+        return bool(rows[0][0])
 
 
     def check_if_image_is_registered(self, image: str) -> bool:
