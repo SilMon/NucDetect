@@ -229,6 +229,8 @@ class NucDetect(QMainWindow):
         self.detector = Detector()
         # Initialize needed variables
         self.reg_images = []
+        # Guards _connect_signals against double-connecting every slot -- see its docstring
+        self._signals_connected = False
         # Contains data for the associated experiment
         self.cur_exp = None
         # Contains data of the loaded image
@@ -449,8 +451,18 @@ class NucDetect(QMainWindow):
         """
         Method to connect the used signals
 
+        Idempotent on purpose. Every line below is a bare connect(), so calling this twice would
+        double-connect every slot and each queued update would be applied twice -- a duplicated
+        table rebuild, two rows appended per emit, two status recomputations. There is only one
+        caller today, so this is a guard against a future reconnect (on settings reload, or a window
+        re-init) rather than a repair; it already cost real debugging time once, when a test double
+        called this a second time.
+
         :return: None
         """
+        if self._signals_connected:
+            return
+        self._signals_connected = True
         # Create signal for thread-safe gui updates
         self.prg_signal.connect(self._set_progress)
         self.selec_signal.connect(self._select_next_image)
@@ -681,6 +693,7 @@ class NucDetect(QMainWindow):
         self.loaded_files = []
         self.add_images_from_folder(gpaths.images_path, reload=True)
         self.img_list_model.set_paths(self.loaded_files)
+        self._forget_current_image()
 
     def fetch_more_images_if_needed(self, value: int, threshold: float = 0.75):
         """
@@ -935,6 +948,24 @@ class NucDetect(QMainWindow):
         if self.img_list_model.removeRow(cur_ind.row()):
             self.loaded_files.remove(path)
 
+    def _forget_current_image(self) -> None:
+        """
+        Method to drop the current image and resync the controls that depend on one
+
+        Must be called by anything that replaces the model's contents. Qt drops the selection on a
+        model reset WITHOUT emitting selectionChanged, so on_image_selection_change never runs for
+        those paths and neither cur_img nor btn_analyse would be updated -- leaving Analyse enabled
+        for an image no longer in the list.
+
+        Kept as one method rather than two copies so a future clearing path has a single thing to
+        call. roi_cache is deliberately NOT touched here: it is dereferenced unguarded elsewhere,
+        and which of those sites are reachable with no selection is a separate open question.
+
+        :return: None
+        """
+        self.cur_img = None
+        self.ui.btn_analyse.setEnabled(False)
+
     def clear_image_list(self) -> None:
         """
         Method to clear the list of loaded images
@@ -943,6 +974,7 @@ class NucDetect(QMainWindow):
         """
         self.img_list_model.clear()
         self.loaded_files.clear()
+        self._forget_current_image()
 
     def show_analysis_settings_dialog(self, show_redo_option: bool = False) -> Union[Dict, None]:
         """
@@ -1741,11 +1773,19 @@ class NucDetect(QMainWindow):
         for index in self.ui.list_images.selectionModel().selectedIndexes():
             item = self.img_list_model.get_item_at_index((index.row()))
             item.setData(self.cur_img)
-        if analysed and item:
-            if modified:
-                item.setBackground(Color.ITEM_MODIFIED)
+        if item:
+            if analysed:
+                if modified:
+                    item.setBackground(Color.ITEM_MODIFIED)
+                else:
+                    item.setBackground(Color.ITEM_ANALYSED)
             else:
-                item.setBackground(Color.ITEM_ANALYSED)
+                # Clear the role rather than painting a "default" colour: there is no colour that
+                # means "no highlight" -- any brush is drawn over the row. Without this branch a row
+                # whose analysis was just deleted kept its analysed/modified highlight, so its data
+                # and its colour disagreed until check_all_item_statuses next ran. That sibling has
+                # always had the reset branch, which is why the gap here survived: it looked correct
+                item.setData(None, Qt.BackgroundRole)
 
     def check_all_item_statuses(self) -> None:
         """
