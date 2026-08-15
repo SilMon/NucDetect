@@ -77,7 +77,7 @@ class QualityTester:
         if settings:
             self.set_settings(settings)
         else:
-            warnings.warn("No settings found, standard settings used for focus mapping")
+            warnings.warn("No settings found, standard settings used for quality testing")
             self.set_settings(self.STANDARD_SETTINGS)
 
     def set_channels(self, channels: List[np.ndarray]) -> None:

@@ -15,6 +15,11 @@ LOGGER = get_logger(__name__)
 # cell of that table is a preformatted string and the sort key falls back to text comparison for
 # anything that is not a number, so this sorts as one block rather than breaking the column
 NO_STATISTICS = "Not calculated"
+# Shown in the Co-Loc. column when co-localization is not a meaningful measurement for the row --
+# see the comment in get_table_data_for_image. Deliberately non-numeric, like NO_STATISTICS: a
+# placeholder that parses as a number would be indistinguishable from a real result, and the result
+# table's sort key already groups non-numeric cells together after the numeric ones
+NO_COLOCALIZATION = "n/a"
 
 
 class Specifiers(Enum):
@@ -725,8 +730,16 @@ class Requester(DatabaseInteractor):
             general = self.get_roi_info(nuc)
             # Get nucleus statistics
             stats = self.get_statistics_for_roi(nuc)
-            # Calculate overall match for this nucleus
-            match = general[10] * 100 if general[10] else 100
+            # Calculate overall match for this nucleus. roi.match is -1 when the image has a single
+            # channel, where co-localization is not a meaningful concept, and None when it was never
+            # computed; both render as NO_COLOCALIZATION. The test is explicit rather than a
+            # truthiness check because a match of exactly 0 is a real measurement -- "these foci
+            # co-localize with nothing" -- and used to be reported as 100 % by the old
+            # `general[10] * 100 if general[10] else 100`, which caught 0 along with the sentinels
+            if general[10] is None or general[10] == -1:
+                match = NO_COLOCALIZATION
+            else:
+                match = f"{general[10] * 100:.2f}"
             # Create row for this nucleus. get_statistics_for_roi returns an empty tuple for a
             # nucleus with no statistics row, so every stats[] below would raise IndexError and take
             # the whole result table with it. The row is kept and the affected cells say so instead:
@@ -734,12 +747,19 @@ class Requester(DatabaseInteractor):
             # committed analysis to occur at all -- statistics are written as part of every
             # analysis -- so no recovery is attempted here
             if stats:
-                measurements = [str(stats[11]), str(stats[10]), f"{stats[15]:.2f}",
+                # Center Y and Center X go through the same :.2f as every other numeric column.
+                # get_center returns round(...), which under @njit yields a float for some ROI, and
+                # SQLite's INTEGER affinity then stores the losslessly-representable ones as integer
+                # and the rest as real -- so bare str() put "433" next to "435.9399961797561" in one
+                # column. Measured before the fix: 151 of 4418 nuclei across 39 images stored a real
+                # centre
+                measurements = [f"{float(stats[11]):.2f}", f"{float(stats[10]):.2f}",
+                                f"{stats[15]:.2f}",
                                 f"{float(stats[18]) * 100:.2f}", f"{float(stats[14]):.2f}",
                                 f"{float(stats[12]):.2f}", f"{float(stats[13]):.2f}"]
             else:
                 measurements = [NO_STATISTICS] * 7
-            row = [name, str(image), str(nuc)] + measurements + [f"{match:.2f}"]
+            row = [name, str(image), str(nuc)] + measurements + [match]
             # Count the foci
             for channel in sorted(self.get_channel_names(image, False)):
                 rows.append(row + [channel, str(self.count_foci_for_nucleus_and_channel(nuc, channel))])
