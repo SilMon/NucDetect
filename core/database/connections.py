@@ -733,6 +733,17 @@ class Requester(DatabaseInteractor):
         """
         # Get all nuclei associated with this image
         nucs = self.get_nuclei_hashes_for_image(image)
+        # Hoisted out of the nucleus loop: it does not depend on the nucleus, so it was one query
+        # per nucleus for one answer. Fetching it here is also what makes the check below possible
+        # exactly once per image rather than once per row.
+        channels = sorted(self.get_channel_names(image, False))
+        # A nucleus row is only emitted once per channel, so with no channel the assembled row is
+        # discarded and this method returns [] -- however many nuclei the image has. Reaching this
+        # with nuclei present means measured results are being dropped, so it is logged rather than
+        # left to surface as an empty table with no explanation.
+        if not channels and nucs:
+            LOGGER.error("No active non-main channel for image %s -- its result table will be "
+                         "empty despite %d nuclei", image, len(nucs))
         rows = []
         for nuc in nucs:
             # Get the name of the image
@@ -772,7 +783,7 @@ class Requester(DatabaseInteractor):
                 measurements = [NO_STATISTICS] * 7
             row = [name, str(image), str(nuc)] + measurements + [match]
             # Count the foci
-            for channel in sorted(self.get_channel_names(image, False)):
+            for channel in channels:
                 rows.append(row + [channel, str(self.count_foci_for_nucleus_and_channel(nuc, channel))])
         return rows
 

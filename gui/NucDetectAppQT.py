@@ -1256,19 +1256,22 @@ class NucDetect(QMainWindow):
         req = Requester()
         ins = Inserter()
         try:
-            # A miss means analysis reached an image that add_image_information_to_database never
-            # registered. Until 2026-08-15 this indexed the result unconditionally, so that case
-            # raised IndexError here rather than being checkable -- there is nothing saved to
-            # delete for such an image, so it is skipped.
+            # Clear any previously saved data for this image before writing the new results.
             #
-            # NOTE index 8 is the image HEIGHT, not the analysed flag, which is index 12. The
-            # branch is therefore taken for every image whose height is non-zero, i.e. all of
-            # them. Behaviour deliberately left as it stands: deleting before re-inserting is
-            # right on re-analysis and merely redundant on a first one, and changing which column
-            # is tested changes what the database does. The index is NOT a typo introduced here.
-            info = req.get_info_for_image(key)
-            if info is not None and info[8]:
-                # Delete saved data
+            # This is unconditional on purpose. It used to be guarded by `get_info_for_image(key)[8]`
+            # under a comment claiming to test whether the image had been analysed already -- but
+            # index 8 is the image HEIGHT (analysed is 12), so the guard was true for every image
+            # with a non-zero height and gated nothing. Testing `analysed` instead would have been a
+            # REGRESSION, not a fix: delete_existing_image_data removes the roi, points and
+            # statistics rows for this image and is a no-op when there are none, so deleting always
+            # costs nothing on a first analysis -- while skipping it whenever `analysed` is 0 would
+            # leave orphaned rows behind for an image whose earlier analysis was interrupted, and
+            # the new results would be inserted alongside them.
+            #
+            # A miss means analysis reached an image that add_image_information_to_database never
+            # registered; there is nothing saved for it, so nothing to clear. Indexing the result
+            # unconditionally is what raised IndexError there until 2026-08-15.
+            if req.get_info_for_image(key) is not None:
                 ins.delete_existing_image_data(key)
             # Check if image should be added to experiment
             if data["add to experiment"]:
