@@ -25,10 +25,19 @@ class FocusMapper(AreaMapper):
         "use_smoothing": False,
         "use_background_reduction": False,
         "use_signal_improvement": False,
-        "dots_per_micron": 1.3938,
+        # Reconciled with what the application actually ships, 2026-08-15. dots_per_micron was
+        # 1.3938, which implies a 1024 px field of 734.7 um and matches no acquisition the lab
+        # performs; it is now the analysis settings dialog's own default. min_sigma/max_sigma were
+        # 1.1/2.5 against settings.json's 1.5/3.5 -- the same drift, in the same block.
+        #
+        # This fallback only applies when get_foci_as_blobs finds self.settings empty, which the
+        # real pipeline never produces: Detector always passes analysis_settings. It is kept honest
+        # rather than trusted. If the acquisition calibration behind 6.412 is ever corrected, this
+        # value moves with the dialog default rather than being a second place to remember.
+        "dots_per_micron": 6.412,
         "smoothing": 3,
-        "min_sigma": 1.1,
-        "max_sigma": 2.5,
+        "min_sigma": 1.5,
+        "max_sigma": 3.5,
         "num_sigma": 10,
         "acc_thresh": .1,
         "overlap": .10,

@@ -864,7 +864,7 @@ class ROIDrawer:
         c = dims["minX"], dims["minY"]
         d2 = dims["height"]
         d1 = dims["width"]
-        focus = FocusItem(c[0], c[1], d1, d2, ind, hash(roi), method=roi.detection_method)
+        focus = FocusItem(c[0], c[1], d1, d2, ind, hash(roi))
         focus.set_pen(pen, ROIDrawer.MARKERS["invisible"])
         focus.setVisible(visible if roi.detection_method != "removed" else False)
         focus.add_to_view(view)
@@ -969,7 +969,7 @@ class ROIItem(QGraphicsEllipseItem):
     # and it listed "pen" twice -- but repairing it would have bought nothing: see the note on
     # EditingRectangle above for the measurement. __slots__ does not work on a sip subclass
 
-    def __init__(self, x: int, y: int, width: int, height: float, index: int, roi_ident: int, method: str = "IP"):
+    def __init__(self, x: int, y: int, width: int, height: float, index: int, roi_ident: int):
         super().__init__(x, y, width, height)
         self.preview = False
         self.changed = False
@@ -982,7 +982,10 @@ class ROIItem(QGraphicsEllipseItem):
         self.angle = 0
         self.channel_index = index
         self.roi_id = roi_ident
-        self.method = method
+        # A `method` parameter and attribute stood here until 2026-08-15. Nothing read it -- the
+        # drawing code goes to roi.detection_method on the ROI, not to the item -- and its default
+        # was "IP", which is not one of ROIDrawer.MARKERS' keys, so a reader that ever did consult
+        # it would have got a value the marker lookup cannot resolve.
         self.active_pen: pg.mkPen = None
         self.inactive_pen: pg.mkPen = None
         self.hover_pen: pg.mkPen = None

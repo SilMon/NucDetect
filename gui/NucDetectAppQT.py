@@ -1678,8 +1678,14 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
+        # Guard on BOTH attributes, not just the dialog. They are written as a pair -- set together
+        # in save_results, cleared together below -- so export_dialog being set does imply
+        # export_start being set, but that implication is the invariant this guard is really
+        # testing and nothing else records it. An edit that clears export_dialog elsewhere, or sets
+        # it without stamping the start time, would turn the subtraction below into a TypeError
+        # inside a 500 ms timer callback, with the UI disabled and the timer still firing.
         dial = self.export_dialog
-        if dial is None:
+        if dial is None or self.export_start is None:
             self.check_timer.stop()
             return
         runtime = time.time() - self.export_start
