@@ -3,7 +3,6 @@ import os
 import threading
 import traceback
 
-import matplotlib as mpl
 from matplotlib import font_manager
 from threading import Thread
 from typing import List, Tuple, Dict, Any, Optional, Union, Callable, cast
@@ -14,10 +13,10 @@ import pyqtgraph as pg
 from PyQt5 import uic, QtCore, QtGui
 from PyQt5.QtCore import QRectF, Qt, QPoint, QPointF, QItemSelection, QAbstractTableModel, QVariant, pyqtSignal, QTimer
 from PyQt5.QtGui import QKeyEvent, QPen, QColor, QMouseEvent, QBrush, QStandardItemModel, QStandardItem
-from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsRectItem, QGraphicsEllipseItem, QInputDialog, QLabel, \
-    QSpacerItem, QSizePolicy, QMessageBox, QSpinBox, QHBoxLayout, QCheckBox, QPushButton, QVBoxLayout, QHeaderView, \
-    QMenuBar, QMenu, QAction, QComboBox, QWidgetAction, QListWidget, QAbstractItemView, QListWidgetItem, \
-    QAbstractScrollArea
+from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsRectItem, QGraphicsEllipseItem, QInputDialog, \
+    QSizePolicy, QMessageBox, QSpinBox, QHBoxLayout, QVBoxLayout, QHeaderView, \
+    QMenuBar, QMenu, QAction, QComboBox, QListWidget, QAbstractItemView, QListWidgetItem, \
+    QAbstractScrollArea, QWidget
 from scipy import ndimage as ndi
 from skimage.draw import line
 from skimage.segmentation import watershed
@@ -41,14 +40,11 @@ from core.roi.ROIHandler import ROIHandler
 
 
 class DataExportDialog(QDialog):
-    __slots__ = [
-        "cur_img",
-        "disp_name",
-        "ui",
-        "req",
-        "threads",
-        "errors"
-    ]
+    # No __slots__ here: QDialog is a sip type and supplies a __dict__ from its C++ base, so the
+    # declaration removed nothing, rejected no undeclared attribute, and cost bytes per instance
+    # for the descriptors -- measured on 2026-08-15 for the equivalent declarations on the editor's
+    # graphics items. core/roi/ROI.py's ROI is the one place the memory argument holds; it is a
+    # plain class and keeps its __slots__
     STANDARD_OPTIONS = (
         "Selected Image",
         "All analysed Images",
@@ -313,17 +309,11 @@ class DataExportDialog(QDialog):
 
 
 class Editor(QDialog):
-    __slots__ = [
-        "ui",
-        "editor",
-        "image",
-        "roi",
-        "size_factor",
-        "temp_items",
-        "active_channels",
-        "x_scale",
-        "y_scale"
-    ]
+    # No __slots__ here: QDialog is a sip type and supplies a __dict__ from its C++ base, so the
+    # declaration removed nothing, rejected no undeclared attribute, and cost bytes per instance
+    # for the descriptors -- measured on 2026-08-15 for the equivalent declarations on the editor's
+    # graphics items. core/roi/ROI.py's ROI is the one place the memory argument holds; it is a
+    # plain class and keeps its __slots__
 
     def __init__(self, image: np.ndarray,
                  roi: ROIHandler,
@@ -423,8 +413,11 @@ class Editor(QDialog):
         self.ui.cbx_channel.currentIndexChanged.connect(
             lambda: self.editor.show_channel(self.ui.cbx_channel.currentText())
         )
-        self.ui.cbx_high_contrast.stateChanged.connect(self.editor.toggle_high_contrast_mode)
-        self.ui.cbx_white_balance.stateChanged.connect(self.editor.toggle_adjust_white_balance)
+        # toggled, not stateChanged: stateChanged emits the Qt check STATE (0/1/2) while both
+        # slots are annotated to take a bool. It worked by truthiness, so the annotation was the
+        # thing that was wrong -- and PartiallyChecked would have arrived as True
+        self.ui.cbx_high_contrast.toggled.connect(self.editor.toggle_high_contrast_mode)
+        self.ui.cbx_white_balance.toggled.connect(self.editor.toggle_adjust_white_balance)
         self.ui.cbx_colormap.addItems(self.get_colormaps())
         self.ui.cbx_colormap.setCurrentText("gray")
         self.editor.change_colormap("gray")
@@ -1288,6 +1281,32 @@ class AutoEditCenterItem(QGraphicsEllipseItem):
         self.setRect(self.orig_rect)
 
 
+def ask_for_name(parent: QWidget, title: str, label: str) -> Tuple[str, bool]:
+    """
+    Function to ask the user for a name through a styled input dialog
+
+    Uses a QInputDialog INSTANCE rather than the static QInputDialog.getText: the static call builds
+    a dialog of its own, so styling an instance and handing it over as the parent -- which is what
+    both call sites used to do -- applied inputbox.css to a widget that was never shown.
+
+    Module level because ExperimentDialog and GroupDialog both need it and neither is the other's
+    base class.
+
+    :param parent: The dialog to parent the input box to
+    :param title: The window title
+    :param label: The prompt shown above the input field
+    :return: The entered name, stripped of surrounding whitespace, and whether it was accepted
+    """
+    dial = QInputDialog(parent)
+    dial.setWindowTitle(title)
+    dial.setWindowIcon(Icon.get_icon("LOGO"))
+    dial.setStyleSheet(Util.load_stylesheet("inputbox.css"))
+    dial.setInputMode(QInputDialog.TextInput)
+    dial.setLabelText(label)
+    ok = dial.exec() == QDialog.Accepted
+    return dial.textValue().strip(), ok
+
+
 class ExperimentDialog(QDialog):
     #: Characters of an experiment's details shown in the list label before it is cut short
     DETAILS_LABEL_LENGTH = 47
@@ -1329,6 +1348,12 @@ class ExperimentDialog(QDialog):
         self.ui.btn_images_remove.clicked.connect(self.remove_images_from_experiment)
         self.ui.btn_images_clear.clicked.connect(self.remove_all_images_from_experiment)
         self.ui.lv_experiments.selectionModel().selectionChanged.connect(self.on_exp_selection_change)
+        # The image-selection handler was defined but never connected, so btn_images_remove was
+        # never enabled or disabled in response to a selection. Connected after setModel(), which
+        # is what creates the selection model
+        self.ui.lv_images.selectionModel().selectionChanged.connect(self.on_image_selection_change)
+        # ...and start in the state the handler would produce for an empty selection
+        self.ui.btn_images_remove.setEnabled(False)
         # Set window title and icon
         self.setWindowTitle("Experiment Dialog")
         self.setWindowIcon(Icon.get_icon("LOGO"))
@@ -1355,12 +1380,22 @@ class ExperimentDialog(QDialog):
 
         :return: None
         """
-        dial = QInputDialog()
-        dial.setWindowTitle("Add new Experiment...")
-        dial.setWindowIcon(Icon.get_icon("LOGO"))
-        dial.setStyleSheet(Util.load_stylesheet("inputbox.css"))
-        name, ok = QInputDialog.getText(dial, "Experiment Dialog", "Enter experiment name: ")
+        # The dialog that is built here is the one that is SHOWN. It used to be constructed and
+        # styled, then handed to the STATIC QInputDialog.getText as a mere parent -- and the static
+        # call builds a dialog of its own, so inputbox.css was applied to a widget nobody ever saw
+        name, ok = ask_for_name(self, "Add new Experiment...", "Enter experiment name: ")
         if ok:
+            existing = {self.exp_model.item(row).data()["name"]
+                        for row in range(self.exp_model.rowCount())}
+            # Both were accepted before: an empty name produced an experiment that cannot be
+            # picked out of the list, and a duplicate produced two rows that add_new_experiment
+            # then collapses back into one on save
+            if not name or name in existing:
+                QMessageBox.information(
+                    self, "Add new Experiment...",
+                    "Please enter a name." if not name
+                    else f"An experiment named '{name}' already exists.")
+                return
             add_item = QStandardItem()
             text = f"{name}\nNo Details\nGroups: No groups"
             add_item.setText(text)
@@ -1793,8 +1828,10 @@ class StatisticsDialog(QDialog):
             "orientation": "vertical",
             "palette": "husl"
         }
-        self.plot_data()
+        # Connected BEFORE any work is started. It used to follow plot_data(), which is safe only
+        # while nothing in plot_data reaches _calculate_statistics -- an invariant nothing enforces
         self.stat_calculation_finished_signal.connect(self._display_calculated_statistics)
+        self.plot_data()
 
     def initialize_ui(self) -> None:
         """
@@ -1862,18 +1899,13 @@ class StatisticsDialog(QDialog):
         if code == QDialog.Accepted:
             self.experiment = exp_sel_dial.get_selected_experiment()
             self.active_channels = exp_sel_dial.get_active_channels()
-            # Load the data from the new experiment
-            self.get_group_data()
-            # Reset the group boxes
-            for i in reversed(range(self.ui.vl_groups.count())):
-                # Check is this is a sub-layout
-                if self.ui.vl_groups.itemAt(i).widget() is None:
-                    # Get the layout
-                    layout = self.ui.vl_groups.itemAt(i).layout()
-                    for i in reversed(range(layout.count())):
-                        layout.itemAt(i).widget().setParent(None)
-                    # Remove the layout
-                    layout.setParent(None)
+            # ASSIGNED, not discarded. self.data kept the previous experiment's DataFrame, so the
+            # table, the plot and every statistic described the old experiment under the new title
+            self.data = self.get_group_data()
+            # The layout teardown that stood here was dead: it looked for sub-layouts in vl_groups,
+            # but _add_group_boxes puts a single QListWidget there, so the branch never ran -- and
+            # its inner loop reused the outer loop variable. The real reset is the
+            # list_widget.clear() inside _add_group_boxes
             if self.ui.tv_group_statistics.model() is not None:
                 self.ui.tv_group_statistics.model().setDataFrame(pd.DataFrame())
             self._add_group_boxes()
@@ -1899,13 +1931,19 @@ class StatisticsDialog(QDialog):
         msg.setStandardButtons(QMessageBox.Ok)
         msg.exec()
 
-    def calculate_and_display_statistics(self) -> Dict[str, Dict[str, List]]:
+    def calculate_and_display_statistics(self) -> None:
         """
         Method to calculate the necessary statistics
 
+        The result is not returned: the work runs on a worker thread and comes back through
+        stat_calculation_finished_signal. The annotation used to claim a
+        Dict[str, Dict[str, List]] that the method never produced.
+
         :return: None
         """
-        thread = Thread(target=self._calculate_statistics)
+        # daemon, so closing the window does not leave the interpreter alive waiting on a
+        # statistics run nobody is going to look at
+        thread = Thread(target=self._calculate_statistics, daemon=True)
         self.setEnabled(False)
         thread.start()
 
@@ -2045,10 +2083,17 @@ class DataFrameModel(QAbstractTableModel):
         :param df: The data to display as pandas DataFrame
         :return:None
         """
-        self.data = df
-        self._values = df.to_numpy(copy=False)
-        self._columns = df.columns.to_list()
-        self._index = df.index.to_list()
+        # _df, not data: QAbstractTableModel.data() is the model's own read method, and an
+        # attribute of that name made model.data(index, role) raise
+        # "TypeError: 'DataFrame' object is not callable". Qt's rendering was unaffected -- PyQt
+        # resolves the virtual through the type -- so it was a trap for Python callers and readers
+        # rather than a rendering bug.
+        # copy(), because sort() reorders this frame: it used to be the caller's own object, so
+        # clicking a column header silently reordered StatisticsDialog.data as a side effect
+        self._df = df.copy()
+        self._values = self._df.to_numpy(copy=False)
+        self._columns = self._df.columns.to_list()
+        self._index = self._df.index.to_list()
 
     def setDataFrame(self, df):
         self.beginResetModel()
@@ -2111,12 +2156,14 @@ class DataFrameModel(QAbstractTableModel):
         # Optional: enable sorting; for large DF this is still decent
         self.layoutAboutToBeChanged.emit()
         ascending = order == Qt.AscendingOrder
-        self.data.sort_values(self._columns[column],
-                              ascending=ascending,
-                              inplace=True,
-                              kind="mergesort")
-        self._values = self.data.to_numpy(copy=False)
-        self._index = self.data.index.to_list()
+        # inplace on the model's OWN copy -- see set_df. The frame handed in by the caller is no
+        # longer touched, so sorting the view cannot reorder the dialog's data underneath it
+        self._df.sort_values(self._columns[column],
+                             ascending=ascending,
+                             inplace=True,
+                             kind="mergesort")
+        self._values = self._df.to_numpy(copy=False)
+        self._index = self._df.index.to_list()
         self.layoutChanged.emit()
 
 
@@ -2262,21 +2309,36 @@ class PlotSettingsDialog(QDialog):
         self.ui.cbx_violin_split.stateChanged.connect(self.update_timer.start)
         self.ui.cmbx_violin_inner.currentTextChanged.connect(self.update_timer.start)
 
-    def get_available_fonts(self):
-        font_files = font_manager.findSystemFonts()
-        for font_file in font_files:
-            font_manager.fontManager.addfont(font_file)
-        return font_manager.get_font_names()
+    #: The system font names, resolved once per process. Registering them is global and
+    #: cumulative -- matplotlib's font manager keeps every font ever added -- so doing it on every
+    #: open of this dialog paid the same cost repeatedly and grew that manager each time
+    _font_names = None
+
+    @classmethod
+    def get_available_fonts(cls):
+        """
+        Method to get the names of the fonts available to matplotlib
+
+        :return: The font names, resolved on the first call and cached afterwards
+        """
+        if cls._font_names is None:
+            for font_file in font_manager.findSystemFonts():
+                font_manager.fontManager.addfont(font_file)
+            cls._font_names = font_manager.get_font_names()
+        return cls._font_names
 
     def create_mockup_diagram(self):
         self.canvas_violin = PlotCanvas(self)
         self.canvas_box = PlotCanvas(self)
-        np.random.seed(42)
+        # A local Generator, not np.random.seed(42): seeding sets the PROCESS-WIDE random state,
+        # so merely opening this settings dialog made every later consumer of the global stream
+        # deterministic. The mockup stays reproducible, which is all the seed was for
+        rng = np.random.default_rng(42)
         # Create mockup data
-        group_a = [("Control", "Channel Y", x) for x in np.random.randint(0, 30, size=35)]
-        group_a.extend([("Control", "Channel X", x) for x in np.random.randint(0, 45, size=78)])
-        group_b = [("Test", "Channel Y", x) for x in np.random.randint(0, 145, size=25)]
-        group_b.extend([("Test", "Channel X", x) for x in np.random.randint(0, 112, size=44)])
+        group_a = [("Control", "Channel Y", x) for x in rng.integers(0, 30, size=35)]
+        group_a.extend([("Control", "Channel X", x) for x in rng.integers(0, 45, size=78)])
+        group_b = [("Test", "Channel Y", x) for x in rng.integers(0, 145, size=25)]
+        group_b.extend([("Test", "Channel X", x) for x in rng.integers(0, 112, size=44)])
         self.data = pd.DataFrame(group_a + group_b, columns=["Group", "Channel", "Foci"])
         v_lay = QVBoxLayout()
         v_lay.addWidget(self.canvas_violin)
@@ -2566,11 +2628,18 @@ class GroupDialog(QDialog):
 
         :return: None
         """
-        dial = QInputDialog()
-        dial.setStyleSheet(Util.load_stylesheet("inputbox.css"))
-        dial.setWindowIcon(Icon.get_icon("LOGO"))
-        name, ok = QInputDialog.getText(dial, "Group Dialog", "Enter the new group: ")
+        # Same fix as ExperimentDialog.add_experiment: the styled dialog is the one shown, rather
+        # than being handed to the static call as a parent while that builds an unstyled one
+        name, ok = ask_for_name(self, "Group Dialog", "Enter the new group: ")
         if ok:
+            existing = {self.group_model.item(row).data()["name"]
+                        for row in range(self.group_model.rowCount())}
+            if not name or name in existing:
+                QMessageBox.information(
+                    self, "Group Dialog",
+                    "Please enter a name." if not name
+                    else f"A group named '{name}' already exists.")
+                return
             # Create item to add to group list
             item = QStandardItem()
             item_data = {
