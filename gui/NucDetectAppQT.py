@@ -556,6 +556,18 @@ class NucDetect(QMainWindow):
         :return: None
         """
         self._assert_main_thread("_apply_result_table")
+        # Switching between the single-image and experiment views changes the column count, and Qt
+        # drops the sort indicator to -1 when it does -- but the rows keep the order the now-defunct
+        # sort produced, so the table showed neither that sort nor the natural one. Clearing the
+        # sort explicitly when the header shape changes puts the rows back in the order they were
+        # prepared in, which is the only order the table can honestly claim once the sort is gone.
+        previous_header = []
+        for i in range(self.res_table_model.columnCount()):
+            # A column can exist without a header item, e.g. before the labels are first set
+            header_item = self.res_table_model.horizontalHeaderItem(i)
+            previous_header.append(header_item.text() if header_item else "")
+        if previous_header != header:
+            self.ui.table_results.sortByColumn(-1, Qt.AscendingOrder)
         self.res_table_model.setRowCount(0)
         self.create_table_rows(rows)
         if rows:
@@ -664,6 +676,13 @@ class NucDetect(QMainWindow):
         for cell in cells:
             item = QStandardItem(cell)
             item.setTextAlignment(QtCore.Qt.AlignCenter)
+            # The result table is a read-only view of the database -- Romano, 2026-08-15. Rows built
+            # by this path used to be left selectable and editable while create_table_row set
+            # neither, so a row was editable in place while an analysis streamed it in and read-only
+            # once the image was reselected. Any edit made in that window was silently discarded on
+            # the next rebuild, since nothing writes the table back
+            item.setSelectable(False)
+            item.setEditable(False)
             # Derive the sort key once here, not on every comparison the sorting performs
             item.setData(create_sort_key(cell), SORT_ROLE)
             items.append(item)
@@ -820,7 +839,7 @@ class NucDetect(QMainWindow):
         # Load saved data from databank
         self.roi_cache = self.load_rois_from_database(self.cur_img["key"])
         # Create the result table from loaded data
-        self.create_result_table_from_list(self.roi_cache, experiment)
+        self.create_result_table(experiment)
         # Re-enable buttons and list. Runs on this worker thread, so it has to go through the
         # signal -- the two duplicated in-body enable calls this replaces did not
         self.enable_signal.emit(True)
@@ -1066,7 +1085,7 @@ class NucDetect(QMainWindow):
         reporter.sub(*bounds[DATABASE])(0.0, "Writing results to database")
         self.save_rois_to_database(data)
         reporter.sub(*bounds[TABLE])(0.0, "Creating result table")
-        self.create_result_table_from_list(self.roi_cache)
+        self.create_result_table()
         # Only now is the analysis actually over. The previous version announced completion before
         # building the result table, so the bar read 100 % while work was still running
         self._prg_floor = None
@@ -1372,16 +1391,23 @@ class NucDetect(QMainWindow):
         ellip = statistics[18]
         return center_x, center_y, major, minor, angle, area, ov_x, ov_y, ellip
 
-    def create_result_table_from_list(self, handler: ROIHandler, experiment: str = None) -> None:
+    def create_result_table(self, experiment: str = None) -> None:
         """
-        Method to create the result table from a list of rois
+        Method to create the result table
+
+        Named create_result_table_from_list until 2026-08-15, and it took a ROIHandler it never
+        read. The rows come from prepare_main_table_rows, which queries the DATABASE; nothing here
+        has ever consulted an in-memory ROI list. The database is correctly authoritative -- every
+        writer commits before the table is rebuilt, analysis through save_rois_to_database and
+        manual edits through EditorView.apply_all_changes, and the handler does not carry the
+        association and modification bookkeeping the latter writes. So anything wanting to render a
+        specific in-memory ROI set has to go through the database, which the old signature hid.
 
         Safe to call from a worker thread: the database queries stay on the calling thread and only
         the finished rows are handed to the GUI thread via table_signal. Emitting from the GUI
         thread itself keeps the old synchronous behaviour, since Qt connects a same-thread emit
         directly.
 
-        :param handler: The handler containing the rois
         :param experiment: The experiment to load
         :return: None
         """
@@ -1735,7 +1761,7 @@ class NucDetect(QMainWindow):
                               QtCore.Qt.Window)
         code = editor.exec()
         if code == QDialog.Accepted:
-            self.create_result_table_from_list(self.roi_cache)
+            self.create_result_table()
             self.check_all_item_statuses()
 
     def show_about_window(self) -> None:
