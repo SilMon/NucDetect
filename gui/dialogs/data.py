@@ -1,13 +1,12 @@
 import copy
 import os
-import sqlite3
 import threading
 import traceback
 
 import matplotlib as mpl
 from matplotlib import font_manager
 from threading import Thread
-from typing import List, Tuple, Dict, Any, Optional, Union, Callable
+from typing import List, Tuple, Dict, Any, Optional, Union, Callable, cast
 
 import numpy as np
 import pandas as pd
@@ -47,14 +46,13 @@ class DataExportDialog(QDialog):
         "disp_name",
         "ui",
         "req",
-        "names",
         "threads",
         "errors"
     ]
     STANDARD_OPTIONS = (
         "Selected Image",
         "All analysed Images",
-        "All defined Expriments"
+        "All defined Experiments"
     )
     STANDARD_HEADER = ["Image Name", "Image Identifier", "ROI Identifier", "Center Y", "Center X", "Area [px]",
                        "Ellipticity[%]", "Or. Angle [deg]", "Maj. Axis", "Min. Axis", "match"]
@@ -134,7 +132,7 @@ class DataExportDialog(QDialog):
                           if self.req.check_if_image_was_analysed(x)]
             # Check if the data should be saved in one file
             file_name = "results_all_images" if self.ui.cbx_xlsx_single.isChecked() else None
-            for ind, md5 in enumerate(img_hashes):
+            for md5 in img_hashes:
                 self.export_image_as_table(md5, xlsx_name=file_name)
         # Save all defined experiments
         elif selection == DataExportDialog.STANDARD_OPTIONS[2]:  # All defined experiments
@@ -142,20 +140,11 @@ class DataExportDialog(QDialog):
             exps = self.req.get_all_experiments()
             # Check if the data should be saved in one file
             file_name = "results_all_experiments" if self.ui.cbx_xlsx_single.isChecked() else None
-            for ind, experiment in enumerate(exps):
+            for experiment in exps:
                 self.export_experiment_as_table(experiment, xlsx_name=file_name)
         # Save selected experiment
         else:
             self.export_experiment_as_table(selection)
-
-    def get_image_name(self, md5: str) -> str:
-        """
-        Method to get the name of an image
-
-        :param md5: The md5 hash of the image
-        :return: The name
-        """
-        return self.names.get(md5, md5)
 
     def _run_export(self, worker: Callable, *args) -> None:
         """
@@ -303,6 +292,13 @@ class DataExportDialog(QDialog):
         """
         # Create a pandas dataframe
         df = pd.DataFrame(rows)
+        # The results folder is not guaranteed to exist: it is created by Paths.ensure_directories,
+        # which the GUI calls at start-up -- but a user who deletes it while the program is running,
+        # or any entry point that has not called it, would otherwise get a bare FileNotFoundError
+        # out of a background export thread, where it is only visible via self.errors. Asking
+        # Paths rather than calling makedirs here keeps directory creation in the module that
+        # declares the directories
+        Paths.ensure_directories()
         if self.ui.cbx_csv.isChecked():
             df.to_csv(os.path.join(Paths.result_path, f"{name}.csv"),
                       header=header if include_header else False, index=False)
@@ -397,7 +393,16 @@ class Editor(QDialog):
         self.ui.btn_coords.setIcon(Icon.get_icon("MOUSE"))
         self.ui.btn_preview.setIcon(Icon.get_icon("EYE"))
         self.ui.btn_accept.setIcon(Icon.get_icon("CHECK"))
-        self.ui.btng_mode.idClicked.connect(self.set_mode)
+        # Explicit ids, so the mapping to EditorView's modes stops depending on the order the
+        # buttons happen to appear in the .ui file. Qt numbers them -2, -3, -4 in that order, and
+        # change_mode below used to recover the mode with `abs(id_) - 3` -- correct only by
+        # coincidence. Same fix as the main-channel button group
+        for mode, button in enumerate((self.ui.btn_view, self.ui.btn_add, self.ui.btn_edit)):
+            self.ui.btng_mode.setId(button, mode)
+        # NOT idClicked -> set_mode: idClicked emits the button ID, while set_mode takes a mode and
+        # checks the matching button, so that connection fed ids into the wrong parameter and
+        # silently matched none of its branches. idToggled -> change_mode below is the live path,
+        # and it fires for keyboard-driven changes too, which idClicked does not
         self.ui.btn_coords.toggled.connect(
             lambda: self.editor.track_mouse_position(self.ui.btn_coords.isChecked())
         )
@@ -518,8 +523,10 @@ class Editor(QDialog):
         if code == QDialog.Accepted:
             # Get newly created roi
             rois = auto_edit_dialog.extracted_roi
-            # Remove all involved old roi
-            self.roi.remove_rois(auto_edit_dialog.deletion_list)
+            # Remove all involved old roi. by_hash, because deletion_list holds hashes -- the
+            # comment below has always said so, but add_existing_nuclei_centers used to append
+            # whole ROI objects, which remove_rois happened to accept and editor.delete did not
+            self.roi.remove_rois_by_hash(auto_edit_dialog.deletion_list)
             # extend, not append: deletion_list is a LIST of roi ids, and appending nested it, so
             # the membership test in delete_items_in_list never matched its contents and
             # Inserter.delete_roi_from_database received a list where sqlite expects a scalar
@@ -665,10 +672,14 @@ class Editor(QDialog):
         """
         Method to change the editor mode
 
+        :param id_: The id of the toggled button, assigned explicitly in initialize_ui:
+                    0 view, 1 add, 2 edit
+        :param checked: Whether that button became the checked one
         :return: None
         """
         if checked:
-            self.editor.change_mode(abs(id_) - 3)
+            # -1 view, 0 add, 1 edit -- EditorView's numbering, which starts one lower
+            self.editor.change_mode(id_ - 1)
 
     def set_status(self, status: str) -> None:
         """
@@ -695,7 +706,11 @@ class AutoEdit(QDialog):
         self.img_item = pg.ImageItem()
         self.plot_item = pg.PlotItem()
         self.main_map = self.get_main_map(main.shape, self.roi)
-        self.edm = ndi.distance_transform_edt(main)
+        # cast, because distance_transform_edt is typed as returning the distances, the indices,
+        # both, or None, depending on its two boolean flags -- a union the checker cannot narrow
+        # from the call. With the defaults (return_distances=True, return_indices=False) it
+        # returns exactly one array, which is what every use of self.edm here assumes
+        self.edm: np.ndarray = cast(np.ndarray, ndi.distance_transform_edt(main))
         self.map_index = 0
         # Create a working map to enable undo
         self.temp_main = np.copy(self.main)
@@ -990,12 +1005,18 @@ class AutoEdit(QDialog):
         for roi in self.roi:
             # Get the center of the roi
             pos = roi.calculate_dimensions()["center"]
-            center = self.get_center_at_position(pos[1], pos[0], roi.id)
+            # hash(roi), not roi.id: ROI.__init__ sets id to None and only __hash__ fills it in,
+            # so roi.id is None for any ROI nothing has hashed yet -- and `if item.reference:`
+            # in perform_adjusted_watershed then skips the center silently. hash() is also what
+            # the deletion list holds, so the reference and the list entry are the same value
+            center = self.get_center_at_position(pos[1], pos[0], hash(roi))
             # Check if roi is inside the editing rectangle
             if y <= pos[0] <= y + height:
                 if x <= pos[1] <= x + width:
-                    # Add the ROI to the deletion list
-                    self.deletion_list.append(roi)
+                    # The HASH, not the ROI object. This list is declared List[int] and its two
+                    # consumers both want identifiers -- editor.delete feeds
+                    # Inserter.delete_roi_from_database, which needs a scalar id
+                    self.deletion_list.append(hash(roi))
                     # Add the center to plot
                     self.add_center_to_plot(center)
 
@@ -1090,10 +1111,13 @@ class AutoEdit(QDialog):
         """
         # Get rect of the editing rectangle
         x, y, width, height = self.get_editing_rectangle_dimensions()
-        # Crop the image
-        self.temp_edm = self.temp_edm[y: y + height, x: x + width]
-        self.temp_map = self.temp_map[y: y + height, x: x + width]
-        self.temp_main = self.temp_main[y: y + height, x: x + width]
+        # Sliced from the PRISTINE arrays, not from temp_*. Cropping temp_* in place made the
+        # operation non-idempotent: btn_lock is checkable, so locking, unlocking and locking again
+        # cropped an already-cropped array and the second rectangle was interpreted relative to
+        # the first crop's origin
+        self.temp_edm = self.edm[y: y + height, x: x + width]
+        self.temp_map = self.main_map[y: y + height, x: x + width]
+        self.temp_main = self.main[y: y + height, x: x + width]
         self.img_item.setImage(self.temp_main)
 
     def enable_spinboxes(self, enabled: bool = True) -> None:
@@ -1151,9 +1175,13 @@ class AutoEdit(QDialog):
         """
         self.enable_buttons(True)
         self.enable_spinboxes(True)
-        self.temp_main = self.main
-        self.temp_map = self.main_map
-        self.temp_edm = self.edm
+        # np.copy, as the constructor does. Assigning the originals directly made temp_* aliases
+        # of them, so every later in-place edit -- the watershed working map, the center removal --
+        # wrote straight through into self.main / self.main_map / self.edm, and there was nothing
+        # left to restore from the next time round
+        self.temp_main = np.copy(self.main)
+        self.temp_map = np.copy(self.main_map)
+        self.temp_edm = np.copy(self.edm)
         self.show_map()
         # Re-Add all removed centers
         for item in self.centers:
@@ -1216,6 +1244,9 @@ class AutoEditGraphicsView(pg.GraphicsView):
             self.raw_mouse_position = ev.pos()
             self.mapped_mouse_position.setX(round(new_pos.x()))
             self.mapped_mouse_position.setY(round(new_pos.y()))
+        # This override only RECORDS the position; without handing the event on, pyqtgraph never
+        # saw it and pan/drag in the auto-edit view did nothing at all
+        super().mouseMoveEvent(ev)
 
     def get_items_at_mapped_position(self, pos: QPointF, matching_type: Any) -> List[Any]:
         """
@@ -1258,6 +1289,8 @@ class AutoEditCenterItem(QGraphicsEllipseItem):
 
 
 class ExperimentDialog(QDialog):
+    #: Characters of an experiment's details shown in the list label before it is cut short
+    DETAILS_LABEL_LENGTH = 47
 
     def __init__(self, data: Dict[str, List[str]] = None, *args, **kwargs):
         """
@@ -1377,7 +1410,15 @@ class ExperimentDialog(QDialog):
                     self.img_model.appendRow(item)
                 self.enable_experiment_buttons()
 
-    def accepted(self):
+    def save_changes(self):
+        """
+        Method to write the dialog's pending changes back
+
+        Named save_changes, NOT accepted: QDialog already has an `accepted` SIGNAL, and defining a
+        method of that name over it makes the signal unreachable -- `dialog.accepted.connect(...)`
+        would silently connect to nothing. This is invoked directly by the caller, which only ever
+        worked because of that shadowing.
+        """
         # Change the information for the last selected experiment
         sel = self.ui.lv_experiments.selectionModel().selectedIndexes()
         if sel:
@@ -1419,7 +1460,7 @@ class ExperimentDialog(QDialog):
             item_data = self.img_model.itemFromIndex(index).data()
             exp_data = exp.data()
             # list.remove() mutates in place and returns None -- assigning its result set the
-            # experiment's key list to None, and accepted() then raised TypeError iterating it.
+            # experiment's key list to None, and save_changes() then raised TypeError iterating it.
             # Guarded rather than bare: a key that is not in the list is not an error here, the
             # image is simply not associated any more
             if item_data["key"] in exp_data["keys"]:
@@ -1476,37 +1517,43 @@ class ExperimentDialog(QDialog):
         # Iterate over all experiments
         for exp in sorted(exps):
             imgs = self.requester.get_associated_images_for_experiment(exp)
-            # Check if all the necessary images are loaded
-            if all(elem in self.data["keys"] for elem in imgs):
-                name = exp
-                details, notes = self.requester.get_info_for_experiment(exp)
-                groups = {}
-                group_str = ""
-                # Get the paths corresponding to the saved keys
-                img_paths = [self.data["paths"][y] for y in [self.data["keys"].index(x) for x in imgs]]
-                for key in imgs:
-                    group = self.requester.get_associated_group_for_image(key, exp)
-                    if group in groups:
-                        groups[group].append(key)
-                    else:
-                        groups[group] = [key]
-                for group in groups.keys():
-                    group_str += f"{group}({len(groups[group])}) "
-                add_item = QStandardItem()
-                text = f"{name}\n{details[:47]}...\nGroups: {group_str}"
-                add_item.setText(text)
-                add_item.setData(
-                    {
-                        "name": name,
-                        "details": details,
-                        "notes": notes,
-                        "groups": groups,
-                        "keys": imgs,
-                        "image_paths": img_paths
-                    }
-                )
-                add_item.setIcon(Icon.get_icon("CLIPBOARD"))
-                self.exp_model.appendRow(add_item)
+            # EVERY experiment is listed. This used to be guarded by
+            # `if all(elem in self.data["keys"] for elem in imgs)`, so an experiment with a single
+            # image missing from the currently loaded list vanished from the dialog completely --
+            # the user saw an empty or short list and nothing saying why
+            missing = [x for x in imgs if x not in self.data["keys"]]
+            name = exp
+            details, notes = self.requester.get_info_for_experiment(exp)
+            groups = {}
+            # Only the loaded images have a path here -- .index() raises for the others. The
+            # unloaded ones stay in "keys" and in "groups" regardless, because save_changes
+            # re-writes both from those, and dropping them would silently delete the
+            # association just because the image was not open
+            img_paths = [self.data["paths"][self.data["keys"].index(x)]
+                         for x in imgs if x not in missing]
+            for key in imgs:
+                group = self.requester.get_associated_group_for_image(key, exp)
+                if group in groups:
+                    groups[group].append(key)
+                else:
+                    groups[group] = [key]
+            add_item = QStandardItem()
+            label = self.create_experiment_label(name, details, groups)
+            if missing:
+                label += f"\n({len(missing)} of {len(imgs)} images not loaded)"
+            add_item.setText(label)
+            add_item.setData(
+                {
+                    "name": name,
+                    "details": details,
+                    "notes": notes,
+                    "groups": groups,
+                    "keys": imgs,
+                    "image_paths": img_paths
+                }
+            )
+            add_item.setIcon(Icon.get_icon("CLIPBOARD"))
+            self.exp_model.appendRow(add_item)
 
     def enable_experiment_buttons(self, enable: bool = True) -> None:
         """
@@ -1579,17 +1626,38 @@ class ExperimentDialog(QDialog):
         self.ui.te_details.setEnabled(enable)
         self.ui.te_notes.setEnabled(enable)
 
-    def create_groups_string(self, groups: List[str]) -> str:
+    @staticmethod
+    def create_groups_string(groups) -> str:
         """
         Method to create the groups string
 
-        :param groups: A list of all groups
+        :param groups: The groups, either a mapping of group name to its image keys or an
+                       iterable of (name, keys) pairs
         :return: The groups string
         """
-        groups_str = ""
-        for name, keys in groups:
-            groups_str += f"{name} ({len(keys)})"
-        return groups_str
+        pairs = groups.items() if hasattr(groups, "items") else groups
+        # Space-separated. The mapping form used to be built inline with a trailing space while
+        # this method produced "A (3)B (2)" with no separator at all, so the same data rendered
+        # two different ways depending on which one the caller happened to reach
+        return " ".join(f"{name} ({len(keys)})" for name, keys in pairs)
+
+    @classmethod
+    def create_experiment_label(cls, name: str, details: str, groups) -> str:
+        """
+        Method to build the label shown for an experiment in the list
+
+        One helper for what were three hand-built copies of the same f-string, each of which
+        appended "..." unconditionally -- including when the details were shorter than the cut-off
+        and nothing had actually been truncated.
+
+        :param name: The experiment name
+        :param details: The experiment details, truncated for display
+        :param groups: The groups, in either form create_groups_string accepts
+        :return: The label
+        """
+        shortened = f"{details[:cls.DETAILS_LABEL_LENGTH]}..." \
+            if len(details) > cls.DETAILS_LABEL_LENGTH else details
+        return f"{name}\n{shortened}\nGroups: {cls.create_groups_string(groups)}"
 
     def store_current_information_to_item(self, item: QStandardItem) -> None:
         """
@@ -1621,11 +1689,7 @@ class ExperimentDialog(QDialog):
                 "image_paths": img_paths
             }
         )
-        group_str = ""
-        for group in groups.keys():
-            group_str += f"{group}({len(groups[group])}) "
-        text = f"{name}\n{details[:47]}...\nGroups: {group_str}"
-        item.setText(text)
+        item.setText(self.create_experiment_label(name, details, groups))
 
     def clear_experiment_screen(self) -> None:
         """
@@ -1686,12 +1750,8 @@ class ExperimentDialog(QDialog):
                 groups[data["name"]] = data["keys"]
             exp_data["groups"] = groups
             exp.setData(exp_data)
-            group_str = ""
-            for group in groups.keys():
-                group_str += f"{group}({len(groups[group])}) "
-            exp.setText(
-                f"{exp_data['name']}\n{exp_data['details'][:47]}...\nGroups: {group_str}"
-            )
+            group_str = self.create_groups_string(groups)
+            exp.setText(self.create_experiment_label(exp_data["name"], exp_data["details"], groups))
             self.ui.le_groups.setText(group_str)
 
 
@@ -2528,9 +2588,9 @@ class GroupDialog(QDialog):
 
         :return: None
         """
-        # Create connection and cursor to db
-        conn = sqlite3.connect(Paths.database)
-        curs = conn.cursor()
+        # No sqlite3.connect here: this method opened a connection and a cursor, used neither --
+        # every write below goes through self.inserter -- and never closed either, leaving a
+        # handle on the database for the garbage collector to deal with
         # Get selected group
         index = self.ui.lv_groups.selectionModel().selectedIndexes()[0].row()
         item = self.group_model.item(index)

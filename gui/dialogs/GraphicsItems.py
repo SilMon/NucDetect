@@ -1,5 +1,4 @@
 import threading
-import time
 from typing import List, Iterable, Dict, Optional, Sequence, Tuple
 
 import numpy as np
@@ -8,7 +7,7 @@ from PyQt5 import QtCore
 from PyQt5.QtCore import QRectF, Qt, QPointF
 from PyQt5.QtGui import QColor, QKeyEvent, QMouseEvent
 from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem
-from pyqtgraph import HistogramLUTItem, ColorBarItem
+from pyqtgraph import ColorBarItem
 from skimage.draw import ellipse
 
 from core.DataProcessing import create_lg_lut, automatic_colorbalance
@@ -105,19 +104,6 @@ class EditorView(pg.GraphicsView):
         # rather than by the items themselves -- see ROIItem.set_hovered for why
         self.hovered_item: Optional["ROIItem"] = None
         self.shift_down = False
-        """
-        # Add histogram widget to this view
-        self.hist = HistogramLUTItem(image=self.img_item)
-        # Get the image shape
-        shape = image.shape
-        # Calculate the size and position of the widget
-        xpos = shape[1] + 25
-        ypos = int(shape[0] * 0.25)
-        xsize = int(shape[1] * 0.2)
-        ysize = int(shape[0] * 0.5)
-        self.hist.setGeometry(xpos, ypos, xsize, ysize)
-        self.plot_item.addItem(self.hist)
-        """
         # Add a color bar widget
         self.color_bar = ColorBarItem(values=(np.amin(image[...,0]), np.amax(image[..., 0])))
         # Link the bar to the image
@@ -391,12 +377,11 @@ class EditorView(pg.GraphicsView):
                     self.hovered_item = None
                 self.selected_item = None
                 self._dialog.enable_editing_widgets(False)
-        elif event.key() == Qt.Key_1:
-            self.change_mode(-1)
-        elif event.key() == Qt.Key_2:
-            self.change_mode(0)
-        elif event.key() == Qt.Key_3:
-            self.change_mode(1)
+        # Keys 1/2/3 are deliberately NOT bound here. Editor.keyPressEvent binds them to
+        # set_mode(), which checks the corresponding toolbar button and lets the button group
+        # drive change_mode -- so the toolbar and the mode stay in step. Binding them here as well
+        # called change_mode() directly, leaving the buttons showing the previous mode, and which
+        # of the two handlers ran depended on which widget had focus
 
     def keyReleaseEvent(self, event: QKeyEvent) -> None:
         super().keyReleaseEvent(event)
@@ -586,7 +571,6 @@ class EditorView(pg.GraphicsView):
         """
         new_roi = []
         for item in self.roi_items:
-            start = time.time()
             if item.changed:
                 if item not in self.temp_items:
                     continue
@@ -800,17 +784,6 @@ class ROIDrawer:
         "nucleus_manual": pg.mkPen(color="#d67c22", width=3, style=QtCore.Qt.DashLine),
         "removed": pg.mkPen(color="w", width=3)
     }
-    """MARKERS = [
-        pg.mkPen(color="r", width=3),  # Red
-        pg.mkPen(color="g", width=3),  # Green
-        pg.mkPen(color="b", width=3),  # Blue
-        pg.mkPen(color="c", width=3),  # Cyan
-        pg.mkPen(color="m", width=3),  # Magenta
-        pg.mkPen(color="y", width=3),  # Yellow
-        pg.mkPen(color="k", width=3),  # Black
-        pg.mkPen(color="w", width=3),  # White
-        pg.mkPen(color=(0, 0, 0, 0))  # Invisible
-    ]"""
 
     @staticmethod
     def change_opacity(items: Iterable[QGraphicsItem],
@@ -1065,7 +1038,12 @@ class ROIItem(QGraphicsEllipseItem):
         :param view: The view to remove the item from
         :return: None
         """
-        view.scene().removeItem(self.edit_rect)
+        # The edit rectangle is built by add_to_view / initialize but only put INTO the scene by
+        # enable_editing, so an item the user never selected has one that belongs to no scene.
+        # Removing it unconditionally made Qt log a warning per item -- and adding it in
+        # add_to_view instead is not the fix: enable_editing would then add the same item twice
+        if self.edit_rect is not None and self.edit_rect.scene() is not None:
+            view.scene().removeItem(self.edit_rect)
         view.scene().removeItem(self)
 
     def is_active(self, active: bool = True) -> None:

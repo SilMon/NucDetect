@@ -833,7 +833,7 @@ class NucDetect(QMainWindow):
         exp_dialog = ExperimentDialog(data=data)
         code = exp_dialog.exec()
         if code == QDialog.Accepted:
-            exp_dialog.accepted()
+            exp_dialog.save_changes()
 
     def _show_loading_dialog(self) -> None:
         """
