@@ -513,26 +513,37 @@ class Requester(DatabaseInteractor):
         """
         return [x[0] for x in self.connector.get_view_from_table("md5", "images")]
 
-    def get_experiment_for_image(self, image: str) -> str:
+    def get_experiment_for_image(self, image: str) -> Union[str, None]:
         """
         Method to get the associated experiment for the given image
 
         :param image: md5 hash of the image
-        :return: The name of the experiment
+        :return: The name of the experiment, or None if the image is not in the images table
         """
-        return self.get_info_for_image(image)[14]
+        info = self.get_info_for_image(image)
+        return info[14] if info is not None else None
 
-    def get_info_for_image(self, image: str) -> Tuple[Union[str, int, float, None]]:
+    def get_info_for_image(self, image: str) -> Union[Tuple[Union[str, int, float, None], ...], None]:
         """
         Method to get all saved information for the given image
 
+        Returns None -- not an empty tuple -- when the image is not in the table. The empty tuple
+        that stood here until 2026-08-15 was meant as a "no such image" signal but no caller could
+        act on it: every one of them indexes the result, so a miss raised IndexError rather than
+        evaluating falsy, and a miss was distinguishable from a row only by the exception. That is
+        what the "throws error after analyse all" TODO removed from above this query described --
+        reproduced against a sandbox database, `get_info_for_image("unregistered")[8]` raises
+        `IndexError: tuple index out of range`.
+
+        The row is the images table in schema order: md5, year, month, day, hour, minute, channels,
+        width, height, x_res, y_res, unit, analysed, settings, experiment, modified.
+
         :param image: The md5 hash of the image
-        :return: The information as list of strings
+        :return: The image's row, or None if there is no such image
         """
-        # TODO throws error after analyse all
         info = self.connector.get_view_from_table(Specifiers.ALL, "images",
                                                   ("md5", Specifiers.EQUALS, image))
-        return info[0] if info else ()
+        return info[0] if info else None
 
     def check_if_image_was_analysed(self, image: str) -> bool:
         """

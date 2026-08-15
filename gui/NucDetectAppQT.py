@@ -1100,6 +1100,13 @@ class NucDetect(QMainWindow):
                              percent, maxi, "")
         self.enable_signal.emit(True)
         self.status_signal.emit(False)
+        # Advance to the next image, which is what makes _select_next_image live in production for
+        # the first time -- until 2026-08-15 both emits passed first=True, so a method named
+        # "select next image" only ever selected the first one. Working through a folder image by
+        # image is the normal use, and it should not need a click between each one. Stops at the
+        # last image rather than wrapping; the batch path below still emits True, because after a
+        # whole run the first image is the sensible place to be
+        self.selec_signal.emit(False)
 
     def _report_analysis_progress(self, fraction: float, message: str) -> None:
         """
@@ -1249,8 +1256,18 @@ class NucDetect(QMainWindow):
         req = Requester()
         ins = Inserter()
         try:
-            # Get info for image and check if image was analysed already
-            if req.get_info_for_image(key)[8]:
+            # A miss means analysis reached an image that add_image_information_to_database never
+            # registered. Until 2026-08-15 this indexed the result unconditionally, so that case
+            # raised IndexError here rather than being checkable -- there is nothing saved to
+            # delete for such an image, so it is skipped.
+            #
+            # NOTE index 8 is the image HEIGHT, not the analysed flag, which is index 12. The
+            # branch is therefore taken for every image whose height is non-zero, i.e. all of
+            # them. Behaviour deliberately left as it stands: deleting before re-inserting is
+            # right on re-analysis and merely redundant on a first one, and changing which column
+            # is tested changes what the database does. The index is NOT a typo introduced here.
+            info = req.get_info_for_image(key)
+            if info is not None and info[8]:
                 # Delete saved data
                 ins.delete_existing_image_data(key)
             # Check if image should be added to experiment
@@ -1565,27 +1582,47 @@ class NucDetect(QMainWindow):
 
     def _select_next_image(self, first: bool = False) -> None:
         """
-        Method to select the next image in the list of loaded images. Selects the first image if no image is selected
+        Method to select the next image in the list of loaded images. Selects the first image if no
+        image is selected
 
-        Note: nothing currently asks for the *next* image -- both selec_signal emits pass
-        first=True -- so the advance path below is dead in production. Before wiring it up, settle
-        what "next" means on the last image: it wraps to the first here only because that is what
-        the code did before, which is not the same as it being right.
+        STOPS AT THE LAST IMAGE rather than wrapping round to the first. In a batch run wrapping
+        re-selects an already-analysed image, which reads as though the run started over. The
+        pre-2026-08-15 code wrapped, but only because that was the behaviour it had always had.
 
-        :param first: Indicates if the first image in the list should be selected
+        :param first: Select the first image rather than advancing. Used when nothing is selected
+                      yet and when a batch run finishes
         :return: None
         """
-        max_ind = self.img_list_model.rowCount()
+        model = self.img_list_model
         cur_ind = self.ui.list_images.currentIndex()
-        # An empty list has nothing to select, and index(0, 0) would be invalid
-        if not max_ind:
+        # An empty list has nothing to select, and index(0, 0) would be invalid.
+        #
+        # rowCount() counts REVEALED items, so a model that has paths but has not been asked for a
+        # page yet reports 0 and this returns. That is deliberate: fetching a page here to make
+        # first=True "work" was tried on 2026-08-15 and reverted, because analyze() emits
+        # selec_signal(True) when nothing is selected, and revealing a row there let it pick an
+        # image on the user's behalf and open the settings dialog -- defeating the guard that
+        # Analyse with no selection must abort rather than choose. In the running application the
+        # view is visible and Qt fetches the first page itself, so nothing is lost by returning.
+        if not model.rowCount():
             return
-        # rowCount() is a count, currentIndex().row() an index. Comparing them directly asked the
-        # model for index(rowCount, 0) while on the last row -- one past the end. Qt does not raise
-        # for that, it returns an invalid index, and select()/setCurrentIndex() read an invalid
-        # index as "no item", so the selection was silently cleared instead of wrapping round
-        wrap = first or not cur_ind.isValid() or cur_ind.row() >= max_ind - 1
-        nex = self.img_list_model.index(0 if wrap else cur_ind.row() + 1, 0)
+        if first or not cur_ind.isValid():
+            row = 0
+        else:
+            # rowCount() counts REVEALED items -- it returns the lazy-loading cursor, not
+            # len(self._paths) -- so being on the last row does not mean being on the last image.
+            # Reveal the next page before deciding, or advancing would stop at the first page
+            # boundary and look like the end of the list
+            if cur_ind.row() >= model.rowCount() - 1 and model.canFetchMore(QModelIndex()):
+                model.fetchMore(QModelIndex())
+            # rowCount() is a count, currentIndex().row() an index. Comparing them directly asked
+            # the model for index(rowCount, 0) while on the last row -- one past the end. Qt does
+            # not raise for that, it returns an invalid index, and select()/setCurrentIndex() read
+            # an invalid index as "no item", so the selection was silently cleared
+            if cur_ind.row() >= model.rowCount() - 1:
+                return
+            row = cur_ind.row() + 1
+        nex = model.index(row, 0)
         self.ui.list_images.selectionModel().select(nex, QItemSelectionModel.Select)
         self.ui.list_images.setCurrentIndex(nex)
 
