@@ -816,10 +816,17 @@ class NucDetect(QMainWindow):
         """
         Method to load saved data from the database
 
+        The worker below reads self.cur_img, so it depends on the selection not changing while it
+        runs. That is what disabling the list and the buttons here buys: the two paths that clear
+        cur_img are the selection handler and clear/reload, and all of them are unreachable while
+        the list is disabled. The invariant is stated because it is the only thing standing between
+        _load_saved_data and a TypeError on a worker thread; a guard there would silently skip the
+        load instead, which is worse than not having the problem.
+
         :param experiment: Name of the experimental data to load. None if only image data should be loaded
         :return: None
         """
-        # Disable Buttons and list during loading
+        # Disable Buttons and list during loading -- see the note above, this is load-bearing
         self.enable_buttons(state=False)
         self.ui.list_images.setEnabled(False)
         load_thread = threading.Thread(target=self._run_guarded,
@@ -1325,7 +1332,12 @@ class NucDetect(QMainWindow):
             rois.idents.insert(name[1], name[2])
         processed_roi = self.process_roi_database_entries(entries)
         rois.add_rois(processed_roi)
-        LOGGER.info("Loaded %d roi of image %s from database", len(rois), self.cur_img["file_name"])
+        # Named from the md5 this method was asked for, not from cur_img: the two are the same image
+        # on every current call path, but reaching for the window's selection to label data fetched
+        # by hash is a coupling this method does not need -- and it was the only thing here that
+        # could fail when nothing is selected
+        LOGGER.info("Loaded %d roi of image %s from database", len(rois),
+                    self.hash_to_name.get(md5, md5))
         return rois
 
     def process_roi_database_entries(self, entries: List[Tuple], ) -> List[ROI]:
@@ -1790,6 +1802,14 @@ class NucDetect(QMainWindow):
         :return: None
         """
         self._assert_main_thread("reflect_item_status_changes")
+        # This one IS reachable with no selection, unlike the other cur_img dereferences in this
+        # class, which all sit under the `if self.cur_img:` in on_image_selection_change.
+        # analyze_image ends with enable_signal.emit(True) immediately followed by
+        # status_signal.emit(False); both are queued to the GUI thread and run in separate event
+        # loop iterations, so the UI is live again before this slot runs and the user can deselect
+        # in between. There is nothing to reflect onto in that state
+        if not self.cur_img:
+            return
         # Check if image was modified
         analysed, modified = Util.check_if_image_was_analysed_and_modified(self.cur_img["key"])
         self.cur_img["analysed"] = analysed

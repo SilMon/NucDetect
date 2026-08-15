@@ -2007,6 +2007,12 @@ class StatisticsDialog(QDialog):
 
         :return: Dictionary with each group and its activation status
         """
+        # list_widget is None only between initialize_ui and _add_group_boxes, both of which run in
+        # __init__ with nothing in between -- and _add_group_boxes has no early return, so it always
+        # creates the widget. Asserted rather than branched on: a `if self.list_widget` guard here
+        # would return an empty group list on a state that cannot occur, which reads as "no groups
+        # are selected" and silently disables the statistics button instead of failing
+        assert self.list_widget is not None, "_add_group_boxes must run before the groups are read"
         active_groups = []
         for row in range(self.list_widget.count()):
             item = self.list_widget.item(row)
@@ -2015,6 +2021,13 @@ class StatisticsDialog(QDialog):
         return active_groups
 
     def get_group_ordering(self):
+        """
+        Method to get the current top-to-bottom order of the group list
+
+        :return: The group names, in the order the user has dragged them into
+        """
+        # Same invariant as get_comparison_groups -- see the note there
+        assert self.list_widget is not None, "_add_group_boxes must run before the groups are read"
         ordering = []
         for row in range(self.list_widget.count()):
             ordering.append(self.list_widget.item(row).text())
