@@ -18,7 +18,7 @@ if _PROJECT_ROOT not in sys.path:
 from concurrent.futures import ProcessPoolExecutor
 from copy import copy
 from threading import Thread
-from typing import Union, Dict, Iterable, List, Tuple, Any, Callable
+from typing import Union, Dict, Iterable, List, Sequence, Tuple, Any, Callable
 
 # --- Import order below is load-bearing: TensorFlow MUST be imported before PyQt5 ---------
 # On Windows, loading Qt's DLLs first exhausts the process' static TLS budget. TensorFlow's
@@ -1869,8 +1869,12 @@ class ImageListModel(QAbstractListModel):
     Class to lazy load needed image list items
     """
 
-    def __init__(self, parent=None, paths: List[str] = [], page_size: int = 30):
+    def __init__(self, parent=None, paths: Sequence[str] = (), page_size: int = 30):
         """
+        Sequence, not List, and the default is an empty tuple: set_paths copies what it is given
+        into a list the model owns, so nothing here ever mutates the argument. A mutable [] default
+        would be shared across every instance constructed without paths.
+
         :param paths: The image paths that are the basis of the items
         """
         super().__init__(parent)
@@ -1878,9 +1882,10 @@ class ImageListModel(QAbstractListModel):
         self.set_paths(paths)
         self._cache = {}
 
-    def set_paths(self, paths: List[str]):
+    def set_paths(self, paths: Sequence[str]):
         # Store a copy: the model owns its path list, so callers mutating their own list
-        # (e.g. NucDetect.loaded_files) cannot silently desynchronise the model behind its back
+        # (e.g. NucDetect.loaded_files) cannot silently desynchronise the model behind its back.
+        # Sequence rather than List for the same reason -- the argument is only read and copied
         self.beginResetModel()
         self._paths = list(paths)
         self._current_paths = self._paths

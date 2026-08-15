@@ -416,11 +416,15 @@ class Requester(DatabaseInteractor):
     Class to request data from the database
     """
 
-    def get_all_settings(self) -> List[Tuple[Union[str, int, float]]]:
+    def get_all_settings(self) -> List[Tuple[Union[str, int, float], ...]]:
         """
         Method to load the settings from the database
 
-        :return: The saved settings
+        The trailing ellipsis in the return type is load-bearing: Tuple[X] means a tuple of exactly
+        one element, and each row here carries the three settings columns.
+
+        :return: One row per setting, as (key, value, type) -- the last two are what
+                 Connector.convert_to_type needs to rebuild the stored value
         """
         return self.connector.get_view_from_table(Specifiers.ALL, "settings")
 
@@ -783,10 +787,17 @@ class Inserter(DatabaseInteractor):
     Class to modify the database
     """
 
-    def add_new_image(self, md5: str, year: str, month: str, day: str, hour: str, minute: str,
-                      channels: int, width: int, height: int, xres: str, yres: str, res_unit: str) -> None:
+    def add_new_image(self, md5: str, year: int, month: int, day: int, hour: int, minute: int,
+                      channels: int, width: int, height: int, xres: float, yres: float,
+                      res_unit: str) -> None:
         """
         Method to add a new image to the database
+
+        The date parts and the resolutions are numbers, not strings. ImageLoader.get_image_data
+        produces year..minute as int (from datetime.timetuple()) and x_res/y_res as float (from
+        _rational_to_scale), and create_tables.sql declares the five date columns INTEGER. The
+        annotations said str until 2026-08-15, which nothing caught because SQLite accepts either.
+
         :param md5: The md5 hash of the image
         :param year: The year the image was created
         :param month: The month the image was created
@@ -795,7 +806,7 @@ class Inserter(DatabaseInteractor):
         :param minute: The minute the image was created
         :param channels: Number of image channels
         :param width: The width of the image
-        :param height: The height of the imge
+        :param height: The height of the image
         :param xres: The x resolution of the image
         :param yres: The y resolution of the image
         :param res_unit: The resolution unit of the image
