@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="UTF-8") as fh:
 
 setuptools.setup(
     name="NucDetect",
-    version="1.6.0.dev33",
+    version="1.6.0.dev35",
     description=("Module to quantify intranuclear foci on basis of "
                  "immunofluorescence images."),
     author="Romano Weiss",
@@ -15,9 +15,7 @@ setuptools.setup(
     # SPDX expression, replacing the deprecated "License ::" classifier that setuptools warns about
     # on every build. The classifier was the ONLY machine-readable statement that NucDetect is
     # GPLv3, so removing it without this would have left the distribution with no licence metadata
-    # at all. "or-later" is Romano's ruling (2026-08-15): licence.txt is the verbatim GPLv3 text
-    # and its "or any later version" wording appears only in the "How to Apply These Terms"
-    # appendix, which is boilerplate, so nothing in the repository settled it either way.
+    # at all.
     license="GPL-3.0-or-later",
     classifiers=[
         "Development Status :: 5 - Production/Stable",

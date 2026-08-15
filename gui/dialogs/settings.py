@@ -1,8 +1,8 @@
 # pyright: reportAttributeAccessIssue=false
 # ^ PyQt5's stubs nest enum members inside their enum class (Qt.ItemDataRole.DisplayRole)
 # while the C++ runtime also exposes them flat on Qt, which is what this file uses. The
-# code is correct PyQt5 and a rewrite to the scoped form was declined -- PyQt6 is not
-# planned (Romano, 2026-08-13). Suppressed at FILE level only because every hit of this
+# code is correct PyQt5 and a rewrite to the scoped form was declined -- a PyQt6 migration
+# is not planned. Suppressed at FILE level only because every hit of this
 # rule here is that stub artefact; measured, not assumed. Re-check with the rule enabled
 # before adding attribute access to a non-Qt object in this file.
 import json
@@ -483,7 +483,7 @@ class SettingsDialog(QDialog):
                 # values["data"], a JSON list. The branch used to do values.split(",") -- but
                 # "values" is a JSON object in every menu point that carries one, so that was an
                 # AttributeError the moment it ran, and no menu point declares type "combo" at all,
-                # so it never did. Kept rather than deleted (Romano, 2026-08-13) and made to read
+                # so it never did. Kept rather than deleted, and made to read
                 # from "values" the way every other branch does. A list, not a delimited string:
                 # JSON has lists, and SettingsComboBox iterates what it is given -- which is how
                 # verify_gui_dialogs' checks 23/24 already construct it

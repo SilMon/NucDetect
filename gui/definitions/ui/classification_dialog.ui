@@ -19,7 +19,6 @@
 	background-color: rgba(22, 42, 75 , 255);
 	font-size: 14px;
  	text-align: center;
-    display: inline-block;
 }
 
 QLabel{

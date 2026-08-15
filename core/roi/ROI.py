@@ -67,6 +67,10 @@ class ROI:
         self.marked = marked
         self.detection_method = method
         self.match = match
+        # NOT a flag, despite this initial value. MapComparator writes hash() of the focus this one
+        # co-localizes with, so the attribute -- and the roi.co_localized column it is written to --
+        # holds False for most ROI and a 64-bit identifier for the rest. `if roi.colocalized` is
+        # therefore not a safe test for "is co-localized": it is false for a partner hashing to 0.
         self.colocalized = False
         self.id = None
 

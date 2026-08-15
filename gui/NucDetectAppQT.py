@@ -676,11 +676,11 @@ class NucDetect(QMainWindow):
         for cell in cells:
             item = QStandardItem(cell)
             item.setTextAlignment(QtCore.Qt.AlignCenter)
-            # The result table is a read-only view of the database -- Romano, 2026-08-15. Rows built
-            # by this path used to be left selectable and editable while create_table_row set
-            # neither, so a row was editable in place while an analysis streamed it in and read-only
-            # once the image was reselected. Any edit made in that window was silently discarded on
-            # the next rebuild, since nothing writes the table back
+            # The result table is a read-only view of the database. Rows built by this path used to
+            # be left selectable and editable while create_table_row set neither, so a row was
+            # editable in place while an analysis streamed it in and read-only once the image was
+            # reselected. Any edit made in that window was silently discarded on the next rebuild,
+            # since nothing writes the table back
             item.setSelectable(False)
             item.setEditable(False)
             # Derive the sort key once here, not on every comparison the sorting performs
