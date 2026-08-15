@@ -229,8 +229,6 @@ class NucDetect(QMainWindow):
         self.detector = Detector()
         # Initialize needed variables
         self.reg_images = []
-        # Contains the displayed table data
-        self.data = None
         # Contains data for the associated experiment
         self.cur_exp = None
         # Contains data of the loaded image
@@ -558,9 +556,6 @@ class NucDetect(QMainWindow):
         self.ui.table_results.resizeColumnsToContents()
         # setRowCount(0) above drops every span, so they are rebuilt for the rows just added
         self._update_result_table_spans()
-        data = [header]
-        data.extend(rows)
-        self.data = data
 
     def _update_result_table_spans(self, *_) -> None:
         """
@@ -1897,6 +1892,13 @@ class ImageListModel(QAbstractListModel):
         """
         Method to remove all paths and cached items from the model
 
+        Clearing is a model reset rather than a removeRows() call on purpose: nesting
+        beginRemoveRows (inside removeRows) within a beginResetModel block is an invalid Qt call
+        sequence. Anything that needs to empty the model must come through here.
+
+        Note Qt drops the selection on a reset WITHOUT emitting selectionChanged, so callers are
+        responsible for resyncing anything derived from the selection.
+
         :return: None
         """
         self.beginResetModel()
@@ -1941,16 +1943,6 @@ class ImageListModel(QAbstractListModel):
         self.current_index = max(0, self.current_index - count)
         self.endRemoveRows()
         return True
-
-    def clear_data(self) -> None:
-        """
-        Method to clear the stored data
-
-        :return: None
-        """
-        # Delegates to clear(): nesting beginRemoveRows (inside removeRows) within a
-        # beginResetModel block would be an invalid Qt call sequence
-        self.clear()
 
     def canFetchMore(self, parent: QModelIndex) -> bool:
         if parent.isValid():

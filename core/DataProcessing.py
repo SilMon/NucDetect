@@ -84,9 +84,8 @@ def _perform_statistical_analysis_on_group(data: pd.DataFrame, pair: Tuple[str, 
 
     :param data: The underlying data as pandas DataFrame
     :param pair: The pair to check
-    :return: The statistical data as pandas DataFrame
+    :return: One result row as a tuple -- the caller collects these and builds the DataFrame
     """
-    rows = []
     # Boolean indexing rather than DataFrame.query -- see the note in the caller: group names
     # are user-supplied and are not safe to interpolate into a query expression.
     control = data[data["Group"] == pair[0][0]]["Foci"].to_numpy()
