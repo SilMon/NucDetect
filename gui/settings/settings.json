@@ -44,7 +44,7 @@
     {
       "id": "logging",
       "title": "Logging",
-      "desc": "Activates console logging during analysis",
+      "desc": "Writes detailed analysis messages to the log file",
       "type": "check",
       "value": 2,
       "values": {

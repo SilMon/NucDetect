@@ -53,7 +53,11 @@ class QualityTester:
     Class to check the quality of found nuclei and foci
     """
     STANDARD_SETTINGS = {
-        "max_channel_intensity": 255,
+        # A "max_channel_intensity": 255 entry stood here until 2026-08-15. Nothing in core/ or
+        # gui/ ever read it, and its name promised exactly the per-dtype ceiling that
+        # _get_values_dict already computes correctly as np.iinfo(channel.dtype).max -- so wiring
+        # it up as written would have reintroduced the 8-bit cap that the "16-bit images are
+        # silently reduced to 8-bit precision" fix removed. Deleted rather than connected.
         "max_focus_overlap": .75,
         "min_main_area": 1000,
         "max_main_area": 30000,
