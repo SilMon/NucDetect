@@ -1662,8 +1662,8 @@ class NucDetect(QMainWindow):
         exp_sel_dial = ExperimentSelectionDialog()
         code = exp_sel_dial.exec()
         if code == QDialog.Accepted:
-            exp = exp_sel_dial.sel_exp
-            active_channels = exp_sel_dial.active_channels
+            exp = exp_sel_dial.get_selected_experiment()
+            active_channels = exp_sel_dial.get_active_channels()
             stat_dialog = StatisticsDialog(experiment=exp,
                                            active_channels=active_channels)
             stat_dialog.exec()

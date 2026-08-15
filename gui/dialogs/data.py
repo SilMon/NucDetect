@@ -1800,8 +1800,8 @@ class StatisticsDialog(QDialog):
         exp_sel_dial = ExperimentSelectionDialog()
         code = exp_sel_dial.exec()
         if code == QDialog.Accepted:
-            self.experiment = exp_sel_dial.sel_exp
-            self.active_channels = exp_sel_dial.active_channels
+            self.experiment = exp_sel_dial.get_selected_experiment()
+            self.active_channels = exp_sel_dial.get_active_channels()
             # Load the data from the new experiment
             self.get_group_data()
             # Reset the group boxes

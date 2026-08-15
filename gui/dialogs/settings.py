@@ -7,6 +7,7 @@
 # before adding attribute access to a non-Qt object in this file.
 import json
 import os
+from functools import partial
 from typing import Any, Dict, NotRequired, Optional, TypedDict, Union, List
 
 from PyQt5 import uic, QtCore
@@ -105,6 +106,34 @@ class AnalysisSettingsDialog(QDialog):
                 "background_reduction_method": self.cmbx_bckg.currentText()
             }
         }
+
+    def on_channel_activation_changed(self, index: int, active: bool) -> None:
+        """
+        Method to keep the main-channel selection consistent with the active channels
+
+        :param index: The index of the channel whose activation changed, bound at connect time
+        :param active: The new activation state
+        :return: None
+        """
+        button = self.channel_main[index]
+        button.setEnabled(active)
+        if active or not button.isChecked():
+            return
+        # setExclusive(False) is required: unchecking an auto-exclusive button is a no-op while
+        # the group is exclusive, so setChecked(False) alone would leave the invalid state intact
+        group = self.ui.main_channel_btn_group
+        group.setExclusive(False)
+        button.setChecked(False)
+        group.setExclusive(True)
+        # Hand the nomination to the first channel that is still active, rather than leaving the
+        # group empty -- an empty group falls back to channel 0, which may itself be inactive
+        for other, checkbox in zip(self.channel_main, self.channel_activation):
+            if checkbox.isChecked():
+                other.setChecked(True)
+                LOGGER.info(f"Channel {index} was deactivated while nominated as the main "
+                            f"channel -- the main channel is now {self.channel_main.index(other)}")
+                return
+        LOGGER.warning("No channel is active -- the analysis has no main channel to run on")
 
     def get_main_channel_index(self) -> int:
         """
@@ -210,15 +239,20 @@ class AnalysisSettingsDialog(QDialog):
         self.ui.cbx_bckg.toggled.connect(self.ui.cmbx_bckg.setEnabled)
         # Bind checkboxes for individual channels to the corresponding text edit
         self.ui.cbx_one.toggled.connect(self.ui.le_one.setEnabled)
-        self.ui.cbx_one.toggled.connect(self.ui.rbtn_one.setEnabled)
         self.ui.cbx_two.toggled.connect(self.ui.le_two.setEnabled)
-        self.ui.cbx_two.toggled.connect(self.ui.rbtn_two.setEnabled)
         self.ui.cbx_three.toggled.connect(self.ui.le_three.setEnabled)
-        self.ui.cbx_three.toggled.connect(self.ui.rbtn_three.setEnabled)
         self.ui.cbx_four.toggled.connect(self.ui.le_four.setEnabled)
-        self.ui.cbx_four.toggled.connect(self.ui.rbtn_four.setEnabled)
         self.ui.cbx_five.toggled.connect(self.ui.le_five.setEnabled)
-        self.ui.cbx_five.toggled.connect(self.ui.rbtn_five.setEnabled)
+        # Kept for the activation handler, which needs both lists after initialize_ui returns
+        self.channel_activation = channels
+        self.channel_main = channel_main
+        # Deactivating a channel must CLEAR its main-channel radio button, not merely disable it.
+        # Qt leaves a disabled radio button checked, so the dialog could return main=2 together
+        # with activated[2]=False, and Detector then indexed the filtered channel list with an
+        # index built for the full one -- running the analysis on a channel the user never
+        # nominated, with nothing in the log or the results recording the substitution
+        for index, checkbox in enumerate(channels):
+            checkbox.toggled.connect(partial(self.on_channel_activation_changed, index))
 
 class SettingsDialog(QDialog):
     """

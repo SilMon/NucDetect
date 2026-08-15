@@ -6,7 +6,7 @@
 # rule here is that stub artefact; measured, not assumed. Re-check with the rule enabled
 # before adding attribute access to a non-Qt object in this file.
 from functools import partial
-from typing import List, Any, Tuple
+from typing import Dict, List, Any, Tuple
 
 from PyQt5 import QtCore, uic
 from PyQt5.QtCore import QItemSelectionModel
@@ -41,11 +41,14 @@ class ExperimentSelectionDialog(QDialog):
 
         :return: None
         """
-        self.setWindowTitle("Experiment Selection")
-        self.setWindowIcon(Icon.get_icon("LOGO"))
         # Annotated Any deliberately -- see the comment on the same assignment in
         # gui/NucDetectAppQT.py: uic has no stubs, so the inferred type is "Unknown | None"
         self.ui: Any = uic.loadUi(Paths.ui_experiment_selection_dial, self)
+        # AFTER loadUi, not before: loadUi applies the windowTitle stored in the .ui file, so a
+        # title set ahead of it is discarded. ImageSelectionDialog below has always done it in
+        # this order
+        self.setWindowTitle("Experiment Selection")
+        self.setWindowIcon(Icon.get_icon("LOGO"))
         self.setWindowFlags(self.windowFlags() |
                             QtCore.Qt.WindowSystemMenuHint |
                             QtCore.Qt.WindowMinMaxButtonsHint)
@@ -123,6 +126,22 @@ class ExperimentSelectionDialog(QDialog):
             item.deleteLater()
         self.check_boxes.clear()
 
+    def get_selected_experiment(self) -> str:
+        """
+        Method to get the experiment selected in this dialog
+
+        :return: The name of the selected experiment
+        """
+        return self.sel_exp
+
+    def get_active_channels(self) -> Dict[str, bool]:
+        """
+        Method to get the channels activated in this dialog
+
+        :return: Dictionary mapping channel name to its activation state
+        """
+        return self.active_channels
+
 
 class ImageSelectionDialog(QDialog):
     """
@@ -193,8 +212,11 @@ class ImageSelectionDialog(QDialog):
                 item = self.img_model.item(row)
                 # Select marked images
                 if item.data()["key"] in self.selected_images:
-                    # Create index
-                    index = self.img_model.createIndex(row, 0)
+                    # index(), not createIndex(): createIndex builds an index with no internal
+                    # pointer, so itemFromIndex() and model.data() on it both return None. The
+                    # selection itself works either way -- QItemSelectionModel matches by
+                    # row/column -- but anything that later resolves the index to its item does not
+                    index = self.img_model.index(row, 0)
                     # Select image
                     self.ui.lv_images.selectionModel().select(index, QItemSelectionModel.Select)
 

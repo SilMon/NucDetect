@@ -96,6 +96,21 @@ class Detector:
         self.release_transient_state()
         analysis_settings = deepcopy(settings["analysis_settings"])
         analysis_settings["log"] = self.add_log_message
+        # Checked here, before the image is read, because it is a settings defect and not an image
+        # one -- there is no point loading a 3 GB stack to reject the configuration afterwards.
+        #
+        # The dialog now clears a channel's main-channel radio button when the channel is
+        # deactivated, but the dialog is not the only source of a settings dictionary: the
+        # verification harnesses build them directly and so could any future caller. Without this,
+        # main_index further down is computed for a channel that is not in the filtered list, and
+        # the analysis runs on a neighbouring channel with nothing in the log, the result table or
+        # the exported data recording that the selection was reinterpreted
+        if not 0 <= settings["main"] < len(settings["activated"]):
+            raise ValueError(f"Main channel index {settings['main']} is outside the "
+                             f"0-{len(settings['activated']) - 1} range of configured channels")
+        if not settings["activated"][settings["main"]]:
+            raise ValueError(f"Channel {settings['main']} is nominated as the main channel but is "
+                             f"not active -- activate it or nominate an active channel")
         # Each stage reports 0..1 within its own slice of the bar and never learns its position in
         # the whole run. Weights are measured, per method -- see core/progress.py
         bounds = stage_bounds(analysis_settings["method"])
