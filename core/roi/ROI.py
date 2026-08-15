@@ -117,7 +117,7 @@ class ROI:
             self.id = int(f"0x{md5.hexdigest()}", 0)
         return self.id
 
-    def intersect_with(self, roi: ROI) -> ROI:
+    def intersect_with(self, roi: ROI) -> bool:
         """
         Method to reduce this roi to the area it shares with another ROI
 
@@ -125,20 +125,24 @@ class ROI:
         the same focus as seen by the two detection methods, and what survives is the area both
         methods agree on.
 
+        Refusing to intersect is correct behaviour, not an error: two ROI that do not overlap have
+        no agreement area. What was wrong until 2026-08-15 is that the refusal was SILENT -- this
+        method discarded intersect_area's bool and returned self either way, so a caller could not
+        tell the two apart. It returns the bool now.
+
         :param roi: The roi to intersect this one with
-        :return: Reference to self
+        :return: True if the two overlapped and this ROI was reduced to the shared area. False
+                 leaves this ROI's area and detection_method untouched.
         """
-        if isinstance(roi, ROI):
-            if roi.ident == self.ident:
-                if not self.associated:
-                    self.associated = roi.associated
-                self.intersect_area(roi.area)
-            else:
-                warnings.warn(f"The ROI {hash(self)} and  "
-                              f"{hash(roi)} have different channel IDs!({self.ident}, {roi.ident})")
-            return self
-        else:
+        if not isinstance(roi, ROI):
             raise ValueError(f"{type(roi)} is not a ROI")
+        if roi.ident != self.ident:
+            warnings.warn(f"The ROI {hash(self)} and  "
+                          f"{hash(roi)} have different channel IDs!({self.ident}, {roi.ident})")
+            return False
+        if not self.associated:
+            self.associated = roi.associated
+        return self.intersect_area(roi.area)
 
     def get_minimal_representation(self) -> Tuple[int, int, int, int]:
         """

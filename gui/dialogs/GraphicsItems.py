@@ -444,7 +444,8 @@ class EditorView(pg.GraphicsView):
         """
         # Get click position
         pos = self.mpos
-        if self.active_channel == self.main_channel:
+        is_nucleus = self.active_channel == self.main_channel
+        if is_nucleus:
             item = NucleusItem(round(pos.x() - 45 * self.size_factor), round(pos.y() - 23 * self.size_factor),
                                round(90 * self.size_factor), round(46 * self.size_factor),
                                round(pos.x()), round(pos.y()),
@@ -454,12 +455,6 @@ class EditorView(pg.GraphicsView):
                 ROIDrawer.MARKERS["nucleus_manual"],
                 ROIDrawer.MARKERS["invisible"]
             )
-            item.add_to_view(self.plot_item)
-            self._dialog.set_mode(2)
-            self.change_mode(1)
-            self.selected_item = item
-            item.enable_editing(True)
-            self._dialog.setup_editing(item)
         else:
             item = FocusItem(round(pos.x() - 2 * self.size_factor), round(pos.y() - 2 * self.size_factor),
                              round(4 * self.size_factor), round(4 * self.size_factor),
@@ -471,8 +466,18 @@ class EditorView(pg.GraphicsView):
         item.changed = True
         self.roi_items.append(item)
         self.temp_items.append(item)
-        # Add item to view
+        # ONE add, on ONE path. The nucleus branch used to add here as well as in the tail, because
+        # enable_editing(True) below needs the item to be in the view already -- it attaches the
+        # editing rectangle to the item's scene. Qt refused the second add and printed a warning,
+        # so nothing was duplicated, but the two call sites disagreed about whose job the add was.
         item.add_to_view(self.plot_item)
+        if is_nucleus:
+            self._dialog.set_mode(2)
+            # change_mode clears any previously selected item, so it must run BEFORE the assignment
+            self.change_mode(1)
+            self.selected_item = item
+            item.enable_editing(True)
+            self._dialog.setup_editing(item)
 
     def mouse_moved(self, event: QMouseEvent) -> None:
         pos = event[0]

@@ -105,15 +105,18 @@ class MapComparator:
         for ind_a, ind_b in pairs:
             focus_a = foci_a[ind_a]
             focus_b = foci_b[ind_b]
-            # Reduces focus_a to the area both detection methods agree on, and marks it "Merged"
-            # only if they overlap at all -- an empty intersection leaves it untouched and both
-            # foci are kept separately below.
-            focus_a.intersect_with(focus_b)
-            if focus_a.detection_method != "Merged":
+            # Reduces focus_a to the area both detection methods agree on. An empty intersection
+            # leaves it untouched and both foci are kept separately.
+            #
+            # The return value is asked directly rather than inferred from detection_method, which
+            # is what this did until 2026-08-15. That test was a proxy for "did the intersection
+            # happen", and a wrong one: a focus already carrying "Merged" from an earlier pass would
+            # have been counted as merged again even when this intersection was refused.
+            if focus_a.intersect_with(focus_b):
+                merged_foci.append(focus_a)
+            else:
                 added_a.append(focus_a)
                 added_b.append(focus_b)
-            else:
-                merged_foci.append(focus_a)
         self.log(f"Channel: {foci_a[0].ident}\t{sum(matched_a)} matching foci ({sum(unmatched_a)} unmatched)"
                  f" found and merged in {time.time() - start: .3f} secs")
         return merged_foci + added_a + added_b
