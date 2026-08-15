@@ -1,6 +1,5 @@
 import threading
-import time
-from typing import List, Iterable, Dict, Tuple
+from typing import List, Iterable, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 import pyqtgraph as pg
@@ -8,7 +7,7 @@ from PyQt5 import QtCore
 from PyQt5.QtCore import QRectF, Qt, QPointF
 from PyQt5.QtGui import QColor, QKeyEvent, QMouseEvent
 from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem
-from pyqtgraph import HistogramLUTItem, ColorBarItem
+from pyqtgraph import ColorBarItem
 from skimage.draw import ellipse
 
 from core.DataProcessing import create_lg_lut, automatic_colorbalance
@@ -19,6 +18,13 @@ from core.database.connections import Requester, Inserter
 from gui.loader import ROIDrawerTimer
 
 LOGGER = get_logger(__name__)
+
+# Channel index meaning "the composite view", i.e. no single channel is active. Named
+# rather than written as a literal because the producer and the consumer used to disagree:
+# show_channel passed image.shape[2] and ROIDrawer.change_channel tested against 3, so the
+# two only agreed for a 3-channel image. With four or five channels every ROI failed the
+# channel test and the composite view of a 5-channel image drew no foci at all
+COMPOSITE_CHANNEL = -1
 
 
 class EditorView(pg.GraphicsView):
@@ -47,7 +53,10 @@ class EditorView(pg.GraphicsView):
         :param y_scale: Scale factor for y-axis
         """
         super(EditorView, self).__init__()
-        self.parent = parent
+        # Named _dialog, not parent: "parent" is a QWidget method, and assigning over it made
+        # every view.parent() call raise "'Editor' object is not callable". Same convention as
+        # StatisticsDialogMenuBar._dialog in gui/dialogs/data.py
+        self._dialog = parent
         self.active_channels = {x[1]: x[0] for x in active_channels}
         self.size_factor = size_factor
         self.high_contrast = high_contrast
@@ -59,7 +68,10 @@ class EditorView(pg.GraphicsView):
         self.image_adj = None
         self.hcimg = None
         self.hcimg_adj = None
-        self.active_channel: int = None
+        # A channel NAME, not an index -- it is used as a key into self.active_channels (~:390),
+        # which maps name -> index. The previous ": int" annotation named the value on the other
+        # side of that lookup
+        self.active_channel: Optional[str] = None
         self.roi: ROIHandler = roi
         self.requester = Requester()
         self.inserter = Inserter()
@@ -74,36 +86,24 @@ class EditorView(pg.GraphicsView):
         self.plot_vb = self.plot_item.vb
         # Set proxy to detect mouse movement
         self.proxy = pg.SignalProxy(self.scene().sigMouseMoved, rateLimit=45, slot=self.mouse_moved)
-        self.mpos: QPointF = None
+        self.mpos: Optional[QPointF] = None
         # Activate mouse tracking for widget
         self.setMouseTracking(True)
         self.setCentralWidget(self.plot_item)
         self.draw_additional = True
         # List of existing items
-        self.loading_timer: ROIDrawerTimer = None
-        self.items = []
+        self.loading_timer: Optional[ROIDrawerTimer] = None
+        self.roi_items = []
         self.draw_roi()
         # List for newly created items
         self.temp_items = []
         # List for items that should be removed
         self.delete: List[int] = []
-        self.item_changes = {}
-        self.selected_item: ROIItem = None
+        self.selected_item: Optional[ROIItem] = None
+        # The item currently under the cursor, highlighted with its hover pen. Tracked here
+        # rather than by the items themselves -- see ROIItem.set_hovered for why
+        self.hovered_item: Optional["ROIItem"] = None
         self.shift_down = False
-        self.saved_values: Dict = None
-        """
-        # Add histogram widget to this view
-        self.hist = HistogramLUTItem(image=self.img_item)
-        # Get the image shape
-        shape = image.shape
-        # Calculate the size and position of the widget
-        xpos = shape[1] + 25
-        ypos = int(shape[0] * 0.25)
-        xsize = int(shape[1] * 0.2)
-        ysize = int(shape[0] * 0.5)
-        self.hist.setGeometry(xpos, ypos, xsize, ysize)
-        self.plot_item.addItem(self.hist)
-        """
         # Add a color bar widget
         self.color_bar = ColorBarItem(values=(np.amin(image[...,0]), np.amax(image[..., 0])))
         # Link the bar to the image
@@ -112,11 +112,11 @@ class EditorView(pg.GraphicsView):
         self.current_channel = "Composite"
         # Add a scale bar to this view
         self.scale_microns = 10
-        self.scale = pg.ScaleBar(size=self.scale_microns * self.x_scale, width=15)
-        self.scale.setParentItem(self.plot_item.getViewBox())
-        self.scale.text.setPlainText(f"{self.scale_microns} µm")
-        self.scale.anchor((1, 1), (1, 1), offset=(-50, -50)) # Position set to bottom right
-        self.addItem(self.scale)
+        self.scale_bar = pg.ScaleBar(size=self.scale_microns * self.x_scale, width=15)
+        self.scale_bar.setParentItem(self.plot_item.getViewBox())
+        self.scale_bar.text.setPlainText(f"{self.scale_microns} µm")
+        self.scale_bar.anchor((1, 1), (1, 1), offset=(-50, -50)) # Position set to bottom right
+        self.addItem(self.scale_bar)
         self.initialize_wb_and_hc()
 
     def initialize_wb_and_hc(self) -> None:
@@ -151,7 +151,7 @@ class EditorView(pg.GraphicsView):
         :return: None
         """
         self.draw_additional = state
-        ROIDrawer.draw_additional_items(self.items, self.draw_additional)
+        ROIDrawer.draw_additional_items(self.roi_items, self.draw_additional)
 
     def show_channel(self, channel: str) -> None:
         """
@@ -164,23 +164,37 @@ class EditorView(pg.GraphicsView):
         if self.selected_item:
             self.selected_item.enable_editing(False)
             self.selected_item = None
-            self.parent.enable_editing_widgets(False)
+            self._dialog.enable_editing_widgets(False)
         self.active_channel = channel
-        if channel == "Composite":
-            self.img_item.setImage(self.image if not self.adjust_whitebalance else self.image_adj)
-            #self.hist.setLevelMode("rgba")
-            index = self.image.shape[2]
-        else:
-            # Check to which index the name corresponds
-            index = self.active_channels[channel]
-            #self.hist.setLevelMode("mono")
-            if self.high_contrast:
-                self.img_item.setImage(self.hcimg[..., index] if
-                                       not self.adjust_whitebalance else self.hcimg_adj[..., index])
-            else:
-                self.img_item.setImage(self.image[..., index] if
-                                       not self.adjust_whitebalance else self.image_adj[..., index])
-        ROIDrawer.change_channel(self.items, index, self.draw_additional)
+        # Check to which index the name corresponds
+        index = COMPOSITE_CHANNEL if channel == "Composite" else self.active_channels[channel]
+        displayed = self.get_displayed_image(index)
+        self.img_item.setImage(displayed)
+        # Recalibrate the colour bar to what is actually on screen. It was built once from
+        # channel 0 in __init__ and never updated, so every other channel was read against
+        # channel 0's range -- a wrong quantitative readout, not a cosmetic one
+        self.color_bar.setLevels((float(np.amin(displayed)), float(np.amax(displayed))))
+        ROIDrawer.change_channel(self.roi_items, index, self.draw_additional)
+
+    def get_displayed_image(self, index: int) -> np.ndarray:
+        """
+        Method to get the image data currently shown for the given channel
+
+        :param index: The channel index, or COMPOSITE_CHANNEL for the composite view
+        :return: The image data displayed for that channel
+        """
+        # The composite branch used to ignore high contrast entirely and always show self.image,
+        # so the composite view was the one place the checkbox did nothing. The variants are
+        # computed in a background thread and are still None while the editor starts up, hence
+        # the fallbacks -- handing None to setImage is not an improvement over ignoring the flag
+        image = self.image
+        if self.high_contrast and self.hcimg is not None:
+            image = self.hcimg
+            if self.adjust_whitebalance and self.hcimg_adj is not None:
+                image = self.hcimg_adj
+        elif self.adjust_whitebalance and self.image_adj is not None:
+            image = self.image_adj
+        return image if index == COMPOSITE_CHANNEL else image[..., index]
 
     def calculate_hc_and_wb_images(self):
         """
@@ -191,8 +205,8 @@ class EditorView(pg.GraphicsView):
         self.image_adj = automatic_colorbalance(self.image)
         self.hcimg = self.create_high_contrast_image()
         self.hcimg_adj = automatic_colorbalance(self.hcimg)
-        self.parent.enable_white_balance_mode()
-        self.parent.enable_high_contrast_mode()
+        self._dialog.enable_white_balance_mode()
+        self._dialog.enable_high_contrast_mode()
 
     def create_high_contrast_image(self) -> np.ndarray:
         """
@@ -200,15 +214,24 @@ class EditorView(pg.GraphicsView):
 
         :return: None
         """
+        # lut[channel], not a per-pixel loop: img[y][x][c] = lut[channel[y][x]] is exactly this
+        # expression written out one pixel at a time. Measured, with the numba JIT warmed up
+        # first, identical output in every case:
+        #     1024x1024x3 uint8   1.35 s -> 0.023 s
+        #     2048x2048x5 uint16 10.28 s -> 0.237 s
+        # This runs in a background thread, so what it delays is the high-contrast checkbox
+        # becoming enabled, not the editor opening
+        #
+        # The array stays float64. The finding that prompted this also proposed taking the dtype
+        # from the source image to save memory -- that is wrong and would corrupt the output:
+        # create_lg_lut maps a value n to (n*n + n) // 2, so a 16-bit channel produces entries up
+        # to ~2.1e9 and an 8-bit one up to 32640. Neither fits the source dtype
         img = np.zeros(shape=self.image.shape)
         for c in range(img.shape[2]):
             channel = self.image[..., c]
             # Create a lut
-            lut = create_lg_lut(np.amax(channel))
-            # Iterate over the image
-            for y in range(img.shape[0]):
-                for x in range(img.shape[1]):
-                    img[y][x][c] = lut[channel[y][x]]
+            lut = np.asarray(create_lg_lut(np.amax(channel)), dtype=np.float64)
+            img[..., c] = lut[channel]
         return img
 
     def toggle_high_contrast_mode(self, toggle: bool) -> None:
@@ -272,24 +295,30 @@ class EditorView(pg.GraphicsView):
         :return: None
         """
         for ident in idents:
-            for item in self.items:
+            for item in self.roi_items:
                 if item.roi_id not in self.delete:
                     if item.roi_id == ident:
                         item.changed = True
 
     def clear_and_update(self) -> None:
         """
-        Method to display new roi
+        Method to redraw the roi of this view from the handler
 
-        :param rois: The new roi to show
         :return: None
         """
-        # Get list of changed items
-        changed = [x.roi_id for x in self.items]
-        # Clear item lists
-        self.items.clear()
+        # Taken out of the SCENE, not just out of the bookkeeping list. items.clear() on its own
+        # left every ellipse on the plot, so draw_roi painted a second full set over the first
+        for item in self.roi_items:
+            item.remove_from_view(self)
+        self.roi_items.clear()
+        # Dropped with the items it could point at -- the highlight is re-established by the next
+        # mouse move
+        self.hovered_item = None
         self.draw_roi()
-        self.mark_as_changed(changed)
+        # Only the items the user actually edited. This used to pass every item's roi_id -- the
+        # list was called "changed" but was built from self.roi_items in full -- so a redraw marked the
+        # whole image as edited
+        self.mark_as_changed([x.roi_id for x in self.temp_items])
         self.show_channel("Composite")
 
     def draw_roi(self) -> None:
@@ -309,10 +338,10 @@ class EditorView(pg.GraphicsView):
 
         :return: None
         """
-        self.parent.ui.prg_loading.setValue(int(self.loading_timer.percentage * 100))
-        self.items.extend(items)
+        self._dialog.ui.prg_loading.setValue(int(self.loading_timer.percentage * 100))
+        self.roi_items.extend(items)
         if round(self.loading_timer.percentage * 100) >= 99:
-            for item in self.items:
+            for item in self.roi_items:
                 item.setVisible(True)
 
     def get_roi_index(self, roi) -> int:
@@ -330,17 +359,29 @@ class EditorView(pg.GraphicsView):
             self.shift_down = True
         if event.key() == Qt.Key_Delete:
             if self.selected_item:
+                item = self.selected_item
                 # Remove item from scene
-                self.selected_item.remove_from_view(self)
+                item.remove_from_view(self)
                 # Add item to deletion list to remove it from the database
-                if self.selected_item.roi_id != -1:
-                    self.delete.append(self.selected_item.roi_id)
-        elif event.key() == Qt.Key_1:
-            self.change_mode(-1)
-        elif event.key() == Qt.Key_2:
-            self.change_mode(0)
-        elif event.key() == Qt.Key_3:
-            self.change_mode(1)
+                if item.roi_id != -1:
+                    self.delete.append(item.roi_id)
+                # Drop it from the bookkeeping too, and stop treating it as selected. Without this
+                # the removed item stayed in self.roi_items and stayed self.selected_item, so a second
+                # Delete appended the same roi_id again and the editing spin boxes went on driving
+                # an item that is no longer in the scene
+                if item in self.roi_items:
+                    self.roi_items.remove(item)
+                if item in self.temp_items:
+                    self.temp_items.remove(item)
+                if item is self.hovered_item:
+                    self.hovered_item = None
+                self.selected_item = None
+                self._dialog.enable_editing_widgets(False)
+        # Keys 1/2/3 are deliberately NOT bound here. Editor.keyPressEvent binds them to
+        # set_mode(), which checks the corresponding toolbar button and lets the button group
+        # drive change_mode -- so the toolbar and the mode stay in step. Binding them here as well
+        # called change_mode() directly, leaving the buttons showing the previous mode, and which
+        # of the two handlers ran depended on which widget had focus
 
     def keyReleaseEvent(self, event: QKeyEvent) -> None:
         super().keyReleaseEvent(event)
@@ -377,7 +418,7 @@ class EditorView(pg.GraphicsView):
         self.selected_item.update_data(
             rect, angle, False
         )
-        self.parent.setup_editing(self.selected_item)
+        self._dialog.setup_editing(self.selected_item)
 
     def select_item_at_mouse_position(self, event: QMouseEvent) -> None:
         """
@@ -393,7 +434,7 @@ class EditorView(pg.GraphicsView):
                 self.selected_item.enable_editing(False)
             self.selected_item = items[-1]
             self.selected_item.enable_editing(True)
-            self.parent.setup_editing(self.selected_item)
+            self._dialog.setup_editing(self.selected_item)
 
     def create_new_item_at_mouse_position(self) -> None:
         """
@@ -414,11 +455,11 @@ class EditorView(pg.GraphicsView):
                 ROIDrawer.MARKERS["invisible"]
             )
             item.add_to_view(self.plot_item)
-            self.parent.set_mode(2)
+            self._dialog.set_mode(2)
             self.change_mode(1)
             self.selected_item = item
             item.enable_editing(True)
-            self.parent.setup_editing(item)
+            self._dialog.setup_editing(item)
         else:
             item = FocusItem(round(pos.x() - 2 * self.size_factor), round(pos.y() - 2 * self.size_factor),
                              round(4 * self.size_factor), round(4 * self.size_factor),
@@ -428,18 +469,46 @@ class EditorView(pg.GraphicsView):
                 ROIDrawer.MARKERS["invisible"]
             )
         item.changed = True
-        self.items.append(item)
+        self.roi_items.append(item)
         self.temp_items.append(item)
         # Add item to view
         item.add_to_view(self.plot_item)
 
     def mouse_moved(self, event: QMouseEvent) -> None:
-        if self.pos_track:
-            pos = event[0]
-            if self.plot_item.sceneBoundingRect().contains(pos):
+        pos = event[0]
+        if self.plot_item.sceneBoundingRect().contains(pos):
+            if self.pos_track:
                 coord = self.plot_vb.mapSceneToView(pos)
                 self.mpos = coord
-                self.parent.set_status(f"X: {coord.x():.2f} Y: {coord.y():.2f}")
+                self._dialog.set_status(f"X: {coord.x():.2f} Y: {coord.y():.2f}")
+            self.update_hovered_item(pos)
+
+    def update_hovered_item(self, scene_pos: QPointF) -> None:
+        """
+        Method to highlight the item lying under the cursor
+
+        :param scene_pos: The cursor position, in scene coordinates
+        :return: None
+        """
+        # Gated on the same conditions under which a click would select an item, so the highlight
+        # shows what the next click would hit -- and so the lookup does not run while the user is
+        # only looking at the image. The items cannot report this themselves: all but the one
+        # being edited are setEnabled(False), and a disabled QGraphicsItem is sent no hover events
+        candidate = None
+        if self.mode == 1 and self.active_channel != "Composite":
+            active_index = self.active_channels[self.active_channel]
+            under_cursor = [x for x in self.scene().items(scene_pos)
+                            if isinstance(x, ROIItem) and x.channel_index == active_index]
+            if under_cursor:
+                # [-1] to match select_item_at_mouse_position, which picks the same one
+                candidate = under_cursor[-1]
+        if candidate is self.hovered_item:
+            return
+        if self.hovered_item is not None:
+            self.hovered_item.set_hovered(False)
+        self.hovered_item = candidate
+        if candidate is not None:
+            candidate.set_hovered(True)
 
     def set_item_opacity(self, opacity: float) -> None:
         """
@@ -448,7 +517,7 @@ class EditorView(pg.GraphicsView):
         :param opacity: The opacity value [0-100]
         :return: None
         """
-        ROIDrawer.change_opacity(self.items, opacity)
+        ROIDrawer.change_opacity(self.roi_items, opacity)
 
     def delete_items_in_list(self) -> None:
         """
@@ -457,7 +526,9 @@ class EditorView(pg.GraphicsView):
         :return: None
         """
         # Remove deleted roi from item list
-        self.items = [x for x in self.items if x.roi_id not in self.delete]
+        self.roi_items = [x for x in self.roi_items if x.roi_id not in self.delete]
+        if self.hovered_item is not None and self.hovered_item not in self.roi_items:
+            self.hovered_item = None
         # Delete items marked for it
         self.delete_roi(self.delete)
 
@@ -468,7 +539,7 @@ class EditorView(pg.GraphicsView):
         :return: List of all created association maps
         """
         # Create list of changed items to ignore during map creation
-        ignore = [x.roi_id for x in self.items if x.changed]
+        ignore = [x.roi_id for x in self.roi_items if x.changed]
         # Also ignore roi that were deleted
         ignore.extend(self.delete)
         # Delete all items that can be ignored from ROIHandler
@@ -499,8 +570,7 @@ class EditorView(pg.GraphicsView):
         :return: None
         """
         new_roi = []
-        for item in self.items:
-            start = time.time()
+        for item in self.roi_items:
             if item.changed:
                 if item not in self.temp_items:
                     continue
@@ -519,16 +589,30 @@ class EditorView(pg.GraphicsView):
                 # Process width/height
                 height = round(item.height)
                 width = round(item.width)
-                height = height / 2 + 1 if height % 2 == 0 else item.height / 2
-                width = width / 2 + 1  if width % 2 == 0 else item.width / 2
-                rr, cc = ellipse(item.center[1], item.center[0], height, width,
+                # skimage's ellipse() spans an ODD number of pixels around an integer centre
+                # (2r-1 for integer r), so an even requested size cannot be drawn on one. That is
+                # what the previous `+ 1` was reaching for -- but inflating the radius OVERSHOOTS by
+                # a whole pixel: measured, a size of 4 drew 5 px, 46 drew 47, 90 drew 91, so a
+                # default 4 px focus was stored 25 % larger than it was drawn. Halving alone
+                # undershoots by one instead (4 -> 3). Offsetting the CENTRE by half a pixel is what
+                # actually makes the span even: centre + 0.5 with r = 2.0 draws exactly 4 px.
+                # The old form also mixed the rounded local with the unrounded item.height/width
+                cy = item.center[1] + (0.5 if height % 2 == 0 else 0.0)
+                cx = item.center[0] + (0.5 if width % 2 == 0 else 0.0)
+                rr, cc = ellipse(cy, cx, height / 2, width / 2,
                                  self.image.shape, np.deg2rad(-item.angle))
                 # Get encoded area for item
                 rle = self.encode_new_roi(rr, cc, maps[item.channel_index])
                 if rle:
                     # Create new ROI instance
+                    # method="manual" rather than the constructor default "Not Set": the row
+                    # written to the database below already says "manual", and ROIDrawer.MARKERS
+                    # has no "not set" key -- so a redraw of the handler after a manual focus was
+                    # added raised KeyError: 'not set' in draw_focus, and the in-memory object
+                    # disagreed with its own stored row
                     roi = ROI(channel=self.roi.idents[item.channel_index],
-                              main=isinstance(item, NucleusItem), auto=False)
+                              main=isinstance(item, NucleusItem), auto=False,
+                              method="manual")
                     roi.set_area(rle)
                     roihash = hash(roi)
                     # Foci need to be associated
@@ -700,17 +784,6 @@ class ROIDrawer:
         "nucleus_manual": pg.mkPen(color="#d67c22", width=3, style=QtCore.Qt.DashLine),
         "removed": pg.mkPen(color="w", width=3)
     }
-    """MARKERS = [
-        pg.mkPen(color="r", width=3),  # Red
-        pg.mkPen(color="g", width=3),  # Green
-        pg.mkPen(color="b", width=3),  # Blue
-        pg.mkPen(color="c", width=3),  # Cyan
-        pg.mkPen(color="m", width=3),  # Magenta
-        pg.mkPen(color="y", width=3),  # Yellow
-        pg.mkPen(color="k", width=3),  # Black
-        pg.mkPen(color="w", width=3),  # White
-        pg.mkPen(color=(0, 0, 0, 0))  # Invisible
-    ]"""
 
     @staticmethod
     def change_opacity(items: Iterable[QGraphicsItem],
@@ -726,8 +799,10 @@ class ROIDrawer:
             item.setOpacity(opacity / 100)
     
     @staticmethod
-    def change_channel(items: Iterable[QGraphicsItem],
-                       active_channel: int = 3,
+    # ROIItem, not QGraphicsItem: the body reads channel_index/is_active/update_indicators, none
+    # of which the Qt base class has. Quoted because ROIItem is declared further down this file
+    def change_channel(items: Iterable["ROIItem"],
+                       active_channel: int = COMPOSITE_CHANNEL,
                        draw_additional: bool = False) -> None:
         """
         Method to change the drawing of foci and nuclei according to the active channel
@@ -738,7 +813,7 @@ class ROIDrawer:
         :return: None
         """
         for item in items:
-            if item.channel_index != active_channel and active_channel != 3:
+            if item.channel_index != active_channel and active_channel != COMPOSITE_CHANNEL:
                 if isinstance(item, NucleusItem) and draw_additional:
                     item.is_active(True)
                 else:
@@ -748,7 +823,9 @@ class ROIDrawer:
             item.update_indicators(draw_additional)
 
     @staticmethod
-    def draw_roi(view: pg.PlotItem, rois: Iterable[ROI], idents: Iterable[str]) -> List[QGraphicsEllipseItem]:
+    # idents is a Sequence, not an Iterable: the body calls idents.index(), which no plain
+    # iterable has -- a generator or a set would raise AttributeError at that line
+    def draw_roi(view: pg.PlotItem, rois: Iterable[ROI], idents: Sequence[str]) -> List[QGraphicsEllipseItem]:
         """
         Method to populate the given plot with the roi stored in the handler
 
@@ -819,7 +896,8 @@ class ROIDrawer:
         return nucleus
 
     @staticmethod
-    def draw_additional_items(items: List[QGraphicsItem], draw_additional: bool = True) -> None:
+    # ROIItem for the same reason as change_channel above
+    def draw_additional_items(items: List["ROIItem"], draw_additional: bool = True) -> None:
         """
         Method to activate the drawing of additional items
 
@@ -835,27 +913,25 @@ class ROIDrawer:
 
 class EditingRectangle(QGraphicsRectItem):
 
-    __slots__ = [
-        "width",
-        "height",
-        "center",
-        "x",
-        "y",
-        "pen",
-        "ipen",
-        "color",
-    ]
+    # No __slots__ here or on ROIItem, deliberately. A sip type provides __dict__ from the C++
+    # base, so a __slots__ on a QGraphicsItem subclass cannot remove it and cannot reject an
+    # undeclared attribute -- measured: the slotted subclass still had a __dict__, still accepted
+    # an undeclared name, and was 160 bytes against 144 without, the descriptors being pure
+    # overhead. The one place the memory argument does hold is core/roi/ROI.py's ROI, a plain
+    # class whose __slots__ works and is kept
+    #
+    # pos_x/pos_y/active_pen rather than x/y/pen: QGraphicsItem.x(), .y() and .pen() are real
+    # methods, and assigning attributes over them makes the accessors uncallable
 
     def __init__(self, x, y, cx, cy, width, height):
         super().__init__(x, y, width, height)
-        self.active = False
-        self.x = x
-        self.y = y
+        self.pos_x = x
+        self.pos_y = y
         self.width = width
         self.height = height
         self.center = cx, cy
-        self.ipen = None
-        self.pen = None
+        self.inactive_pen = None
+        self.active_pen = None
         self.color = None
         self.initialize()
 
@@ -865,9 +941,9 @@ class EditingRectangle(QGraphicsRectItem):
 
         :return:  None
         """
-        self.pen = pg.mkPen(color="#bdff00", width=3, style=QtCore.Qt.DashLine)
-        self.ipen = ROIDrawer.MARKERS["invisible"]
-        self.setPen(self.pen)
+        self.active_pen = pg.mkPen(color="#bdff00", width=3, style=QtCore.Qt.DashLine)
+        self.inactive_pen = ROIDrawer.MARKERS["invisible"]
+        self.setPen(self.active_pen)
 
     def activate(self, enable: bool = True) -> None:
         """
@@ -877,53 +953,41 @@ class EditingRectangle(QGraphicsRectItem):
         :return: None
         """
         if enable:
-            self.setPen(self.pen)
+            self.setPen(self.active_pen)
         else:
-            self.setPen(self.ipen)
+            self.setPen(self.inactive_pen)
 
 
 class ROIItem(QGraphicsEllipseItem):
-    __slots__ = [
-        "preview"
-        "changed",
-        "rect",
-        "x",
-        "y",
-        "width",
-        "height",
-        "angle",
-        "method"
-        "channel_index",
-        "roi_id",
-        "orientation",
-        "pen",
-        "center",
-        "indicators",
-        "pen",
-        "iapen",
-        "ipen"
-    ]
+    # The __slots__ block that stood here was deleted on 2026-08-15. It had two missing commas,
+    # fusing "preview" "changed" and "method" "channel_index" so four names were never declared,
+    # and it listed "pen" twice -- but repairing it would have bought nothing: see the note on
+    # EditingRectangle above for the measurement. __slots__ does not work on a sip subclass
 
     def __init__(self, x: int, y: int, width: int, height: float, index: int, roi_ident: int, method: str = "IP"):
         super().__init__(x, y, width, height)
         self.preview = False
         self.changed = False
-        self.rect = QRectF(x, y, width, height)
-        self.x = x
-        self.y = y
+        self.item_rect = QRectF(x, y, width, height)
+        self.pos_x = x
+        self.pos_y = y
         self.width = width
         self.height = height
-        self.center = int(self.x + self.width / 2), int(self.y + self.height / 2)
+        self.center = int(self.pos_x + self.width / 2), int(self.pos_y + self.height / 2)
         self.angle = 0
         self.channel_index = index
         self.roi_id = roi_ident
         self.method = method
-        self.pen: pg.mkPen = None
-        self.ipen: pg.mkPen = None
+        self.active_pen: pg.mkPen = None
+        self.inactive_pen: pg.mkPen = None
+        self.hover_pen: pg.mkPen = None
         self.main_color = None
         self.hover_color = None
-        self.sel_color = None
-        self.view: EditorView = None
+        # Whether this item is currently drawn as active, and whether the cursor is over it.
+        # Both are needed because the pen depends on the two together -- see apply_pen
+        self.active = True
+        self.hovered = False
+        self.view: Optional[EditorView] = None
         self.edit_rect = None
         self.setEnabled(False)
 
@@ -938,9 +1002,9 @@ class ROIItem(QGraphicsEllipseItem):
         :return: None
         """
         if not keep_original:
-            self.rect = rect
-            self.x = rect.x()
-            self.y = rect.y()
+            self.item_rect = rect
+            self.pos_x = rect.x()
+            self.pos_y = rect.y()
             self.width = rect.width()
             self.height = rect.height()
             self.center = rect.center().x(), rect.center().y()
@@ -964,7 +1028,7 @@ class ROIItem(QGraphicsEllipseItem):
 
         :return: None
         """
-        self.update_data(self.rect, self.angle)
+        self.update_data(self.item_rect, self.angle)
         self.preview = False
 
     def remove_from_view(self, view: EditorView) -> None:
@@ -974,7 +1038,12 @@ class ROIItem(QGraphicsEllipseItem):
         :param view: The view to remove the item from
         :return: None
         """
-        view.scene().removeItem(self.edit_rect)
+        # The edit rectangle is built by add_to_view / initialize but only put INTO the scene by
+        # enable_editing, so an item the user never selected has one that belongs to no scene.
+        # Removing it unconditionally made Qt log a warning per item -- and adding it in
+        # add_to_view instead is not the fix: enable_editing would then add the same item twice
+        if self.edit_rect is not None and self.edit_rect.scene() is not None:
+            view.scene().removeItem(self.edit_rect)
         view.scene().removeItem(self)
 
     def is_active(self, active: bool = True) -> None:
@@ -984,7 +1053,37 @@ class ROIItem(QGraphicsEllipseItem):
         :param active: Bool
         :return: None
         """
-        self.setPen(self.pen if active else self.ipen)
+        self.active = active
+        self.apply_pen()
+
+    def set_hovered(self, hovered: bool = True) -> None:
+        """
+        Method to mark this item as lying under the cursor
+
+        Driven by EditorView.mouse_moved rather than by hoverEnterEvent: every item is
+        setEnabled(False) except the one being edited, and a disabled QGraphicsItem receives no
+        hover events at all, even with setAcceptHoverEvents(True) -- measured, not assumed.
+
+        :param hovered: Bool
+        :return: None
+        """
+        if hovered == self.hovered:
+            return
+        self.hovered = hovered
+        self.apply_pen()
+
+    def apply_pen(self) -> None:
+        """
+        Method to draw this item with the pen its current state calls for
+
+        :return: None
+        """
+        if not self.active:
+            self.setPen(self.inactive_pen)
+        elif self.hovered and self.hover_pen is not None:
+            self.setPen(self.hover_pen)
+        else:
+            self.setPen(self.active_pen)
 
     def update_indicators(self, draw: bool = True) -> None:
         """
@@ -993,13 +1092,16 @@ class ROIItem(QGraphicsEllipseItem):
         pass
 
     def set_pen(self, pen: pg.mkPen, inactive_pen: pg.mkPen):
-        self.pen = pen
-        self.ipen = inactive_pen
+        self.active_pen = pen
+        self.inactive_pen = inactive_pen
         # Define needed colors
         self.main_color = pen.color()
-        self.hover_color = self.main_color.lighter(100)
-        self.sel_color = self.main_color.lighter(150)
-        self.setPen(pen)
+        # lighter(160), not lighter(100): 100 % is the identity, so the "hover colour" was the
+        # base colour and hovering could not have looked any different even once something read
+        # it. The hover pen keeps the width and style of the active pen so only the colour moves
+        self.hover_color = self.main_color.lighter(160)
+        self.hover_pen = pg.mkPen(color=self.hover_color, width=pen.width(), style=pen.style())
+        self.apply_pen()
 
     def add_to_view(self, view: EditorView) -> None:
         """
@@ -1010,7 +1112,8 @@ class ROIItem(QGraphicsEllipseItem):
         """
         self.view = view
         view.addItem(self)
-        rect = EditingRectangle(self.x, self.y, self.center[0], self.center[1], self.width, self.height)
+        rect = EditingRectangle(self.pos_x, self.pos_y, self.center[0], self.center[1],
+                                self.width, self.height)
         rect.activate(False)
         self.edit_rect = rect
 
@@ -1037,14 +1140,18 @@ class NucleusItem(ROIItem):
                  angle: float, orientation: Tuple[float, float], index: int, roi_ident: int):
         super().__init__(x, y, width, height, index, roi_ident)
         self.changed = False
-        self.rect = None
+        self.item_rect = None
         self.angle = angle
         self.center = center_x, center_y
         self.orientation = orientation
         self.indicators = []
         self.edit = False
-        self.edit_rect: EditingRectangle = None
-        self.iapen: pg.mkPen = None
+        self.edit_rect: Optional[EditingRectangle] = None
+        # The pen for the major/minor axis indicators. It used to be stored in ipen, which on the
+        # base class means the INACTIVE pen, while the inactive pen lived here in iapen -- so
+        # ROIItem.is_active painted a nucleus with its indicator pen whenever the override below
+        # did not catch it first. One name, one meaning, in both halves of the hierarchy
+        self.indicator_pen: pg.mkPen = None
         self.initialize()
 
     def update_data(self, rect: QRectF, angle: float, keep_original: bool = True) -> None:
@@ -1075,7 +1182,9 @@ class NucleusItem(ROIItem):
         """
         if not active:
             self.edit_rect.activate(active)
-        self.setPen(self.iapen if not active else self.pen)
+        # The pen choice itself is now the base class's, because inactive_pen means the same
+        # thing on both halves of the hierarchy. Only the edit rectangle is special here
+        super().is_active(active)
 
     def update_indicators(self, draw: bool = True) -> None:
         """
@@ -1085,7 +1194,7 @@ class NucleusItem(ROIItem):
         :return: None
         """
         for indicator in self.indicators:
-            indicator.setPen(self.ipen if draw else self.iapen)
+            indicator.setPen(self.indicator_pen if draw else self.inactive_pen)
 
     def set_pens(self, pen: pg.mkPen, indicator_pen: pg.mkPen,
                  inactive_pen: pg.mkPen) -> None:
@@ -1097,12 +1206,12 @@ class NucleusItem(ROIItem):
         :param inactive_pen: The pen to use if this item is set to inactive
         :return: None
         """
-        self.pen = pen
-        self.ipen = indicator_pen
-        self.iapen = inactive_pen
-        self.setPen(self.pen)
+        # set_pen builds the hover pen and applies the right one for the current state; the
+        # indicator pen is the only one specific to this class
+        self.set_pen(pen, inactive_pen)
+        self.indicator_pen = indicator_pen
         for indicator in self.indicators:
-            indicator.setPen(self.ipen)
+            indicator.setPen(self.indicator_pen)
 
     def initialize(self) -> None:
         """
@@ -1124,7 +1233,8 @@ class NucleusItem(ROIItem):
         minor_axis.setPos(cx, cy)
         minor_axis.setParentItem(self)
         minor_axis.setRotation(90)
-        rect = EditingRectangle(self.x, self.y, self.center[0], self.center[1], self.width, self.height)
+        rect = EditingRectangle(self.pos_x, self.pos_y, self.center[0], self.center[1],
+                                self.width, self.height)
         rect.setTransformOriginPoint(rect.sceneBoundingRect().center())
         rect.setRotation(self.angle)
         self.indicators.extend([
@@ -1132,7 +1242,11 @@ class NucleusItem(ROIItem):
             minor_axis,
         ])
         self.edit_rect = rect
-        self.rect = self.boundingRect()
+        # rect(), not boundingRect(): a QGraphicsEllipseItem's bounding rect is the item rect
+        # adjusted outwards by half the pen width -- 1.5 px per side for the 3 px pens used here.
+        # reset_item restores this rect, so cancelling a preview grew the nucleus a little each
+        # time it was cancelled
+        self.item_rect = self.rect()
         self.edit_rect.activate(False)
         self.setEnabled(False)
 
@@ -1147,10 +1261,10 @@ class NucleusItem(ROIItem):
         view.addItem(self)
 
     def __str__(self):
-        return f"NucleusItem X:{self.x} Y:{self.y} W:{self.width} H:{self.height} C:{self.center}"
+        return f"NucleusItem X:{self.pos_x} Y:{self.pos_y} W:{self.width} H:{self.height} C:{self.center}"
 
 
 class FocusItem(ROIItem):
 
     def __str__(self):
-        return f"FocusItem X:{self.x} Y:{self.y} W:{self.width} H:{self.height} C:{self.center}"
+        return f"FocusItem X:{self.pos_x} Y:{self.pos_y} W:{self.width} H:{self.height} C:{self.center}"

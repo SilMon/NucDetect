@@ -1,5 +1,5 @@
 import time
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Sequence
 
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QGraphicsView
@@ -13,7 +13,9 @@ LOGGER = get_logger(__name__)
 
 class Loader(QTimer):
 
-    def __init__(self, items: Iterable, batch_size: int = 25,
+    # Sequence, not Iterable: load_next_batch slices this through create_partial_list and
+    # update_progress calls len() on it, so a one-shot iterator raises TypeError on the first batch
+    def __init__(self, items: Sequence, batch_size: int = 25,
                  batch_time: int = 100, feedback: Callable = None,
                  processing: Callable = None, autostart: bool = True):
         """
@@ -110,6 +112,9 @@ class ROIDrawerTimer(Loader):
         # autostart=False, then start below: process_items dereferences self.view, so the timer must
         # not be running until it is assigned
         super().__init__(items, batch_size, batch_time, feedback, processing, autostart=False)
+        # Re-declared at the narrower type the base stores it under as a plain Sequence: process_items
+        # reads self.items.idents, which only a ROIHandler has
+        self.items: ROIHandler = items
         self.view = view
         self.start(self.batch_time)
 

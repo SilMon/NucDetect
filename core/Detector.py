@@ -8,7 +8,7 @@ import datetime
 import os.path
 import time
 from copy import deepcopy
-from typing import Union, Dict, List, Tuple
+from typing import Any, Union, Dict, List, Tuple
 
 import numpy as np
 
@@ -27,6 +27,11 @@ from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 
 LOGGER = get_logger(__name__)
+
+# The detection methods analyse_image knows how to dispatch. The strings come from the analysis
+# settings dialog, where they are the radio buttons' captions lowercased, so this set and those
+# captions have to agree -- which is exactly why the value is validated rather than assumed
+DETECTION_METHODS = frozenset({"image processing", "u-net", "combined"})
 
 
 class Detector:
@@ -91,13 +96,34 @@ class Detector:
         self.release_transient_state()
         analysis_settings = deepcopy(settings["analysis_settings"])
         analysis_settings["log"] = self.add_log_message
+        # Checked here, before the image is read, because it is a settings defect and not an image
+        # one -- there is no point loading a 3 GB stack to reject the configuration afterwards.
+        #
+        # The dialog now clears a channel's main-channel radio button when the channel is
+        # deactivated, but the dialog is not the only source of a settings dictionary: the
+        # verification harnesses build them directly and so could any future caller. Without this,
+        # main_index further down is computed for a channel that is not in the filtered list, and
+        # the analysis runs on a neighbouring channel with nothing in the log, the result table or
+        # the exported data recording that the selection was reinterpreted
+        if not 0 <= settings["main"] < len(settings["activated"]):
+            raise ValueError(f"Main channel index {settings['main']} is outside the "
+                             f"0-{len(settings['activated']) - 1} range of configured channels")
+        if not settings["activated"][settings["main"]]:
+            raise ValueError(f"Channel {settings['main']} is nominated as the main channel but is "
+                             f"not active -- activate it or nominate an active channel")
         # Each stage reports 0..1 within its own slice of the bar and never learns its position in
         # the whole run. Weights are measured, per method -- see core/progress.py
         bounds = stage_bounds(analysis_settings["method"])
         prg = {stage: progress.sub(*bounds[stage]) for stage in bounds}
         start = time.time()
         prg[LOAD](0.0, "Reading image metadata")
-        imgdat = self.imageloader.get_image_data(path)
+        # Copied into a plain dict on purpose. get_image_data returns an ImageData (a TypedDict
+        # describing image METADATA); the twelve keys added below turn it into the analysis RESULT,
+        # which is a different thing with a different contract -- and ":206" even reuses "channels"
+        # for the channel arrays rather than the channel count. Mutating the metadata type in place
+        # would make ImageData claim to describe both. The copy is one shallow dict; the result
+        # contract itself is still undescribed, which is cause 3 of the type-baseline backlog
+        imgdat: Dict[str, Any] = dict(self.imageloader.get_image_data(path))
         self.analysis_log["Analysed Images"].append(os.path.basename(path))
         self.analysis_log["Messages"][self.analysis_log["Analysed Images"][-1]] = []
         prg[LOAD](0.3, "Hashing image")
@@ -111,6 +137,14 @@ class Detector:
         names = settings["names"]
         main_channel: int = settings["main"]
         detection_method = analysis_settings["method"]
+        # Validated here rather than trusted: the value is a lowercased Qt radio-button caption
+        # (SettingsDialog.get_detection_method), so re-wording a button in Designer silently
+        # produces a method no branch below expects -- and the else further down would then reach
+        # `mlroi`, which is only bound for u-net/combined, as an UnboundLocalError mid-analysis.
+        # stage_bounds() does not catch it either; it falls back silently on an unknown method
+        if detection_method not in DETECTION_METHODS:
+            raise ValueError(f"Unknown detection method '{detection_method}' -- expected one of "
+                             f"{', '.join(sorted(DETECTION_METHODS))}")
         # Channel extraction
         prg[LOAD](0.9, "Splitting channels")
         channels = self.imageloader.get_channels(image)
@@ -185,8 +219,14 @@ class Detector:
                 rois.extend(mlroi)
             # Add the detected nuclei to the list
             rois.extend(main_roi)
-            # Check for quality of roi
-            if rois:
+            # Check for quality of roi. Gated on the setting: the "Analysis - Quality Check"
+            # master switch was written by the settings dialog, stored, and consulted by nothing,
+            # so a user who turned it off to save time still paid for it and a user who read its
+            # description believed their data had not been filtered when it had.
+            # .get with a default, not [..]: analysis_settings comes from a user-editable JSON file
+            # and from callers that build it by hand (the harnesses), so an absent key must mean
+            # "run the check" rather than KeyError out of the middle of an analysis
+            if rois and analysis_settings.get("quality_check", True):
                 prg[QUALITY](0.0, "Checking ROI quality")
                 # The FILTERED names, to match the filtered channels. Passing the raw list paired
                 # each name with the wrong channel array, and since the ROI idents come from the

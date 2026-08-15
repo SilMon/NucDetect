@@ -1,3 +1,10 @@
+# pyright: reportAttributeAccessIssue=false
+# ^ PyQt5's stubs nest enum members inside their enum class (Qt.ItemDataRole.DisplayRole)
+# while the C++ runtime also exposes them flat on Qt, which is what this file uses. The
+# code is correct PyQt5 and a rewrite to the scoped form was declined -- PyQt6 is not
+# planned (Romano, 2026-08-13). Suppressed at FILE level only because every hit of this
+# rule here is that stub artefact; measured, not assumed. Re-check with the rule enabled
+# before adding attribute access to a non-Qt object in this file.
 import datetime
 import os
 import sqlite3
@@ -25,6 +32,28 @@ IMAGE_FORMATS = [
         ".jpg",
         ".bmp"
 ]
+
+
+def load_stylesheet(name: str) -> str:
+    """
+    Method to read a stylesheet from the css directory
+
+    Replaces the bare `open(...).read()` that stood at twelve call sites: no context manager, so on
+    Windows the handle survived until the GC ran, and no encoding, so the file was read in the
+    platform codepage
+
+    :param name: The file name of the stylesheet, e.g. "main.css"
+    :return: The stylesheet, or an empty string if it could not be read
+    """
+    path = os.path.join(Paths.css_dir, name)
+    try:
+        with open(path, "r", encoding="utf-8") as stylesheet:
+            return stylesheet.read()
+    except OSError:
+        # Styling is cosmetic -- an unreadable css file must not take a dialog down with it
+        LOGGER.exception(f"Stylesheet {name} could not be read from {path} -- widget shown unstyled")
+        return ""
+
 
 def create_scroll_area(layout_type: bool = False,
                        widget_resizable: bool = True) -> Tuple[QScrollArea, Union[QVBoxLayout, QHBoxLayout]]:

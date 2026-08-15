@@ -38,7 +38,7 @@
       "type": "check",
       "value": 2,
       "values": {
-        "tristate": 2
+        "tristate": 0
       }
     },
     {

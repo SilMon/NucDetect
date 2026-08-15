@@ -1,19 +1,24 @@
-from typing import List, Any, Tuple
+# pyright: reportAttributeAccessIssue=false
+# ^ PyQt5's stubs nest enum members inside their enum class (Qt.ItemDataRole.DisplayRole)
+# while the C++ runtime also exposes them flat on Qt, which is what this file uses. The
+# code is correct PyQt5 and a rewrite to the scoped form was declined -- PyQt6 is not
+# planned (Romano, 2026-08-13). Suppressed at FILE level only because every hit of this
+# rule here is that stub artefact; measured, not assumed. Re-check with the rule enabled
+# before adding attribute access to a non-Qt object in this file.
+from functools import partial
+from typing import Dict, List, Any, Tuple
 
-import pyqtgraph as pg
-import os
 from PyQt5 import QtCore, uic
 from PyQt5.QtCore import QItemSelectionModel
 from PyQt5.QtGui import QStandardItemModel, QStandardItem
 from PyQt5.QtWidgets import QDialog, QCheckBox, QProgressBar
 
 from gui import Paths
+from gui import Util
 from gui.Util import create_image_item_list_from
 from core.database.connections import Requester
 from gui.definitions.icons import Icon
 from gui.loader import Loader
-
-pg.setConfigOptions(imageAxisOrder='row-major')
 
 
 class ExperimentSelectionDialog(QDialog):
@@ -36,9 +41,14 @@ class ExperimentSelectionDialog(QDialog):
 
         :return: None
         """
+        # Annotated Any deliberately -- see the comment on the same assignment in
+        # gui/NucDetectAppQT.py: uic has no stubs, so the inferred type is "Unknown | None"
+        self.ui: Any = uic.loadUi(Paths.ui_experiment_selection_dial, self)
+        # AFTER loadUi, not before: loadUi applies the windowTitle stored in the .ui file, so a
+        # title set ahead of it is discarded. ImageSelectionDialog below has always done it in
+        # this order
         self.setWindowTitle("Experiment Selection")
         self.setWindowIcon(Icon.get_icon("LOGO"))
-        self.ui = uic.loadUi(Paths.ui_experiment_selection_dial, self)
         self.setWindowFlags(self.windowFlags() |
                             QtCore.Qt.WindowSystemMenuHint |
                             QtCore.Qt.WindowMinMaxButtonsHint)
@@ -47,7 +57,10 @@ class ExperimentSelectionDialog(QDialog):
         # Add experiments to combo box
         for experiment in exps:
             self.ui.cbx_exp.addItem(experiment)
-        self.on_experiment_selection_change(exps[0])
+        # A fresh database has no experiments, and exps[0] made opening this dialog an IndexError
+        # before the window was ever shown -- reachable from the statistics button on a new install
+        if exps:
+            self.on_experiment_selection_change(exps[0])
         self.ui.cbx_exp.currentTextChanged.connect(self.on_experiment_selection_change)
 
     def on_experiment_selection_change(self, current_text) -> None:
@@ -76,18 +89,25 @@ class ExperimentSelectionDialog(QDialog):
                 cbx_temp
             )
             self.active_channels[channel] = True
-            cbx_temp.stateChanged.connect(self.on_checkbox_change)
+            # The check box is bound into the connection rather than recovered with sender().
+            # sender() returns Optional[QObject]: it is None whenever the slot is reached outside
+            # signal delivery -- a direct call, a test, a singleShot wrapper -- and it carries no
+            # text()/isChecked(), so the slot silently depended on being invoked from exactly one
+            # connection. partial binds the widget at connect time, inside the loop, so each box
+            # gets its own
+            cbx_temp.stateChanged.connect(partial(self.on_checkbox_change, cbx_temp))
             self.check_boxes.append(cbx_temp)
         self.sel_exp = exp
 
-    def on_checkbox_change(self) -> None:
+    def on_checkbox_change(self, cbx: QCheckBox, state: int = 0) -> None:
         """
         Method to react to selection changes for checkboxes
 
+        :param cbx: The check box whose state changed, bound at connection time
+        :param state: The Qt check state, as emitted by stateChanged. Unused -- isChecked() is read
+        from the box itself, so the slot behaves the same when called directly
         :return: None
         """
-        # Get the checkbox whose state was changed
-        cbx = self.sender()
         # Change stored information
         self.active_channels[cbx.text()] = cbx.isChecked()
 
@@ -97,9 +117,30 @@ class ExperimentSelectionDialog(QDialog):
 
         :return: None
         """
+        # deleteLater, not just removeWidget: QLayout.removeWidget unparents the widget from the
+        # LAYOUT only. The QCheckBox keeps its parent and stays visible at its last position, so
+        # switching experiment stacked the old channel boxes on top of the new ones
         for item in self.check_boxes:
             self.ui.vb_channels.removeWidget(item)
+            item.setParent(None)
+            item.deleteLater()
         self.check_boxes.clear()
+
+    def get_selected_experiment(self) -> str:
+        """
+        Method to get the experiment selected in this dialog
+
+        :return: The name of the selected experiment
+        """
+        return self.sel_exp
+
+    def get_active_channels(self) -> Dict[str, bool]:
+        """
+        Method to get the channels activated in this dialog
+
+        :return: Dictionary mapping channel name to its activation state
+        """
+        return self.active_channels
 
 
 class ImageSelectionDialog(QDialog):
@@ -117,9 +158,10 @@ class ImageSelectionDialog(QDialog):
         super().__init__(*args, **kwargs)
         self.images: List[str] = sorted(images)
         self.selected_images = selected_images
-        self.img_model = None
-        self.ui = None
-        self.prg_bar = None
+        # No self.ui / self.prg_bar placeholders here: initialize_ui() runs at the end of this
+        # constructor and assigns both, so a None seeded first is never observable -- and it
+        # contradicted the annotations on the real assignments (self.prg_bar: QProgressBar)
+        # No self.img_model placeholder either -- initialize_ui() assigns it unconditionally
         # Define timer for lazy image loading
         self.update_timer = None
         # Create index number for loading
@@ -132,7 +174,9 @@ class ImageSelectionDialog(QDialog):
 
         :return: None
         """
-        self.ui = uic.loadUi(Paths.ui_img_sel_dial, self)
+        # Annotated Any deliberately -- see the comment on the same assignment in
+        # gui/NucDetectAppQT.py: uic has no stubs, so the inferred type is "Unknown | None"
+        self.ui: Any = uic.loadUi(Paths.ui_img_sel_dial, self)
         self.prg_bar: QProgressBar = self.ui.prg_bar
         self.img_model = QStandardItemModel()
         self.ui.lv_images.setModel(self.img_model)
@@ -142,7 +186,7 @@ class ImageSelectionDialog(QDialog):
         self.prg_bar.setMaximum(100)
         self.ui.lv_images.setEnabled(False)
         self.ui.buttonBox.setEnabled(False)
-        self.setStyleSheet(open(os.path.join(Paths.css_dir, "main.css")).read())
+        self.setStyleSheet(Util.load_stylesheet("main.css"))
         self.setWindowIcon(Icon.get_icon("LOGO"))
         self.setWindowTitle("Image Selection Dialog")
         self.setWindowFlags(self.windowFlags() |
@@ -168,8 +212,11 @@ class ImageSelectionDialog(QDialog):
                 item = self.img_model.item(row)
                 # Select marked images
                 if item.data()["key"] in self.selected_images:
-                    # Create index
-                    index = self.img_model.createIndex(row, 0)
+                    # index(), not createIndex(): createIndex builds an index with no internal
+                    # pointer, so itemFromIndex() and model.data() on it both return None. The
+                    # selection itself works either way -- QItemSelectionModel matches by
+                    # row/column -- but anything that later resolves the index to its item does not
+                    index = self.img_model.index(row, 0)
                     # Select image
                     self.ui.lv_images.selectionModel().select(index, QItemSelectionModel.Select)
 
