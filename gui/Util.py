@@ -8,6 +8,7 @@
 import datetime
 import os
 import sqlite3
+import threading
 from contextlib import closing
 from os.path import isfile
 from typing import List, Optional, Sequence, Tuple, Union
@@ -32,6 +33,39 @@ IMAGE_FORMATS = [
         ".jpg",
         ".bmp"
 ]
+
+# If set, a ui operation running off the GUI thread raises instead of only being logged. Meant for
+# tests and debug runs -- in production a wrong thread should not turn into a hard crash by itself
+STRICT_THREAD_AFFINITY = os.environ.get("NUCDETECT_STRICT_THREAD_AFFINITY", "") == "1"
+
+
+def assert_main_thread(operation: str, strict: bool = None, logger=None) -> None:
+    """
+    Function to verify that a ui operation is running on the GUI thread
+
+    Touching a widget or a model from a worker thread does not fail immediately -- it corrupts
+    Qt's internal state and surfaces later as an unreproducible freeze or crash. This turns that
+    into a loud, deterministic failure at the point of the violation.
+
+    It lives in Util because the editor needs it too, and a dialog module cannot import
+    NucDetectAppQT to get at its copy: that would pull TensorFlow in AFTER PyQt5, which is the
+    documented DLL-load failure.
+
+    :param operation: Name of the operation, used in the message
+    :param strict: Overrides the module flag. NucDetect passes its own so that flipping the flag
+    on that module keeps working
+    :param logger: Optional; the logger to report on. Defaults to this module's
+    :return: None
+    :raises RuntimeError: If called off the GUI thread and strict checking is enabled
+    """
+    if QtCore.QThread.currentThread() is QtCore.QCoreApplication.instance().thread():
+        return
+    msg = (f"{operation} was called from thread "
+           f"'{QtCore.QThread.currentThread().objectName() or threading.current_thread().name}'"
+           f" instead of the GUI thread -- route it through a signal")
+    (logger or LOGGER).critical(msg)
+    if STRICT_THREAD_AFFINITY if strict is None else strict:
+        raise RuntimeError(msg)
 
 
 def load_stylesheet(name: str) -> str:

@@ -4,7 +4,7 @@ from typing import List, Iterable, Dict, Optional, Sequence, Tuple
 import numpy as np
 import pyqtgraph as pg
 from PyQt5 import QtCore
-from PyQt5.QtCore import QRectF, Qt, QPointF
+from PyQt5.QtCore import QRectF, Qt, QPointF, pyqtSignal
 from PyQt5.QtGui import QColor, QKeyEvent, QMouseEvent
 from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem
 from pyqtgraph import ColorBarItem
@@ -15,6 +15,7 @@ from core.logging_config import get_logger
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 from core.database.connections import Requester, Inserter
+from gui.Util import assert_main_thread
 from gui.loader import ROIDrawerTimer
 
 LOGGER = get_logger(__name__)
@@ -28,6 +29,11 @@ COMPOSITE_CHANNEL = -1
 
 
 class EditorView(pg.GraphicsView):
+    # Emitted once the white-balance and high-contrast variants have been computed. They are
+    # calculated on a background thread, and the two check boxes they enable may only be touched on
+    # the GUI thread, so the hand-off goes through a queued connection rather than a direct call
+    variants_ready_signal = pyqtSignal()
+
     COLORS = [
         QColor(255, 50, 0),  # Red
         QColor(50, 255, 0),  # Green
@@ -117,6 +123,8 @@ class EditorView(pg.GraphicsView):
         self.scale_bar.text.setPlainText(f"{self.scale_microns} µm")
         self.scale_bar.anchor((1, 1), (1, 1), offset=(-50, -50)) # Position set to bottom right
         self.addItem(self.scale_bar)
+        # Connected before the thread is started, or a fast worker could emit into nothing
+        self.variants_ready_signal.connect(self.enable_variant_modes)
         self.initialize_wb_and_hc()
 
     def initialize_wb_and_hc(self) -> None:
@@ -127,6 +135,20 @@ class EditorView(pg.GraphicsView):
         """
         init_thread = threading.Thread(target=self.calculate_hc_and_wb_images, daemon=True)
         init_thread.start()
+
+    def enable_variant_modes(self) -> None:
+        """
+        Method to enable the two check boxes whose images are prepared in the background
+
+        Connected to variants_ready_signal, thus always executed on the GUI thread. The worker
+        used to call the two enable_* methods itself, which is undefined behaviour rather than a
+        race producing a stale pixel -- a QWidget may only be touched from the thread it lives in
+
+        :return: None
+        """
+        assert_main_thread("EditorView.enable_variant_modes")
+        self._dialog.enable_white_balance_mode()
+        self._dialog.enable_high_contrast_mode()
 
     def set_changes(self, rect: QRectF, angle: float, preview: bool = False) -> None:
         """
@@ -205,8 +227,9 @@ class EditorView(pg.GraphicsView):
         self.image_adj = automatic_colorbalance(self.image)
         self.hcimg = self.create_high_contrast_image()
         self.hcimg_adj = automatic_colorbalance(self.hcimg)
-        self._dialog.enable_white_balance_mode()
-        self._dialog.enable_high_contrast_mode()
+        # Emit, do not call: this runs on a plain threading.Thread, and the two check boxes it
+        # enables live on the GUI thread. A queued connection is what carries the hand-off
+        self.variants_ready_signal.emit()
 
     def create_high_contrast_image(self) -> np.ndarray:
         """

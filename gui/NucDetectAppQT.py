@@ -533,18 +533,16 @@ class NucDetect(QMainWindow):
         Qt's internal state and surfaces later as an unreproducible freeze or crash. This turns
         that into a loud, deterministic failure at the point of the violation.
 
+        The body lives in Util so the editor can use the same guard -- a dialog module cannot
+        import this one to reach it, since that pulls TensorFlow in after PyQt5. The module flag is
+        passed explicitly rather than read there, so setting STRICT_THREAD_AFFINITY on THIS module
+        keeps taking effect
+
         :param operation: Name of the operation, used in the message
         :return: None
         :raises RuntimeError: If called off the GUI thread and strict checking is enabled
         """
-        if QtCore.QThread.currentThread() is self.thread():
-            return
-        msg = (f"{operation} was called from thread "
-               f"'{QtCore.QThread.currentThread().objectName() or threading.current_thread().name}'"
-               f" instead of the GUI thread -- route it through a signal")
-        LOGGER.critical(msg)
-        if STRICT_THREAD_AFFINITY:
-            raise RuntimeError(msg)
+        Util.assert_main_thread(operation, strict=STRICT_THREAD_AFFINITY, logger=LOGGER)
 
     def _apply_result_table(self, header: List[str], rows: List[List[str]]) -> None:
         """

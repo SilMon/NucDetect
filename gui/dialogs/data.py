@@ -5,7 +5,7 @@ import traceback
 
 from matplotlib import font_manager
 from threading import Thread
-from typing import List, Tuple, Dict, Any, Optional, Union, Callable, cast
+from typing import List, Tuple, Dict, Any, Optional, Union, Callable, Iterable, cast
 
 import numpy as np
 import pandas as pd
@@ -37,6 +37,10 @@ from gui.loader import Loader
 from core.roi.AreaAnalysis import imprint_area_into_array
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
+
+# Excel's own limit on a worksheet title. openpyxl only warns above it, but the workbook is then
+# unreadable for some applications, so the export truncates rather than relying on the warning
+MAX_SHEET_NAME_LENGTH = 31
 
 
 class DataExportDialog(QDialog):
@@ -127,17 +131,23 @@ class DataExportDialog(QDialog):
             img_hashes = [x for x in self.req.get_all_images()
                           if self.req.check_if_image_was_analysed(x)]
             # Check if the data should be saved in one file
-            file_name = "results_all_images" if self.ui.cbx_xlsx_single.isChecked() else None
-            for md5 in img_hashes:
-                self.export_image_as_table(md5, xlsx_name=file_name)
+            if self.export_goes_into_one_workbook():
+                self.export_into_one_workbook(img_hashes, "results_all_images",
+                                              self._export_image_as_table)
+            else:
+                for md5 in img_hashes:
+                    self.export_image_as_table(md5)
         # Save all defined experiments
         elif selection == DataExportDialog.STANDARD_OPTIONS[2]:  # All defined experiments
             # Get all defined experiments
             exps = self.req.get_all_experiments()
             # Check if the data should be saved in one file
-            file_name = "results_all_experiments" if self.ui.cbx_xlsx_single.isChecked() else None
-            for experiment in exps:
-                self.export_experiment_as_table(experiment, xlsx_name=file_name)
+            if self.export_goes_into_one_workbook():
+                self.export_into_one_workbook(exps, "results_all_experiments",
+                                              self._export_experiment_as_table)
+            else:
+                for experiment in exps:
+                    self.export_experiment_as_table(experiment)
         # Save selected experiment
         else:
             self.export_experiment_as_table(selection)
@@ -159,6 +169,81 @@ class DataExportDialog(QDialog):
             worker(*args)
         except Exception:
             self.errors.append(traceback.format_exc())
+
+    def export_goes_into_one_workbook(self) -> bool:
+        """
+        Method to check whether the xlsx output of this run is a single workbook
+
+        :return: True if one workbook holding one sheet per exported item is wanted
+        """
+        return self.ui.cbx_xlsx.isChecked() and self.ui.cbx_xlsx_single.isChecked()
+
+    def export_into_one_workbook(self, items: List[str], file_name: str,
+                                 exporter: Callable) -> None:
+        """
+        Method to export several items into a single workbook, one sheet per item
+
+        ONE thread for the whole workbook, not one per item. DataFrame.to_excel against a path
+        creates a NEW workbook per call, so the previous shape -- one thread and one to_excel per
+        item, every one of them writing the same path -- kept whichever sheet happened to be
+        written last and discarded the rest silently. Which one survived was a race, since the
+        threads were started without any limit
+
+        :param items: The image hashes or experiment names to export
+        :param file_name: The name of the workbook to write, without extension
+        :param exporter: The private per-item export method to drive
+        :return: None
+        """
+        export_thread = threading.Thread(target=self._run_export,
+                                         args=(self._export_workbook, items, file_name, exporter),
+                                         daemon=True)
+        export_thread.start()
+        self.threads = [x for x in self.threads if x.is_alive()]
+        self.threads.append(export_thread)
+
+    def _export_workbook(self, items: List[str], file_name: str, exporter: Callable) -> None:
+        """
+        Private method to write one workbook holding one sheet per item
+
+        :param items: The image hashes or experiment names to export
+        :param file_name: The name of the workbook to write, without extension
+        :param exporter: The private per-item export method to drive
+        :return: None
+        """
+        Paths.ensure_directories()
+        path = os.path.join(Paths.result_path, f"{file_name}.xlsx")
+        with pd.ExcelWriter(path) as writer:
+            for item in items:
+                exporter(item, writer=writer)
+
+    @staticmethod
+    def get_valid_sheet_name(name: str, taken: Iterable[str]) -> str:
+        """
+        Method to turn the given name into one Excel accepts and that is not taken yet
+
+        Sheet names come from image file names and experiment names, and Excel's rules on them are
+        stricter than the file system's: []:*?/\\ are rejected outright -- pandas raises
+        ValueError on the whole export -- more than 31 characters makes the workbook unreadable for
+        some applications, and a repeated name silently overwrites the earlier sheet. None of that
+        mattered while only one sheet survived a run
+
+        :param name: The name to derive the sheet name from
+        :param taken: The sheet names already used in this workbook
+        :return: A valid, unused sheet name
+        """
+        cleaned = "".join("_" if c in r"[]:*?/\\" else c for c in str(name)).strip() or "Sheet"
+        cleaned = cleaned[:MAX_SHEET_NAME_LENGTH]
+        taken = set(taken)
+        if cleaned not in taken:
+            return cleaned
+        # Two images can carry the same file name in different folders, and both are exported
+        counter = 2
+        while True:
+            suffix = f"_{counter}"
+            candidate = f"{cleaned[:MAX_SHEET_NAME_LENGTH - len(suffix)]}{suffix}"
+            if candidate not in taken:
+                return candidate
+            counter += 1
 
     def export_image_as_table(self, md5: str,
                               xlsx_name: str = None,
@@ -184,7 +269,8 @@ class DataExportDialog(QDialog):
     def _export_image_as_table(self, md5: str,
                                xlsx_name: str = None,
                                include_header: bool = True,
-                               sheet_name: str = None) -> None:
+                               sheet_name: str = None,
+                               writer: pd.ExcelWriter = None) -> None:
         """
         Private method to concurrently fetch the image data and save the table
 
@@ -192,6 +278,7 @@ class DataExportDialog(QDialog):
         :param xlsx_name: Optional; If given, the file will use this name
         :param include_header: If true, the table header will also be saved
         :param sheet_name: Name of the sheet
+        :param writer: Optional; the open workbook to add a sheet to, for single-file exports
         :return: None
         """
         # Get general table header
@@ -206,7 +293,8 @@ class DataExportDialog(QDialog):
         self.save_table_to_disk(img_name, rows, header,
                                 include_header=include_header,
                                 sheet_name=sheet_name if sheet_name else img_name,
-                                xlsx_name=xlsx_name)
+                                xlsx_name=xlsx_name,
+                                writer=writer)
 
     def export_experiment_as_table(self,
                                    experiment: str,
@@ -235,7 +323,8 @@ class DataExportDialog(QDialog):
                                     experiment: str,
                                     xlsx_name: str = None,
                                     include_header: bool = True,
-                                    sheet_name: str = None
+                                    sheet_name: str = None,
+                                    writer: pd.ExcelWriter = None
                                     ) -> None:
         """
         Private method to concurrently fetch the experiment data and save the table
@@ -244,6 +333,7 @@ class DataExportDialog(QDialog):
         :param xlsx_name: Optional; If given, the file will have this name
         :param include_header: If true, the table header will also be saved
         :param sheet_name: Name of the sheet
+        :param writer: Optional; the open workbook to add a sheet to, for single-file exports
         :return: None
         """
         # Get general table header
@@ -256,7 +346,8 @@ class DataExportDialog(QDialog):
                                 rows, header,
                                 include_header=include_header,
                                 sheet_name=sheet_name if sheet_name else experiment,
-                                xlsx_name=xlsx_name)
+                                xlsx_name=xlsx_name,
+                                writer=writer)
 
     def get_data_for_image(self, image: str) -> List[List]:
         """
@@ -273,7 +364,8 @@ class DataExportDialog(QDialog):
                            header: List = (),
                            include_header: bool = True,
                            xlsx_name: str = None,
-                           sheet_name: str = "Sheet 1") -> None:
+                           sheet_name: str = "Sheet 1",
+                           writer: pd.ExcelWriter = None) -> None:
         """
         Method to save the given table to the disk
 
@@ -284,6 +376,8 @@ class DataExportDialog(QDialog):
         :param xlsx_name: Optional: The file name to used for the xlsx file. If not given, name will be used
         :param sheet_name: Optional; Name of the sheet to use. Allows to save in the same file,
         if different sheet names are chosen
+        :param writer: Optional; an open workbook to add a sheet to instead of writing a file of
+        its own. The csv and html outputs stay one file per item either way
         :return: None
         """
         # Create a pandas dataframe
@@ -302,10 +396,17 @@ class DataExportDialog(QDialog):
             df.to_html(os.path.join(Paths.result_path, f"{name}.html"),
                        header=header if include_header else False, index=False)
         if self.ui.cbx_xlsx.isChecked():
-            fname = name if not xlsx_name else xlsx_name
-            df.to_excel(os.path.join(Paths.result_path, f"{fname}.xlsx"),
-                        header=header if include_header else False, index=False,
-                        sheet_name=sheet_name)
+            if writer is not None:
+                # One sheet in the shared workbook. The name has to be checked against the sheets
+                # already in it: an illegal character raises and takes the whole export with it,
+                # and a repeated name overwrites the earlier sheet without a word
+                df.to_excel(writer, header=header if include_header else False, index=False,
+                            sheet_name=self.get_valid_sheet_name(sheet_name, writer.sheets))
+            else:
+                fname = name if not xlsx_name else xlsx_name
+                df.to_excel(os.path.join(Paths.result_path, f"{fname}.xlsx"),
+                            header=header if include_header else False, index=False,
+                            sheet_name=self.get_valid_sheet_name(sheet_name, ()))
 
 
 class Editor(QDialog):
@@ -851,16 +952,40 @@ class AutoEdit(QDialog):
         # ValueError for any non-square editing rectangle and silently wrote a square one to the
         # wrong place
         adj_segmap[y: y + height, x: x + width] = segmap
-        # Check which predefined centers are in the areas of the segmentation map
-        for item in self.centers:
-            if item.reference:
-                # Get center of the item
-                cy, cx = item.center
-                if adj_segmap[cy][cx] == 0:
-                    self.deletion_list.append(item.reference)
+        # The second deletion pass that used to sit here has been removed. It walked self.centers
+        # -- which still holds the items lock_image took off the plot -- and marked every one whose
+        # centre fell on adj_segmap == 0, a condition that is true EVERYWHERE outside the crop by
+        # construction. So it re-collected exactly the nuclei that should never have been touched.
+        # get_replaced_roi now answers the same question once, from the editing rectangle
         return adj_segmap
 
+    def get_replaced_roi(self) -> List[int]:
+        """
+        Method to get the hashes of the roi this dialog replaces
+
+        Derived here, at accept time, from the rectangle the segmentation actually ran on. It used
+        to be accumulated in add_existing_nuclei_centers, which runs from initialize_ui while the
+        editing rectangle still covers the whole image -- so every nucleus in the image was marked
+        for deletion, shrinking the rectangle afterwards never revisited the list, and only the
+        nuclei inside the crop were re-created. Their foci went with them: apply_all_changes
+        deletes every focus of a deleted nucleus that no new nucleus adopts
+
+        get_current_editing_rect is the same rectangle perform_adjusted_watershed writes the new
+        segmentation into, which is the one that decides where replacements can appear
+
+        :return: The hashes of all main roi inside the editing rectangle
+        """
+        x, y, width, height = self.get_current_editing_rect()
+        replaced = []
+        for roi in self.roi:
+            center = roi.calculate_dimensions()["center"]
+            if y <= center[0] < y + height and x <= center[1] < x + width:
+                replaced.append(hash(roi))
+        return replaced
+
     def accept(self) -> None:
+        # Built here rather than accumulated as the centers are drawn -- see get_replaced_roi
+        self.deletion_list = self.get_replaced_roi()
         segmap = self.perform_adjusted_watershed()
         roi_areas = self.extract_roi_from_segmentationmap(segmap)
         for index, area in roi_areas.items():
@@ -1074,11 +1199,10 @@ class AutoEdit(QDialog):
             # Check if roi is inside the editing rectangle
             if y <= pos[0] <= y + height:
                 if x <= pos[1] <= x + width:
-                    # The HASH, not the ROI object. This list is declared List[int] and its two
-                    # consumers both want identifiers -- editor.delete feeds
-                    # Inserter.delete_roi_from_database, which needs a scalar id
-                    self.deletion_list.append(hash(roi))
-                    # Add the center to plot
+                    # Drawing a centre no longer marks its nucleus for deletion. This runs from
+                    # initialize_ui, when the rectangle still covers the whole image, so every
+                    # nucleus in the image ended up in deletion_list and nothing revisited it when
+                    # the rectangle was shrunk. get_replaced_roi builds that list at accept time
                     self.add_center_to_plot(center)
 
     def add_center_to_plot(self, center: QGraphicsEllipseItem) -> None:
@@ -1129,8 +1253,11 @@ class AutoEdit(QDialog):
 
         :return: None
         """
-        centerX = self.ui.spb_x.value() - round(self.ui.spb_width.value() / 2)
-        centerY = self.ui.spb_y.value() - round(self.ui.spb_height.value() / 2)
+        # '// 2', matching get_current_editing_rect. round(w / 2) disagrees with w // 2 for an odd
+        # size -- round(3.5) is 4, 7 // 2 is 3 -- so the drawn rectangle and the offset the new
+        # segmentation is written back at sat one pixel apart for odd widths and heights
+        centerX = self.ui.spb_x.value() - self.ui.spb_width.value() // 2
+        centerY = self.ui.spb_y.value() - self.ui.spb_height.value() // 2
         self.edit_rect.setRect(centerX,
                                centerY,
                                self.ui.spb_width.value(),
