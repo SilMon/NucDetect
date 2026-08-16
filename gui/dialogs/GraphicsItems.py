@@ -11,6 +11,7 @@ from pyqtgraph import ColorBarItem
 from skimage.draw import ellipse
 
 from core.DataProcessing import create_lg_lut, automatic_colorbalance
+from core.detector_modules.AreaAndROIExtractor import get_nearest_nucleus
 from core.logging_config import get_logger
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
@@ -669,7 +670,14 @@ class EditorView(pg.GraphicsView):
         self.inserter.reset_nuclei_foci_associations(self.delete)
         # Check for changed items
         self.process_changed_items(unassociated, maps)
-        associations = self.create_associations(self.roi.idents.index(self.roi.main), maps, unassociated)
+        # The centers come from the ROI themselves rather than from the maps, so both association
+        # paths measure the same point -- calculate_dimensions is what associate_roi reads too
+        centers = {}
+        for roi in self.roi:
+            dims = roi.calculate_dimensions()
+            centers[hash(roi)] = (dims["center_y"], dims["center_x"])
+        associations = self.create_associations(self.roi.idents.index(self.roi.main), maps,
+                                                unassociated, centers)
         # Clean unassociated list
         unassociated = [x for x in unassociated if x not in associations.keys()]
         self.delete_roi(unassociated)
@@ -725,25 +733,46 @@ class EditorView(pg.GraphicsView):
         self.inserter.delete_roi_from_database(roihash)
 
     @staticmethod
-    def create_associations(main: int, maps: Iterable[np.ndarray], unassociated: List[int]) -> Dict:
+    def create_associations(main: int, maps: Iterable[np.ndarray], unassociated: List[int],
+                            centers: Dict[int, Tuple[int, int]]) -> Dict:
         """
         Method to create associations dictionary to associate nuclei with foci
+
+        Overlap decides whether a focus is associated, and the distance between the two centers
+        decides with which nucleus -- the same rule the detector's associate_roi applies, so that a
+        focus does not change owner depending on which of the two paths last wrote it. This used to
+        keep whichever nucleus the LAST SCANNED PIXEL belonged to, which is a scan order and not a
+        rule: for a focus spanning two nuclei the bottom-right one won
+
+        The scan itself was three nested Python loops over every pixel of every channel -- 2.1 M
+        iterations for a 1024x1024 image with three channels, 0.39 s on the GUI thread on every
+        save. The masked np.unique below is the same question asked once per channel
 
         :param main: Index of the main channel
         :param maps: Hash maps for each channel
         :param unassociated: List of unassociated ROI hashes
+        :param centers: The center of every roi, as {hash: (y, x)}
         :return: Dictionary containing the associations
         """
-        # Create new associations
-        associations = {}
+        # Every nucleus a focus overlaps, as {focus hash: {nucleus hash}}
+        overlaps: Dict[int, set] = {}
         for c in range(len(maps)):
-            if c != main:
-                for y in range(maps[0].shape[0]):
-                    for x in range(maps[0].shape[1]):
-                        if maps[c][y][x] and maps[main][y][x]:
-                            associations[maps[c][y][x]] = maps[main][y][x]
-        # Clean list
-        associations = {x: y for x, y in associations.items() if x in unassociated}
+            if c == main:
+                continue
+            both = (maps[c] != 0) & (maps[main] != 0)
+            if not both.any():
+                continue
+            pairs = np.unique(np.stack([maps[c][both], maps[main][both]]), axis=1)
+            for focus, nucleus in zip(pairs[0], pairs[1]):
+                overlaps.setdefault(int(focus), set()).add(int(nucleus))
+        associations = {}
+        for focus, nuclei in overlaps.items():
+            if focus not in unassociated or focus not in centers:
+                continue
+            nearest = get_nearest_nucleus(centers[focus],
+                                          {n: centers[n] for n in nuclei if n in centers})
+            if nearest:
+                associations[focus] = nearest
         return associations
 
     def delete_roi(self, unassociated: Iterable[Tuple[int]]) -> None:

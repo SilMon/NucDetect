@@ -37,7 +37,7 @@ def extract_foci_from_maps(map_: np.ndarray, channel_name: str, main: List[ROI])
     foci = extract_roi_from_areas(areas, channel_name, False)
     # Create hash map for association
     assmap = create_nucleus_hash_map(main, shape=map_.shape)
-    associate_roi(foci, assmap)
+    associate_roi(foci, assmap, main)
     return foci
 
 def extract_foci_from_blobs(blobs: List[tuple[int, int, int]],
@@ -55,7 +55,7 @@ def extract_foci_from_blobs(blobs: List[tuple[int, int, int]],
     foci = [encode_blob(x,channel_name, image_shape) for x in blobs]
     # Create hash map for association
     assmap = create_nucleus_hash_map(main, shape=image_shape)
-    associate_roi(foci, assmap)
+    associate_roi(foci, assmap, main)
     return foci
 
 
@@ -156,19 +156,71 @@ def extract_roi_from_areas(areas: Dict[int, List[Tuple[int, int, int]]], name: s
     return rois
 
 
-def associate_roi(rois: Iterable[ROI], main_map: np.ndarray) -> None:
+def get_overlapped_nuclei(area: Iterable[Tuple[int, int, int]], main_map: np.ndarray) -> set:
     """
-    Function to create associations between nuclei and found
+    Function to get the nuclei a roi shares pixels with
+
+    :param area: The area of the roi, as (row, first column, length) runs
+    :param main_map: Hash map of detected nuclei
+    :return: The hashes of every nucleus the area touches
+    """
+    overlapped = set()
+    for row, column, length in area:
+        if not 0 <= row < main_map.shape[0]:
+            continue
+        segment = main_map[row, max(0, column): column + length]
+        overlapped.update(int(x) for x in np.unique(segment) if x)
+    return overlapped
+
+
+def get_nearest_nucleus(focus_center: Tuple[int, int],
+                        candidates: Dict[int, Tuple[int, int]]) -> int:
+    """
+    Function to pick which of the overlapped nuclei a focus belongs to
+
+    **The rule, set by RW on 2026-08-17: overlap decides WHETHER a focus is associated, the
+    distance between the two centres decides WITH WHICH.** Both association paths go through this
+    function -- the detector's associate_roi and the editor's create_associations -- because a
+    focus that changes owner depending on which path last wrote it is the defect the rule exists to
+    prevent. They used to disagree: the detector asked whether the focus's centre PIXEL landed in a
+    nucleus, and the editor took whichever nucleus the last scanned pixel belonged to
+
+    Compares squared distances, which orders identically to the distance itself and needs no root.
+    A tie goes to whichever candidate was found first, which is the scan order of the area
+
+    :param focus_center: The center of the focus, as (y, x)
+    :param candidates: The nuclei the focus overlaps, as {hash: (y, x)}
+    :return: The hash of the nearest nucleus, or 0 if the focus overlaps none
+    """
+    if not candidates:
+        return 0
+    return min(candidates.items(),
+               key=lambda item: (item[1][0] - focus_center[0]) ** 2
+               + (item[1][1] - focus_center[1]) ** 2)[0]
+
+
+def associate_roi(rois: Iterable[ROI], main_map: np.ndarray, nuclei: Iterable[ROI]) -> None:
+    """
+    Function to create associations between nuclei and found roi
+
     :param rois: List of all found ROI
     :param main_map: Hash map of detected nuclei
+    :param nuclei: The nuclei the map was built from, needed for their centers
     :return: None
     """
+    centers = {}
+    for nucleus in nuclei:
+        dims = nucleus.calculate_dimensions()
+        centers[hash(nucleus)] = (dims["center_y"], dims["center_x"])
     for roi in rois:
-        # Calculate center of roi
-        y, x = (min(main_map.shape[0] - 1,
-                    roi.calculate_dimensions()["center_y"]),
-                min(main_map.shape[1] - 1,
-                    roi.calculate_dimensions()["center_x"]))
-        # Look if center corresponds to a nucleus
-        if main_map[y][x] and main_map[y][x] > 0 and not roi.main:
-            roi.associated = main_map[y][x]
+        if roi.main:
+            continue
+        dims = roi.calculate_dimensions()
+        # Overlap is the gate. Testing the centre PIXEL instead, as this did until 2026-08-17,
+        # refused every focus whose centre happens to fall just outside the nucleus it lies on --
+        # and could not see the case where a focus spans two nuclei at all
+        overlapped = get_overlapped_nuclei(roi.area, main_map)
+        nearest = get_nearest_nucleus((dims["center_y"], dims["center_x"]),
+                                      {h: c for h, c in centers.items() if h in overlapped})
+        if nearest:
+            roi.associated = nearest
