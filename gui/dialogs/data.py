@@ -699,18 +699,27 @@ class AutoEdit(QDialog):
         self.img_item = pg.ImageItem()
         self.plot_item = pg.PlotItem()
         self.main_map = self.get_main_map(main.shape, self.roi)
+        # The BINARY map, not the intensity channel: distance_transform_edt measures the distance
+        # to the nearest zero pixel, so on raw intensities it measures the distance to the nearest
+        # pixel that happens to be exactly 0 -- camera noise. The medial ridge peaking at each
+        # nucleus centre, which is the surface the watershed is seeded from and flooded over, only
+        # exists over the mask. main_map is also what the watershed already uses as its mask
+        # (perform_adjusted_watershed), so the two used to disagree about which surface is meant
         # cast, because distance_transform_edt is typed as returning the distances, the indices,
         # both, or None, depending on its two boolean flags -- a union the checker cannot narrow
         # from the call. With the defaults (return_distances=True, return_indices=False) it
         # returns exactly one array, which is what every use of self.edm here assumes
-        self.edm: np.ndarray = cast(np.ndarray, ndi.distance_transform_edt(main))
+        self.edm: np.ndarray = cast(np.ndarray, ndi.distance_transform_edt(self.main_map))
         self.map_index = 0
         # Create a working map to enable undo
         self.temp_main = np.copy(self.main)
         self.temp_map = np.copy(self.main_map)
         self.temp_edm = np.copy(self.edm)
         self.centers: List[AutoEditCenterItem] = []
+        # The centers that seed the watershed. Only filled while the image is locked -- see
+        # add_center_to_plot for why the lock state has to be tracked
         self.active_centers: List[AutoEditCenterItem] = []
+        self.locked = False
         self.removed_centers: List[AutoEditCenterItem] = []
         self.extracted_roi = []
         self.deletion_list: List[int] = []
@@ -787,6 +796,9 @@ class AutoEdit(QDialog):
             for item in items:
                 self.plot_item.removeItem(item)
                 self.centers.remove(item)
+                # Un-seed it as well: an item taken off the plot must not still mark a basin
+                if item in self.active_centers:
+                    self.active_centers.remove(item)
                 if item.reference:
                     self.removed_centers.append(item.reference)
         else:
@@ -872,23 +884,36 @@ class AutoEdit(QDialog):
         """
         Method to adjust the position of the defined centers to the maxima of the EDM
 
-        :return: A list of adjusted centers
+        Reads temp_edm, the CROPPED map: lock_image rewrites the centers into crop coordinates,
+        and both consumers of the returned list -- adjust_edm and the watershed marker mask --
+        are cropped as well. Indexing the full sized self.edm with those coordinates read the
+        wrong part of the map, and could return a point outside the mask it is written into
+
+        :return: A list of adjusted centers as (y, x), in the coordinates of the cropped maps
         """
         # Adjust center values using the EDM
         adj_rad = 15
         adj_cent = []
+        edm = self.temp_edm
         for center_item in self.active_centers:
-            rect = center_item.rect()
-            p = int(rect.y() - rect.height() // 2), int(rect.x() - rect.width() // 2)
-            # Get the current lowest distance value
-            cur_val = self.edm[p[0]][p[1]]
-            # Iterate over neighborhood of center
-            for y in range(max(0, p[0] - adj_rad), min(self.edm.shape[0], p[0] + adj_rad)):
-                for x in range(max(0, p[1] - adj_rad), min(self.edm.shape[1], p[1] + adj_rad)):
-                    if self.edm[y][x] < cur_val:
-                        cur_val = self.edm[y][x]
-                        p = (y, x)
-            adj_cent.append(p)
+            cent_y, cent_x = center_item.current_center()
+            # A center outside the locked region has no position on the cropped maps
+            if not (0 <= cent_y < edm.shape[0] and 0 <= cent_x < edm.shape[1]):
+                continue
+            # Iterate over neighborhood of center, keeping the MAXIMUM: the watershed is flooded
+            # over the negated EDM (perform_adjusted_watershed), so its basins form at the EDM
+            # maxima, which is what the docstring above promises. Keeping the smallest value
+            # instead moved every seed onto a background pixel at distance 0
+            y_min, y_max = max(0, cent_y - adj_rad), min(edm.shape[0], cent_y + adj_rad + 1)
+            x_min, x_max = max(0, cent_x - adj_rad), min(edm.shape[1], cent_x + adj_rad + 1)
+            neighborhood = edm[y_min:y_max, x_min:x_max]
+            off_y, off_x = np.unravel_index(int(np.argmax(neighborhood)), neighborhood.shape)
+            # A center placed on the background has no maximum to snap to. Leave it where the user
+            # put it rather than moving it to whichever corner of the neighborhood argmax returns
+            if neighborhood[off_y][off_x] > 0:
+                adj_cent.append((y_min + int(off_y), x_min + int(off_x)))
+            else:
+                adj_cent.append((cent_y, cent_x))
         return adj_cent
 
     @staticmethod
@@ -926,11 +951,18 @@ class AutoEdit(QDialog):
             if nearest_center:
                 # Calculate central point between both centers
                 c3 = round((center[0] + nearest_center[0]) / 2), round((center[1] + nearest_center[1]) / 2)
-                if self.edm[c3[0]][c3[1]]:
+                # adj_edm, not self.edm: the centers are in the coordinates of the CROPPED map,
+                # which is the map this method reads and writes everywhere else
+                if adj_edm[c3[0]][c3[1]]:
                     # Get vector between center and the central point
                     v = center[0] - c3[0], center[1] - c3[1]
                     # Get orthogonal vector and normalize
                     max_coord = max(abs(v[0]), abs(v[1]))
+                    # Two centers that snap to the same maximum, or that are a single pixel apart
+                    # -- round() takes the midpoint of (0, 0) and (0, 1) to (0, 0) -- leave no
+                    # direction to cut along, and dividing by that zero took the dialog down
+                    if not max_coord:
+                        continue
                     c_orth = v[1] / max_coord, -v[0] / max_coord
                     rr, cc = line(center[0], center[1],
                                   nearest_center[0], nearest_center[1])
@@ -942,34 +974,70 @@ class AutoEdit(QDialog):
         return adj_edm
 
     @staticmethod
-    def get_end_points_of_separation_lines(edm: np.ndarray, linepoints, orth: Tuple[float, float]):
-        # TODO
-        max_distance = 10000000
+    def walk_to_border(edm: np.ndarray, start: Tuple[int, int],
+                       step: Tuple[float, float]) -> Tuple[int, int]:
+        """
+        Method to walk from the given point along the given direction, up to the background or the
+        border of the map
+
+        The point returned is the last one still inside the nucleus, so it is always a valid index
+        -- the caller draws a line through it and writes into the map along that line
+
+        :param edm: The euclidean distance map to walk over
+        :param start: The point to start the walk at, as (y, x)
+        :param step: The direction to walk in, as (y, x)
+        :return: The last point before the background or the border, as (y, x)
+        """
+        # No straight walk that stays inside the map can be longer than this, so exhausting the
+        # range means the direction is degenerate rather than that the map is large. The original
+        # loop had no bound at all, and see below for how it failed to find one
+        limit = edm.shape[0] + edm.shape[1]
+        last = start
+        for counter in range(1, limit):
+            point = start[0] + round(step[0] * counter), start[1] + round(step[1] * counter)
+            # BOTH bounds are tested. Testing only '>= shape' let a NEGATIVE index through, numpy
+            # then read the opposite edge of the map instead of stopping, and the walk wrapped
+            # around: over a region that is foreground all the way across, no end point was ever
+            # found and the loop ran forever -- with the GUI thread inside it, since this is
+            # reached from accept(). The out-of-range point was also returned as an end point,
+            # and writing the separation line through it raises IndexError
+            if not (0 <= point[0] < edm.shape[0] and 0 <= point[1] < edm.shape[1]):
+                return last
+            if edm[point[0]][point[1]] == 0:
+                return last
+            last = point
+        return last
+
+    @staticmethod
+    def get_end_points_of_separation_lines(edm: np.ndarray, linepoints,
+                                           orth: Tuple[float, float]) -> Optional[Tuple[Tuple[int, int],
+                                                                                        Tuple[int, int]]]:
+        """
+        Method to get the end points of the shortest line that separates two touching nuclei
+
+        Walks orthogonally away from every point on the line connecting the two centers and keeps
+        the narrowest crossing, which is where the two nuclei touch
+
+        :param edm: The euclidean distance map to search on
+        :param linepoints: The points on the line connecting both centers, as (y, x)
+        :param orth: The direction orthogonal to that line, as (y, x)
+        :return: Both end points of the separation line, or None if the connecting line leaves the
+        nucleus
+        """
+        # A MINIMUM tracker: the narrowest crossing is the one to cut. It was called max_distance
+        # and seeded with 10000000, which named the initial value rather than the intent
+        shortest_distance = float("inf")
         brakes = None
         for line_point in linepoints:
             # If the point is in the background, stop progression
             if edm[line_point[0]][line_point[1]] == 0:
-                brakes = None
-                break
-            left_brake = None
-            right_brake = None
-            counter = 1
-            while not left_brake or not right_brake:
-                if not right_brake:
-                    right = line_point[0] + round(orth[0] * counter), line_point[1] + round(
-                        orth[1] * counter)
-                    if right[0] >= edm.shape[0] or right[1] >= edm.shape[1] or edm[right[0]][right[1]] == 0:
-                        right_brake = right
-                if not left_brake:
-                    left = line_point[0] - round(orth[0] * counter), line_point[1] - round(
-                        orth[1] * counter)
-                    if left[0] >= edm.shape[0] or left[1] >= edm.shape[1] or edm[left[0]][left[1]] == 0:
-                        left_brake = left
-                counter += 1
+                return None
+            left_brake = AutoEdit.walk_to_border(edm, line_point, (-orth[0], -orth[1]))
+            right_brake = AutoEdit.walk_to_border(edm, line_point, orth)
             cur_dist = euclidean_distance(left_brake, right_brake)
-            if max_distance > cur_dist:
-                max_distance = cur_dist
-                brakes = left, right
+            if cur_dist < shortest_distance:
+                shortest_distance = cur_dist
+                brakes = left_brake, right_brake
         return brakes
 
     @staticmethod
@@ -1021,6 +1089,12 @@ class AutoEdit(QDialog):
         :return: None
         """
         self.centers.append(center)
+        # Centers placed after the lock are exactly the ones the dialog asks the user for -- and
+        # they are already in crop coordinates, like the ones lock_image rewrote. lock_image was
+        # the only place that ever filled active_centers, so every center clicked afterwards was
+        # drawn on the image and then ignored by the watershed
+        if self.locked:
+            self.active_centers.append(center)
         self.plot_item.addItem(center)
 
     def add_nucleus_center(self, event: QMouseEvent) -> None:
@@ -1043,6 +1117,10 @@ class AutoEdit(QDialog):
         :return: None
         """
         self.centers.remove(center)
+        # Same invariant as the deletion path in mousePressEvent: an item that is not in centers
+        # must not be in active_centers either, or it keeps seeding the watershed after removal
+        if center in self.active_centers:
+            self.active_centers.remove(center)
         self.plot_item.removeItem(center)
 
     def change_edit_rectangle(self) -> None:
@@ -1066,10 +1144,14 @@ class AutoEdit(QDialog):
         :return: None
         """
         enabled = self.ui.btn_lock.isChecked()
+        self.locked = enabled
         self.enable_buttons(enabled)
         #self.edit_rect.setPen(QPen(Color.INVISIBLE))
         # Get current adjustment points
         x, y, width, height = self.get_editing_rectangle_dimensions()
+        # Rebuilt rather than extended: btn_lock is checkable, so locking, unlocking and locking
+        # again appended every center a second time and seeded the watershed twice per position
+        self.active_centers = []
         # Add all items at adjusted position
         for item in self.centers:
             # Get current item position
@@ -1176,6 +1258,10 @@ class AutoEdit(QDialog):
         self.temp_map = np.copy(self.main_map)
         self.temp_edm = np.copy(self.edm)
         self.show_map()
+        # The maps are uncropped again and reset_position puts every rect back into full image
+        # coordinates, so nothing here is a valid seed any more. lock_image refills this
+        self.locked = False
+        self.active_centers = []
         # Re-Add all removed centers
         for item in self.centers:
             item.reset_position()
@@ -1271,6 +1357,23 @@ class AutoEditCenterItem(QGraphicsEllipseItem):
         self.center = posy, posx
         self.orig_rect = QRectF(posx - width//2, posy - height//2, width, height)
         self.reference = reference
+
+    def current_center(self) -> Tuple[int, int]:
+        """
+        Method to get the center of this item in its current coordinate space
+
+        The constructor stores the rect at (posx - width // 2, posy - height // 2), so recovering
+        the center means ADDING the half extent back. It lives here, next to the subtraction it
+        inverts, because the two have to agree; adjust_centers_to_edm used to subtract a second
+        time and place every seed 14 px up and left of the nucleus the user clicked
+
+        Not to be confused with self.center, which is the position this item was CREATED at.
+        lock_image rewrites the rect into crop coordinates, and self.center does not follow
+
+        :return: The current center of this item as (y, x)
+        """
+        rect = self.rect()
+        return int(rect.y() + rect.height() // 2), int(rect.x() + rect.width() // 2)
 
     def reset_position(self) -> None:
         """
