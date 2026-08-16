@@ -18,7 +18,7 @@ if _PROJECT_ROOT not in sys.path:
 from concurrent.futures import ProcessPoolExecutor
 from copy import copy
 from threading import Thread
-from typing import Union, Dict, Iterable, List, Tuple, Any, Callable
+from typing import Union, Dict, Iterable, List, Sequence, Tuple, Any, Callable
 
 # --- Import order below is load-bearing: TensorFlow MUST be imported before PyQt5 ---------
 # On Windows, loading Qt's DLLs first exhausts the process' static TLS budget. TensorFlow's
@@ -229,8 +229,8 @@ class NucDetect(QMainWindow):
         self.detector = Detector()
         # Initialize needed variables
         self.reg_images = []
-        # Contains the displayed table data
-        self.data = None
+        # Guards _connect_signals against double-connecting every slot -- see its docstring
+        self._signals_connected = False
         # Contains data for the associated experiment
         self.cur_exp = None
         # Contains data of the loaded image
@@ -451,8 +451,18 @@ class NucDetect(QMainWindow):
         """
         Method to connect the used signals
 
+        Idempotent on purpose. Every line below is a bare connect(), so calling this twice would
+        double-connect every slot and each queued update would be applied twice -- a duplicated
+        table rebuild, two rows appended per emit, two status recomputations. There is only one
+        caller today, so this is a guard against a future reconnect (on settings reload, or a window
+        re-init) rather than a repair; it already cost real debugging time once, when a test double
+        called this a second time.
+
         :return: None
         """
+        if self._signals_connected:
+            return
+        self._signals_connected = True
         # Create signal for thread-safe gui updates
         self.prg_signal.connect(self._set_progress)
         self.selec_signal.connect(self._select_next_image)
@@ -523,18 +533,16 @@ class NucDetect(QMainWindow):
         Qt's internal state and surfaces later as an unreproducible freeze or crash. This turns
         that into a loud, deterministic failure at the point of the violation.
 
+        The body lives in Util so the editor can use the same guard -- a dialog module cannot
+        import this one to reach it, since that pulls TensorFlow in after PyQt5. The module flag is
+        passed explicitly rather than read there, so setting STRICT_THREAD_AFFINITY on THIS module
+        keeps taking effect
+
         :param operation: Name of the operation, used in the message
         :return: None
         :raises RuntimeError: If called off the GUI thread and strict checking is enabled
         """
-        if QtCore.QThread.currentThread() is self.thread():
-            return
-        msg = (f"{operation} was called from thread "
-               f"'{QtCore.QThread.currentThread().objectName() or threading.current_thread().name}'"
-               f" instead of the GUI thread -- route it through a signal")
-        LOGGER.critical(msg)
-        if STRICT_THREAD_AFFINITY:
-            raise RuntimeError(msg)
+        Util.assert_main_thread(operation, strict=STRICT_THREAD_AFFINITY, logger=LOGGER)
 
     def _apply_result_table(self, header: List[str], rows: List[List[str]]) -> None:
         """
@@ -546,6 +554,18 @@ class NucDetect(QMainWindow):
         :return: None
         """
         self._assert_main_thread("_apply_result_table")
+        # Switching between the single-image and experiment views changes the column count, and Qt
+        # drops the sort indicator to -1 when it does -- but the rows keep the order the now-defunct
+        # sort produced, so the table showed neither that sort nor the natural one. Clearing the
+        # sort explicitly when the header shape changes puts the rows back in the order they were
+        # prepared in, which is the only order the table can honestly claim once the sort is gone.
+        previous_header = []
+        for i in range(self.res_table_model.columnCount()):
+            # A column can exist without a header item, e.g. before the labels are first set
+            header_item = self.res_table_model.horizontalHeaderItem(i)
+            previous_header.append(header_item.text() if header_item else "")
+        if previous_header != header:
+            self.ui.table_results.sortByColumn(-1, Qt.AscendingOrder)
         self.res_table_model.setRowCount(0)
         self.create_table_rows(rows)
         if rows:
@@ -558,9 +578,6 @@ class NucDetect(QMainWindow):
         self.ui.table_results.resizeColumnsToContents()
         # setRowCount(0) above drops every span, so they are rebuilt for the rows just added
         self._update_result_table_spans()
-        data = [header]
-        data.extend(rows)
-        self.data = data
 
     def _update_result_table_spans(self, *_) -> None:
         """
@@ -657,6 +674,13 @@ class NucDetect(QMainWindow):
         for cell in cells:
             item = QStandardItem(cell)
             item.setTextAlignment(QtCore.Qt.AlignCenter)
+            # The result table is a read-only view of the database. Rows built by this path used to
+            # be left selectable and editable while create_table_row set neither, so a row was
+            # editable in place while an analysis streamed it in and read-only once the image was
+            # reselected. Any edit made in that window was silently discarded on the next rebuild,
+            # since nothing writes the table back
+            item.setSelectable(False)
+            item.setEditable(False)
             # Derive the sort key once here, not on every comparison the sorting performs
             item.setData(create_sort_key(cell), SORT_ROLE)
             items.append(item)
@@ -686,6 +710,7 @@ class NucDetect(QMainWindow):
         self.loaded_files = []
         self.add_images_from_folder(gpaths.images_path, reload=True)
         self.img_list_model.set_paths(self.loaded_files)
+        self._forget_current_image()
 
     def fetch_more_images_if_needed(self, value: int, threshold: float = 0.75):
         """
@@ -789,10 +814,17 @@ class NucDetect(QMainWindow):
         """
         Method to load saved data from the database
 
+        The worker below reads self.cur_img, so it depends on the selection not changing while it
+        runs. That is what disabling the list and the buttons here buys: the two paths that clear
+        cur_img are the selection handler and clear/reload, and all of them are unreachable while
+        the list is disabled. The invariant is stated because it is the only thing standing between
+        _load_saved_data and a TypeError on a worker thread; a guard there would silently skip the
+        load instead, which is worse than not having the problem.
+
         :param experiment: Name of the experimental data to load. None if only image data should be loaded
         :return: None
         """
-        # Disable Buttons and list during loading
+        # Disable Buttons and list during loading -- see the note above, this is load-bearing
         self.enable_buttons(state=False)
         self.ui.list_images.setEnabled(False)
         load_thread = threading.Thread(target=self._run_guarded,
@@ -812,7 +844,7 @@ class NucDetect(QMainWindow):
         # Load saved data from databank
         self.roi_cache = self.load_rois_from_database(self.cur_img["key"])
         # Create the result table from loaded data
-        self.create_result_table_from_list(self.roi_cache, experiment)
+        self.create_result_table(experiment)
         # Re-enable buttons and list. Runs on this worker thread, so it has to go through the
         # signal -- the two duplicated in-body enable calls this replaces did not
         self.enable_signal.emit(True)
@@ -940,6 +972,24 @@ class NucDetect(QMainWindow):
         if self.img_list_model.removeRow(cur_ind.row()):
             self.loaded_files.remove(path)
 
+    def _forget_current_image(self) -> None:
+        """
+        Method to drop the current image and resync the controls that depend on one
+
+        Must be called by anything that replaces the model's contents. Qt drops the selection on a
+        model reset WITHOUT emitting selectionChanged, so on_image_selection_change never runs for
+        those paths and neither cur_img nor btn_analyse would be updated -- leaving Analyse enabled
+        for an image no longer in the list.
+
+        Kept as one method rather than two copies so a future clearing path has a single thing to
+        call. roi_cache is deliberately NOT touched here: it is dereferenced unguarded elsewhere,
+        and which of those sites are reachable with no selection is a separate open question.
+
+        :return: None
+        """
+        self.cur_img = None
+        self.ui.btn_analyse.setEnabled(False)
+
     def clear_image_list(self) -> None:
         """
         Method to clear the list of loaded images
@@ -948,6 +998,7 @@ class NucDetect(QMainWindow):
         """
         self.img_list_model.clear()
         self.loaded_files.clear()
+        self._forget_current_image()
 
     def show_analysis_settings_dialog(self, show_redo_option: bool = False) -> Union[Dict, None]:
         """
@@ -1039,7 +1090,7 @@ class NucDetect(QMainWindow):
         reporter.sub(*bounds[DATABASE])(0.0, "Writing results to database")
         self.save_rois_to_database(data)
         reporter.sub(*bounds[TABLE])(0.0, "Creating result table")
-        self.create_result_table_from_list(self.roi_cache)
+        self.create_result_table()
         # Only now is the analysis actually over. The previous version announced completion before
         # building the result table, so the bar read 100 % while work was still running
         self._prg_floor = None
@@ -1047,6 +1098,13 @@ class NucDetect(QMainWindow):
                              percent, maxi, "")
         self.enable_signal.emit(True)
         self.status_signal.emit(False)
+        # Advance to the next image, which is what makes _select_next_image live in production for
+        # the first time -- until 2026-08-15 both emits passed first=True, so a method named
+        # "select next image" only ever selected the first one. Working through a folder image by
+        # image is the normal use, and it should not need a click between each one. Stops at the
+        # last image rather than wrapping; the batch path below still emits True, because after a
+        # whole run the first image is the sensible place to be
+        self.selec_signal.emit(False)
 
     def _report_analysis_progress(self, fraction: float, message: str) -> None:
         """
@@ -1196,9 +1254,22 @@ class NucDetect(QMainWindow):
         req = Requester()
         ins = Inserter()
         try:
-            # Get info for image and check if image was analysed already
-            if req.get_info_for_image(key)[8]:
-                # Delete saved data
+            # Clear any previously saved data for this image before writing the new results.
+            #
+            # This is unconditional on purpose. It used to be guarded by `get_info_for_image(key)[8]`
+            # under a comment claiming to test whether the image had been analysed already -- but
+            # index 8 is the image HEIGHT (analysed is 12), so the guard was true for every image
+            # with a non-zero height and gated nothing. Testing `analysed` instead would have been a
+            # REGRESSION, not a fix: delete_existing_image_data removes the roi, points and
+            # statistics rows for this image and is a no-op when there are none, so deleting always
+            # costs nothing on a first analysis -- while skipping it whenever `analysed` is 0 would
+            # leave orphaned rows behind for an image whose earlier analysis was interrupted, and
+            # the new results would be inserted alongside them.
+            #
+            # A miss means analysis reached an image that add_image_information_to_database never
+            # registered; there is nothing saved for it, so nothing to clear. Indexing the result
+            # unconditionally is what raised IndexError there until 2026-08-15.
+            if req.get_info_for_image(key) is not None:
                 ins.delete_existing_image_data(key)
             # Check if image should be added to experiment
             if data["add to experiment"]:
@@ -1279,7 +1350,12 @@ class NucDetect(QMainWindow):
             rois.idents.insert(name[1], name[2])
         processed_roi = self.process_roi_database_entries(entries)
         rois.add_rois(processed_roi)
-        LOGGER.info("Loaded %d roi of image %s from database", len(rois), self.cur_img["file_name"])
+        # Named from the md5 this method was asked for, not from cur_img: the two are the same image
+        # on every current call path, but reaching for the window's selection to label data fetched
+        # by hash is a coupling this method does not need -- and it was the only thing here that
+        # could fail when nothing is selected
+        LOGGER.info("Loaded %d roi of image %s from database", len(rois),
+                    self.hash_to_name.get(md5, md5))
         return rois
 
     def process_roi_database_entries(self, entries: List[Tuple], ) -> List[ROI]:
@@ -1303,7 +1379,11 @@ class NucDetect(QMainWindow):
             temproi = ROI(channel=entry[3], main=entry[8] is None,
                           auto=bool(entry[2]), associated=entry[8], method=entry[9], match=entry[10])
             stats = self.requester.get_statistics_for_roi(entry[0])
-            temproi.stats = dict(zip(statkeys, stats[2:10]))
+            # None means the roi has no statistics row. It used to be an empty tuple, which sliced
+            # to another empty tuple and produced {} without anyone noticing; the ROI is still
+            # usable -- its area comes from the points table below -- so the empty dict is kept as
+            # the behaviour, just written down
+            temproi.stats = dict(zip(statkeys, stats[2:10])) if stats else {}
             if temproi.main:
                 main_.append(temproi)
             else:
@@ -1312,7 +1392,9 @@ class NucDetect(QMainWindow):
             for p in self.requester.get_points_for_roi(entry[0]):
                 rle.append((p[1], p[2], p[3]))
             temproi.set_area(rle)
-            ellp = self.extract_statistics_for_roi(stats, temproi.main)
+            # extract_statistics_for_roi indexes statistics[10:18] for a main roi, so a
+            # missing statistics row cannot produce ellipse parameters either
+            ellp = self.extract_statistics_for_roi(stats, temproi.main and stats is not None)
             temproi.ell_params = dict(zip(ellkeys, ellp))
             temproi.id = entry[0]
             ind += 1
@@ -1345,16 +1427,23 @@ class NucDetect(QMainWindow):
         ellip = statistics[18]
         return center_x, center_y, major, minor, angle, area, ov_x, ov_y, ellip
 
-    def create_result_table_from_list(self, handler: ROIHandler, experiment: str = None) -> None:
+    def create_result_table(self, experiment: str = None) -> None:
         """
-        Method to create the result table from a list of rois
+        Method to create the result table
+
+        Named create_result_table_from_list until 2026-08-15, and it took a ROIHandler it never
+        read. The rows come from prepare_main_table_rows, which queries the DATABASE; nothing here
+        has ever consulted an in-memory ROI list. The database is correctly authoritative -- every
+        writer commits before the table is rebuilt, analysis through save_rois_to_database and
+        manual edits through EditorView.apply_all_changes, and the handler does not carry the
+        association and modification bookkeeping the latter writes. So anything wanting to render a
+        specific in-memory ROI set has to go through the database, which the old signature hid.
 
         Safe to call from a worker thread: the database queries stay on the calling thread and only
         the finished rows are handed to the GUI thread via table_signal. Emitting from the GUI
         thread itself keeps the old synchronous behaviour, since Qt connects a same-thread emit
         directly.
 
-        :param handler: The handler containing the rois
         :param experiment: The experiment to load
         :return: None
         """
@@ -1500,27 +1589,47 @@ class NucDetect(QMainWindow):
 
     def _select_next_image(self, first: bool = False) -> None:
         """
-        Method to select the next image in the list of loaded images. Selects the first image if no image is selected
+        Method to select the next image in the list of loaded images. Selects the first image if no
+        image is selected
 
-        Note: nothing currently asks for the *next* image -- both selec_signal emits pass
-        first=True -- so the advance path below is dead in production. Before wiring it up, settle
-        what "next" means on the last image: it wraps to the first here only because that is what
-        the code did before, which is not the same as it being right.
+        STOPS AT THE LAST IMAGE rather than wrapping round to the first. In a batch run wrapping
+        re-selects an already-analysed image, which reads as though the run started over. The
+        pre-2026-08-15 code wrapped, but only because that was the behaviour it had always had.
 
-        :param first: Indicates if the first image in the list should be selected
+        :param first: Select the first image rather than advancing. Used when nothing is selected
+                      yet and when a batch run finishes
         :return: None
         """
-        max_ind = self.img_list_model.rowCount()
+        model = self.img_list_model
         cur_ind = self.ui.list_images.currentIndex()
-        # An empty list has nothing to select, and index(0, 0) would be invalid
-        if not max_ind:
+        # An empty list has nothing to select, and index(0, 0) would be invalid.
+        #
+        # rowCount() counts REVEALED items, so a model that has paths but has not been asked for a
+        # page yet reports 0 and this returns. That is deliberate: fetching a page here to make
+        # first=True "work" was tried on 2026-08-15 and reverted, because analyze() emits
+        # selec_signal(True) when nothing is selected, and revealing a row there let it pick an
+        # image on the user's behalf and open the settings dialog -- defeating the guard that
+        # Analyse with no selection must abort rather than choose. In the running application the
+        # view is visible and Qt fetches the first page itself, so nothing is lost by returning.
+        if not model.rowCount():
             return
-        # rowCount() is a count, currentIndex().row() an index. Comparing them directly asked the
-        # model for index(rowCount, 0) while on the last row -- one past the end. Qt does not raise
-        # for that, it returns an invalid index, and select()/setCurrentIndex() read an invalid
-        # index as "no item", so the selection was silently cleared instead of wrapping round
-        wrap = first or not cur_ind.isValid() or cur_ind.row() >= max_ind - 1
-        nex = self.img_list_model.index(0 if wrap else cur_ind.row() + 1, 0)
+        if first or not cur_ind.isValid():
+            row = 0
+        else:
+            # rowCount() counts REVEALED items -- it returns the lazy-loading cursor, not
+            # len(self._paths) -- so being on the last row does not mean being on the last image.
+            # Reveal the next page before deciding, or advancing would stop at the first page
+            # boundary and look like the end of the list
+            if cur_ind.row() >= model.rowCount() - 1 and model.canFetchMore(QModelIndex()):
+                model.fetchMore(QModelIndex())
+            # rowCount() is a count, currentIndex().row() an index. Comparing them directly asked
+            # the model for index(rowCount, 0) while on the last row -- one past the end. Qt does
+            # not raise for that, it returns an invalid index, and select()/setCurrentIndex() read
+            # an invalid index as "no item", so the selection was silently cleared
+            if cur_ind.row() >= model.rowCount() - 1:
+                return
+            row = cur_ind.row() + 1
+        nex = model.index(row, 0)
         self.ui.list_images.selectionModel().select(nex, QItemSelectionModel.Select)
         self.ui.list_images.setCurrentIndex(nex)
 
@@ -1576,8 +1685,14 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
+        # Guard on BOTH attributes, not just the dialog. They are written as a pair -- set together
+        # in save_results, cleared together below -- so export_dialog being set does imply
+        # export_start being set, but that implication is the invariant this guard is really
+        # testing and nothing else records it. An edit that clears export_dialog elsewhere, or sets
+        # it without stamping the start time, would turn the subtraction below into a TypeError
+        # inside a 500 ms timer callback, with the UI disabled and the timer still firing.
         dial = self.export_dialog
-        if dial is None:
+        if dial is None or self.export_start is None:
             self.check_timer.stop()
             return
         runtime = time.time() - self.export_start
@@ -1708,7 +1823,7 @@ class NucDetect(QMainWindow):
                               QtCore.Qt.Window)
         code = editor.exec()
         if code == QDialog.Accepted:
-            self.create_result_table_from_list(self.roi_cache)
+            self.create_result_table()
             self.check_all_item_statuses()
 
     def show_about_window(self) -> None:
@@ -1737,6 +1852,14 @@ class NucDetect(QMainWindow):
         :return: None
         """
         self._assert_main_thread("reflect_item_status_changes")
+        # This one IS reachable with no selection, unlike the other cur_img dereferences in this
+        # class, which all sit under the `if self.cur_img:` in on_image_selection_change.
+        # analyze_image ends with enable_signal.emit(True) immediately followed by
+        # status_signal.emit(False); both are queued to the GUI thread and run in separate event
+        # loop iterations, so the UI is live again before this slot runs and the user can deselect
+        # in between. There is nothing to reflect onto in that state
+        if not self.cur_img:
+            return
         # Check if image was modified
         analysed, modified = Util.check_if_image_was_analysed_and_modified(self.cur_img["key"])
         self.cur_img["analysed"] = analysed
@@ -1746,11 +1869,19 @@ class NucDetect(QMainWindow):
         for index in self.ui.list_images.selectionModel().selectedIndexes():
             item = self.img_list_model.get_item_at_index((index.row()))
             item.setData(self.cur_img)
-        if analysed and item:
-            if modified:
-                item.setBackground(Color.ITEM_MODIFIED)
+        if item:
+            if analysed:
+                if modified:
+                    item.setBackground(Color.ITEM_MODIFIED)
+                else:
+                    item.setBackground(Color.ITEM_ANALYSED)
             else:
-                item.setBackground(Color.ITEM_ANALYSED)
+                # Clear the role rather than painting a "default" colour: there is no colour that
+                # means "no highlight" -- any brush is drawn over the row. Without this branch a row
+                # whose analysis was just deleted kept its analysed/modified highlight, so its data
+                # and its colour disagreed until check_all_item_statuses next ran. That sibling has
+                # always had the reset branch, which is why the gap here survived: it looked correct
+                item.setData(None, Qt.BackgroundRole)
 
     def check_all_item_statuses(self) -> None:
         """
@@ -1874,8 +2005,12 @@ class ImageListModel(QAbstractListModel):
     Class to lazy load needed image list items
     """
 
-    def __init__(self, parent=None, paths: List[str] = [], page_size: int = 30):
+    def __init__(self, parent=None, paths: Sequence[str] = (), page_size: int = 30):
         """
+        Sequence, not List, and the default is an empty tuple: set_paths copies what it is given
+        into a list the model owns, so nothing here ever mutates the argument. A mutable [] default
+        would be shared across every instance constructed without paths.
+
         :param paths: The image paths that are the basis of the items
         """
         super().__init__(parent)
@@ -1883,9 +2018,10 @@ class ImageListModel(QAbstractListModel):
         self.set_paths(paths)
         self._cache = {}
 
-    def set_paths(self, paths: List[str]):
+    def set_paths(self, paths: Sequence[str]):
         # Store a copy: the model owns its path list, so callers mutating their own list
-        # (e.g. NucDetect.loaded_files) cannot silently desynchronise the model behind its back
+        # (e.g. NucDetect.loaded_files) cannot silently desynchronise the model behind its back.
+        # Sequence rather than List for the same reason -- the argument is only read and copied
         self.beginResetModel()
         self._paths = list(paths)
         self._current_paths = self._paths
@@ -1896,6 +2032,13 @@ class ImageListModel(QAbstractListModel):
     def clear(self) -> None:
         """
         Method to remove all paths and cached items from the model
+
+        Clearing is a model reset rather than a removeRows() call on purpose: nesting
+        beginRemoveRows (inside removeRows) within a beginResetModel block is an invalid Qt call
+        sequence. Anything that needs to empty the model must come through here.
+
+        Note Qt drops the selection on a reset WITHOUT emitting selectionChanged, so callers are
+        responsible for resyncing anything derived from the selection.
 
         :return: None
         """
@@ -1941,16 +2084,6 @@ class ImageListModel(QAbstractListModel):
         self.current_index = max(0, self.current_index - count)
         self.endRemoveRows()
         return True
-
-    def clear_data(self) -> None:
-        """
-        Method to clear the stored data
-
-        :return: None
-        """
-        # Delegates to clear(): nesting beginRemoveRows (inside removeRows) within a
-        # beginResetModel block would be an invalid Qt call sequence
-        self.clear()
 
     def canFetchMore(self, parent: QModelIndex) -> bool:
         if parent.isValid():

@@ -25,6 +25,7 @@ class Loader(QTimer):
         :param batch_size: The number of images to load per batch
         :param batch_time: The time between consecutive loading approaches in milliseconds
         :param feedback: The function to call after loading. Has to accept a list of QStandardItems
+                         and a bool saying whether loading is finished
         :param processing: The function to process the individual items. Needs to return the items after processing
         :param autostart: Whether to start the timer at the end of this constructor. A subclass that
                           assigns attributes its process_items needs must pass False and call
@@ -54,8 +55,9 @@ class Loader(QTimer):
 
     def load_next_batch(self) -> None:
         """
-        Function to load the next batch. After loading, the feedback function will be called (will pass an empty list
-        to the feedback function to indicate finished loading). Should be overwritten by child classes
+        Function to load the next batch. After loading, the feedback function is called with the
+        items of this batch and whether loading is now finished. Should be overwritten by child
+        classes
 
         :return: None
         """
@@ -68,21 +70,26 @@ class Loader(QTimer):
         if self.processing:
             items = self.process_items(items)
         self.items_loaded += len(items)
-        # Check if all items were loaded
-        if not items:
-            LOGGER.debug("Timer stop after loading %d items, total loading time: %.2f secs",
-                         self.items_loaded, time.time() - self.start_time)
-            self.stop()
         # Advance by what was consumed, not by a full batch_size: after a short final batch the
         # unconditional += left last_index pointing past the end, so it and self.percentage
         # disagreed with reality until the timer stopped on the following tick
         self.last_index += consumed
+        # FINISHED is asked of the index, not inferred from an empty batch. `if not items` was the
+        # test, and processing can legitimately empty a batch without the load being over --
+        # create_image_item_list_from drops every path that is not a recognised image, so a run of
+        # batch_size non-image files in a folder produced an empty batch, stopped the timer here and
+        # told the consumer it was done. Every image after that point silently never appeared
+        finished = self.last_index >= len(self.items)
+        if finished:
+            LOGGER.debug("Timer stop after loading %d items, total loading time: %.2f secs",
+                         self.items_loaded, time.time() - self.start_time)
+            self.stop()
         # Update the loading percentage
         self.percentage = self.items_loaded / len(self.items) if self.items else 1
         # Check if a feedback function was given
         if self.feedback:
             # Call the feedback function
-            self.feedback(items)
+            self.feedback(items, finished)
 
     def process_items(self, items: Iterable):
         """

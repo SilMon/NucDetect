@@ -1,8 +1,8 @@
 # pyright: reportAttributeAccessIssue=false
 # ^ PyQt5's stubs nest enum members inside their enum class (Qt.ItemDataRole.DisplayRole)
 # while the C++ runtime also exposes them flat on Qt, which is what this file uses. The
-# code is correct PyQt5 and a rewrite to the scoped form was declined -- PyQt6 is not
-# planned (Romano, 2026-08-13). Suppressed at FILE level only because every hit of this
+# code is correct PyQt5 and a rewrite to the scoped form was declined -- a PyQt6 migration
+# is not planned. Suppressed at FILE level only because every hit of this
 # rule here is that stub artefact; measured, not assumed. Re-check with the rule enabled
 # before adding attribute access to a non-Qt object in this file.
 from functools import partial
@@ -193,7 +193,7 @@ class ImageSelectionDialog(QDialog):
                             QtCore.Qt.WindowSystemMenuHint |
                             QtCore.Qt.WindowMinMaxButtonsHint)
 
-    def load_images(self, items: List[QStandardItem]) -> None:
+    def load_images(self, items: List[QStandardItem], finished: bool = False) -> None:
         """
         Method to load the images given by the list paths
 
@@ -203,7 +203,10 @@ class ImageSelectionDialog(QDialog):
         for img in items:
             self.img_model.appendRow(img)
         self.prg_bar.setValue(int(self.update_timer.percentage * 100))
-        if not items:
+        # The loader says when it is done. `if not items` inferred it from an empty batch, which a
+        # folder containing non-image files produces long before the end -- and the list was then
+        # enabled over a partial model
+        if finished:
             # Enable image list
             self.ui.lv_images.setEnabled(True)
             self.ui.buttonBox.setEnabled(True)

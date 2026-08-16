@@ -84,9 +84,8 @@ def _perform_statistical_analysis_on_group(data: pd.DataFrame, pair: Tuple[str, 
 
     :param data: The underlying data as pandas DataFrame
     :param pair: The pair to check
-    :return: The statistical data as pandas DataFrame
+    :return: One result row as a tuple -- the caller collects these and builds the DataFrame
     """
-    rows = []
     # Boolean indexing rather than DataFrame.query -- see the note in the caller: group names
     # are user-supplied and are not safe to interpolate into a query expression.
     control = data[data["Group"] == pair[0][0]]["Foci"].to_numpy()
@@ -193,46 +192,52 @@ def automatic_whitebalance(image: np.ndarray, cutoff: float = 0.05) -> np.ndarra
         span = high - low
         image = ((image - low) / span * 255).astype("uint8") if span else np.zeros(image.shape, "uint8")
     imgmin, imgmax = np.iinfo(image.dtype).min, np.iinfo(image.dtype).max
-    amin, amax = imgmin, imgmax
-    # Calculate histogram of image
-    hist = np.histogram(image, bins=imgmax + 1)
-    # Suppress shadows
-    shadow_index = 0
-    index_number = 0
+    # np.bincount, not np.histogram: histogram spreads its bins over the DATA range, so bin index
+    # i was not pixel value i, while amin/amax were stepped once per bin and then used as pixel
+    # values in the lookup table. bincount is indexed BY VALUE, which is what the rest of this
+    # function has always assumed.
+    #
+    # How much this mattered depends on the data, measured both ways: on an 8-bit channel that
+    # spans the full 0..255 the bins ARE the values, and the old and new saturation points differ
+    # by the shadow offset alone -- 0/38 against 1/38 on a real image here. On a 16-bit channel
+    # spanning 3800..3999 the old code produced amin/amax of 2305/63560, values the data never
+    # takes, and mapped that image into an output span of 213 out of 65535; this version stretches
+    # it across the full range. The defect was latent on this project's images, not harmless
+    hist = np.bincount(image.ravel(), minlength=imgmax + 1)
+    # Suppress shadows -- skip the darkest 30 % of the pixels
+    cumulative = np.cumsum(hist)
     pixel_number = 0.3 * image.shape[0] * image.shape[1]
-    for ind, val in enumerate(hist[0]):
-        index_number += val
-        if index_number > pixel_number:
-            shadow_index = ind + 1
-            break
-    cut_hist = hist[0][shadow_index:]
-    total_pixels = np.sum(cut_hist)
+    shadow_index = int(np.searchsorted(cumulative, pixel_number, side="right")) + 1
+    cut_hist = hist[shadow_index:]
+    total_pixels = int(cut_hist.sum())
+    if not total_pixels:
+        # Every pixel fell into the shadow cut -- a flat or near-flat image -- so there is no
+        # highlight range to stretch. The previous code carried on and mapped such an image to
+        # ALL BLACK: measured on a uniform uint8 image of 7, it produced amin=127, amax=128 and an
+        # output whose only value is 0. Returning it unchanged keeps the data instead
+        return image
     # Calculate pixel threshold
     thresh = cutoff * total_pixels
-    # Counts of pixels
-    cmin, cmax = 0, 0
-    for ind in range(len(cut_hist)):
-        cmin += cut_hist[ind]
-        cmax += cut_hist[len(cut_hist) - 1 - ind]
-        if cmin <= thresh:
-            amin += 1
-        if cmax <= thresh:
-            amax -= 1
+    # The saturation points, as VALUES: amin is the value below which at most `thresh` pixels lie,
+    # counted upwards from the shadow cut, and amax the same counted downwards from the top
+    amin = shadow_index + int(np.searchsorted(np.cumsum(cut_hist), thresh, side="right"))
+    amax = imgmax - int(np.searchsorted(np.cumsum(cut_hist[::-1]), thresh, side="right"))
+    if amax <= amin:
+        # The two saturation points met or crossed: there is no range to map onto the full one.
+        # DEFENSIVE, and deliberately recorded as such -- the divide-by-zero this guards against
+        # was NOT reproduced, neither on the 110 real images nor across 4000 synthetic ones; the
+        # smallest gap observed was 1, on a uniform image. It is cheap and the alternative is an
+        # exception out of a background thread, but nobody should read this as a fixed crash
+        return image
     # Calculate balance ratio
     ratio = (imgmax - imgmin) / (amax - amin)
-    # Create a lookup table for pixel values
-    lut = []
-    for val in range(imgmax):
-        lut.append(imgmin + (val - amin) * ratio)
-    for y in range(image.shape[0]):
-        for x in range(image.shape[1]):
-            if image[y][x] <= amin:
-                image[y][x] = imgmin
-            elif image[y][x] >= amax:
-                image[y][x] = imgmax
-            else:
-                image[y][x] = lut[image[y][x]]
-    return image
+    # One entry per possible value, imgmax INCLUDED -- range(imgmax) omitted the top value. The
+    # remap is lut[image] rather than a Python loop over every pixel: measured on the real 110
+    # image set, 1.6 s -> ~5 ms per channel, and the editor ran this twice per channel on a
+    # background thread while both of its check boxes stayed disabled
+    values = np.arange(imgmax + 1, dtype="float64")
+    lut = np.clip(imgmin + (values - amin) * ratio, imgmin, imgmax).astype(image.dtype)
+    return lut[image]
 
 
 @njit
@@ -286,19 +291,16 @@ def create_circular_mask(h: Union[int, float], w: Union[int, float],
     return mask
 
 
-@njit
-def relabel_array(array: np.ndarray) -> None:
-    """
-    Function to relabel a given binary map
-
-    :param array: The map to relabel
-    :return: None
-    """
-    unique = list(np.unique(array))
-    nums = np.arange(len(unique) + 1)
-    for y in range(len(array)):
-        for x in range(len(array[0])):
-            array[y][x] = nums[unique.index(array[y][x])]
+# relabel_array was deleted here on 2026-08-17, together with the @njit that decorated it -- left
+# in place, that decorator fell onto the next function, which is already jitted, and numba raised
+# "A jit decorator was called on an already jitted function" at import time. It took five harnesses
+# down at once, which is what deleting a function without its decorator looks like.
+# It called unique.index() inside a double loop over
+# every pixel, making it O(pixels x labels) -- 2.37 s on a 1024x1024 map, against 44 ms for
+# np.unique(..., return_inverse=True), which computes the same relabelling. It was NOT vectorised,
+# because it had no callers: a grep for the name over the whole tree returned its own def and
+# nothing else. The checklist item that filed it grouped it with two real hot-path loops and said
+# all three "dominate analysis time"; for this one that could not have been true in any run.
 
 
 @njit

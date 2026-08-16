@@ -15,6 +15,11 @@ LOGGER = get_logger(__name__)
 # cell of that table is a preformatted string and the sort key falls back to text comparison for
 # anything that is not a number, so this sorts as one block rather than breaking the column
 NO_STATISTICS = "Not calculated"
+# Shown in the Co-Loc. column when co-localization is not a meaningful measurement for the row --
+# see the comment in get_table_data_for_image. Deliberately non-numeric, like NO_STATISTICS: a
+# placeholder that parses as a number would be indistinguishable from a real result, and the result
+# table's sort key already groups non-numeric cells together after the numeric ones
+NO_COLOCALIZATION = "n/a"
 
 
 class Specifiers(Enum):
@@ -416,11 +421,15 @@ class Requester(DatabaseInteractor):
     Class to request data from the database
     """
 
-    def get_all_settings(self) -> List[Tuple[Union[str, int, float]]]:
+    def get_all_settings(self) -> List[Tuple[Union[str, int, float], ...]]:
         """
         Method to load the settings from the database
 
-        :return: The saved settings
+        The trailing ellipsis in the return type is load-bearing: Tuple[X] means a tuple of exactly
+        one element, and each row here carries the three settings columns.
+
+        :return: One row per setting, as (key, value, type) -- the last two are what
+                 Connector.convert_to_type needs to rebuild the stored value
         """
         return self.connector.get_view_from_table(Specifiers.ALL, "settings")
 
@@ -439,10 +448,13 @@ class Requester(DatabaseInteractor):
         :param experiment: Name of the experiment
         :return: The details and notes for the given experiment
         """
-        details, notes = self.connector.get_view_from_table(("details", "notes"),
-                                                            "experiments",
-                                                            ("name", Specifiers.EQUALS, experiment))[0]
-        return details, notes
+        rows = self.connector.get_view_from_table(("details", "notes"),
+                                                  "experiments",
+                                                  ("name", Specifiers.EQUALS, experiment))
+        # None for "no such experiment", the contract get_info_for_image adopted on 2026-08-15 and
+        # the rest of these accessors took on 2026-08-17. Indexing [0] raised IndexError from three
+        # frames down, naming neither the experiment nor the query
+        return rows[0] if rows else None
 
     def get_channels_for_experiment(self, experiment: str, include_main: bool = False) -> List[str]:
         """
@@ -454,6 +466,11 @@ class Requester(DatabaseInteractor):
         """
         # Select the images corresponding to the experiment
         imgs = self.get_associated_images_for_experiment(experiment)
+        # An experiment with no images has no channels. imgs[0] raised IndexError instead of saying
+        # so, and an experiment can legitimately be empty -- the dialog creates it before any image
+        # is assigned
+        if not imgs:
+            return []
         channels = [x[0] for x in self.connector.get_view_from_table("DISTINCT name", "channels",
                                                                      ("md5", Specifiers.EQUALS, imgs[0]))]
         # Get the main channel
@@ -470,8 +487,11 @@ class Requester(DatabaseInteractor):
         :return: The name of the main channel
         """
         # Get first associated image
-        img = self.get_associated_images_for_experiment(experiment)[0]
-        return self.get_main_channel(img)
+        imgs = self.get_associated_images_for_experiment(experiment)
+        # Same empty-experiment case as get_channels_for_experiment above
+        if not imgs:
+            return None
+        return self.get_main_channel(imgs[0])
 
     def get_associated_images_for_experiment(self, experiment: str) -> List[str]:
         """
@@ -504,26 +524,37 @@ class Requester(DatabaseInteractor):
         """
         return [x[0] for x in self.connector.get_view_from_table("md5", "images")]
 
-    def get_experiment_for_image(self, image: str) -> str:
+    def get_experiment_for_image(self, image: str) -> Union[str, None]:
         """
         Method to get the associated experiment for the given image
 
         :param image: md5 hash of the image
-        :return: The name of the experiment
+        :return: The name of the experiment, or None if the image is not in the images table
         """
-        return self.get_info_for_image(image)[14]
+        info = self.get_info_for_image(image)
+        return info[14] if info is not None else None
 
-    def get_info_for_image(self, image: str) -> Tuple[Union[str, int, float, None]]:
+    def get_info_for_image(self, image: str) -> Union[Tuple[Union[str, int, float, None], ...], None]:
         """
         Method to get all saved information for the given image
 
+        Returns None -- not an empty tuple -- when the image is not in the table. The empty tuple
+        that stood here until 2026-08-15 was meant as a "no such image" signal but no caller could
+        act on it: every one of them indexes the result, so a miss raised IndexError rather than
+        evaluating falsy, and a miss was distinguishable from a row only by the exception. That is
+        what the "throws error after analyse all" TODO removed from above this query described --
+        reproduced against a sandbox database, `get_info_for_image("unregistered")[8]` raises
+        `IndexError: tuple index out of range`.
+
+        The row is the images table in schema order: md5, year, month, day, hour, minute, channels,
+        width, height, x_res, y_res, unit, analysed, settings, experiment, modified.
+
         :param image: The md5 hash of the image
-        :return: The information as list of strings
+        :return: The image's row, or None if there is no such image
         """
-        # TODO throws error after analyse all
         info = self.connector.get_view_from_table(Specifiers.ALL, "images",
                                                   ("md5", Specifiers.EQUALS, image))
-        return info[0] if info else ()
+        return info[0] if info else None
 
     def check_if_image_was_analysed(self, image: str) -> bool:
         """
@@ -668,9 +699,13 @@ class Requester(DatabaseInteractor):
         :param image: The md5 hash of the image
         :return: The name of the main channel
         """
-        return self.connector.get_view_from_table("name", "channels",
+        rows = self.connector.get_view_from_table("name", "channels",
                                                   (("md5", Specifiers.EQUALS, image),
-                                                   ("main", Specifiers.EQUALS, 1)))[0][0]
+                                                   ("main", Specifiers.EQUALS, 1)))
+        # An image whose channels were never written, or written without a main channel, is a
+        # legitimate state -- and this runs in EditorView.__init__, so [0][0] took the editor down
+        # on open rather than reporting which image had no main channel
+        return rows[0][0] if rows else None
 
     def get_roi_info(self, roi: int) -> Tuple:
         """
@@ -679,8 +714,9 @@ class Requester(DatabaseInteractor):
         :param roi: The md5 hash of the roi
         :return: The retrieved information
         """
-        return self.connector.get_view_from_table(Specifiers.ALL, "roi",
-                                                  ("hash", Specifiers.EQUALS, roi))[0]
+        rows = self.connector.get_view_from_table(Specifiers.ALL, "roi",
+                                                  ("hash", Specifiers.EQUALS, roi))
+        return rows[0] if rows else None
 
     def get_statistics_for_roi(self, roi: int) -> Tuple:
         """
@@ -691,7 +727,10 @@ class Requester(DatabaseInteractor):
         """
         stats = self.connector.get_view_from_table(Specifiers.ALL, "statistics", ("hash",
                                                                                   Specifiers.EQUALS, roi))
-        return stats[0] if stats else ()
+        # None, not (): an empty tuple is falsy AND indexable-with-IndexError, so it read as a
+        # row that happens to be empty. Every accessor in this class now answers None for "no such
+        # row" -- see get_info_for_image for where the convention was first written down
+        return stats[0] if stats else None
 
     def get_points_for_roi(self, roi: ROI) -> List[Tuple]:
         """
@@ -713,31 +752,64 @@ class Requester(DatabaseInteractor):
         """
         # Get all nuclei associated with this image
         nucs = self.get_nuclei_hashes_for_image(image)
+        # Hoisted out of the nucleus loop: it does not depend on the nucleus, so it was one query
+        # per nucleus for one answer. Fetching it here is also what makes the check below possible
+        # exactly once per image rather than once per row.
+        channels = sorted(self.get_channel_names(image, False))
+        # A nucleus row is only emitted once per channel, so with no channel the assembled row is
+        # discarded and this method returns [] -- however many nuclei the image has. Reaching this
+        # with nuclei present means measured results are being dropped, so it is logged rather than
+        # left to surface as an empty table with no explanation.
+        if not channels and nucs:
+            LOGGER.error("No active non-main channel for image %s -- its result table will be "
+                         "empty despite %d nuclei", image, len(nucs))
         rows = []
         for nuc in nucs:
             # Get the name of the image
             name = name if name else "Name not available"
             # Get the general ROI information
             general = self.get_roi_info(nuc)
+            # None means the hash came back from get_nuclei_hashes_for_image but its roi row is
+            # gone -- there is no row to render, so the nucleus is skipped loudly rather than
+            # raising three frames further down on general[10]
+            if general is None:
+                LOGGER.warning("No roi row for nucleus %s of image %s -- skipped in the result "
+                               "table", nuc, image)
+                continue
             # Get nucleus statistics
             stats = self.get_statistics_for_roi(nuc)
-            # Calculate overall match for this nucleus
-            match = general[10] * 100 if general[10] else 100
-            # Create row for this nucleus. get_statistics_for_roi returns an empty tuple for a
-            # nucleus with no statistics row, so every stats[] below would raise IndexError and take
-            # the whole result table with it. The row is kept and the affected cells say so instead:
+            # Calculate overall match for this nucleus. roi.match is -1 when the image has a single
+            # channel, where co-localization is not a meaningful concept, and None when it was never
+            # computed; both render as NO_COLOCALIZATION. The test is explicit rather than a
+            # truthiness check because a match of exactly 0 is a real measurement -- "these foci
+            # co-localize with nothing" -- and used to be reported as 100 % by the old
+            # `general[10] * 100 if general[10] else 100`, which caught 0 along with the sentinels
+            if general[10] is None or general[10] == -1:
+                match = NO_COLOCALIZATION
+            else:
+                match = f"{general[10] * 100:.2f}"
+            # Create row for this nucleus. get_statistics_for_roi returns None for a nucleus
+            # with no statistics row (an empty tuple until 2026-08-17), so every stats[] below
+            # would raise and take the whole result table with it. The row is kept and the affected cells say so instead:
             # the nucleus exists and its foci counts are still countable. This needs a partially
             # committed analysis to occur at all -- statistics are written as part of every
             # analysis -- so no recovery is attempted here
             if stats:
-                measurements = [str(stats[11]), str(stats[10]), f"{stats[15]:.2f}",
+                # Center Y and Center X go through the same :.2f as every other numeric column.
+                # get_center returns round(...), which under @njit yields a float for some ROI, and
+                # SQLite's INTEGER affinity then stores the losslessly-representable ones as integer
+                # and the rest as real -- so bare str() put "433" next to "435.9399961797561" in one
+                # column. Measured before the fix: 151 of 4418 nuclei across 39 images stored a real
+                # centre
+                measurements = [f"{float(stats[11]):.2f}", f"{float(stats[10]):.2f}",
+                                f"{stats[15]:.2f}",
                                 f"{float(stats[18]) * 100:.2f}", f"{float(stats[14]):.2f}",
                                 f"{float(stats[12]):.2f}", f"{float(stats[13]):.2f}"]
             else:
                 measurements = [NO_STATISTICS] * 7
-            row = [name, str(image), str(nuc)] + measurements + [f"{match:.2f}"]
+            row = [name, str(image), str(nuc)] + measurements + [match]
             # Count the foci
-            for channel in sorted(self.get_channel_names(image, False)):
+            for channel in channels:
                 rows.append(row + [channel, str(self.count_foci_for_nucleus_and_channel(nuc, channel))])
         return rows
 
@@ -769,8 +841,14 @@ class Requester(DatabaseInteractor):
         """
         Method to get the file name of the given image
 
+        The one accessor that does NOT answer None for a missing row, and deliberately so: its
+        result is a display label, every caller substitutes it straight into text, and "" is the
+        empty label. Returning None here would push a None-check into each of those callers to
+        produce the same string. Recorded because the rest of this class was brought onto the
+        None contract on 2026-08-17 and this is the exception to it
+
         :param md5: The md5 hash of the image
-        :return: The associated file name
+        :return: The associated file name, or "" if the image has no recorded name
         """
         data = self.connector.get_view_from_table("file_name",
                                                   "encountered_names",
@@ -783,10 +861,17 @@ class Inserter(DatabaseInteractor):
     Class to modify the database
     """
 
-    def add_new_image(self, md5: str, year: str, month: str, day: str, hour: str, minute: str,
-                      channels: int, width: int, height: int, xres: str, yres: str, res_unit: str) -> None:
+    def add_new_image(self, md5: str, year: int, month: int, day: int, hour: int, minute: int,
+                      channels: int, width: int, height: int, xres: float, yres: float,
+                      res_unit: str) -> None:
         """
         Method to add a new image to the database
+
+        The date parts and the resolutions are numbers, not strings. ImageLoader.get_image_data
+        produces year..minute as int (from datetime.timetuple()) and x_res/y_res as float (from
+        _rational_to_scale), and create_tables.sql declares the five date columns INTEGER. The
+        annotations said str until 2026-08-15, which nothing caught because SQLite accepts either.
+
         :param md5: The md5 hash of the image
         :param year: The year the image was created
         :param month: The month the image was created
@@ -795,7 +880,7 @@ class Inserter(DatabaseInteractor):
         :param minute: The minute the image was created
         :param channels: Number of image channels
         :param width: The width of the image
-        :param height: The height of the imge
+        :param height: The height of the image
         :param xres: The x resolution of the image
         :param yres: The y resolution of the image
         :param res_unit: The resolution unit of the image

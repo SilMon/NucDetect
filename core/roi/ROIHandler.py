@@ -4,6 +4,7 @@ Created on 09.04.2019
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Union, List, Tuple, Iterable
 
 import numpy as np
@@ -13,7 +14,20 @@ from core.roi import AreaAnalysis
 from core.roi.ROI import ROI
 
 
-class ROIHandler:
+class ROIHandler(Sequence):
+    """Container for the ROI of one image.
+
+    Declares Sequence rather than merely behaving like one. It already implements __len__,
+    __getitem__ (slices included, since rois is a list) and __iter__, but Sequence is an ABC and is
+    matched nominally, so isinstance(handler, Sequence) was False and no type checker would accept
+    a ROIHandler where a Sequence is required -- which gui.loader.Loader requires, and is handed one
+    by ROIDrawerTimer. The base class is a declaration, not an implementation: it adds only the
+    mixin methods index, count, __contains__ and __reversed__.
+
+    collections.abc ABCs declare __slots__ = (), so this does not give instances a __dict__ and the
+    slots below stay effective. That matters because ROIHandler crosses the process boundary --
+    workers build one and hand it back through the ProcessPoolExecutor.
+    """
     __slots__ = [
         "ident",
         "main",

@@ -1,13 +1,14 @@
 # pyright: reportAttributeAccessIssue=false
 # ^ PyQt5's stubs nest enum members inside their enum class (Qt.ItemDataRole.DisplayRole)
 # while the C++ runtime also exposes them flat on Qt, which is what this file uses. The
-# code is correct PyQt5 and a rewrite to the scoped form was declined -- PyQt6 is not
-# planned (Romano, 2026-08-13). Suppressed at FILE level only because every hit of this
+# code is correct PyQt5 and a rewrite to the scoped form was declined -- a PyQt6 migration
+# is not planned. Suppressed at FILE level only because every hit of this
 # rule here is that stub artefact; measured, not assumed. Re-check with the rule enabled
 # before adding attribute access to a non-Qt object in this file.
 import datetime
 import os
 import sqlite3
+import threading
 from contextlib import closing
 from os.path import isfile
 from typing import List, Optional, Sequence, Tuple, Union
@@ -32,6 +33,39 @@ IMAGE_FORMATS = [
         ".jpg",
         ".bmp"
 ]
+
+# If set, a ui operation running off the GUI thread raises instead of only being logged. Meant for
+# tests and debug runs -- in production a wrong thread should not turn into a hard crash by itself
+STRICT_THREAD_AFFINITY = os.environ.get("NUCDETECT_STRICT_THREAD_AFFINITY", "") == "1"
+
+
+def assert_main_thread(operation: str, strict: bool = None, logger=None) -> None:
+    """
+    Function to verify that a ui operation is running on the GUI thread
+
+    Touching a widget or a model from a worker thread does not fail immediately -- it corrupts
+    Qt's internal state and surfaces later as an unreproducible freeze or crash. This turns that
+    into a loud, deterministic failure at the point of the violation.
+
+    It lives in Util because the editor needs it too, and a dialog module cannot import
+    NucDetectAppQT to get at its copy: that would pull TensorFlow in AFTER PyQt5, which is the
+    documented DLL-load failure.
+
+    :param operation: Name of the operation, used in the message
+    :param strict: Overrides the module flag. NucDetect passes its own so that flipping the flag
+    on that module keeps working
+    :param logger: Optional; the logger to report on. Defaults to this module's
+    :return: None
+    :raises RuntimeError: If called off the GUI thread and strict checking is enabled
+    """
+    if QtCore.QThread.currentThread() is QtCore.QCoreApplication.instance().thread():
+        return
+    msg = (f"{operation} was called from thread "
+           f"'{QtCore.QThread.currentThread().objectName() or threading.current_thread().name}'"
+           f" instead of the GUI thread -- route it through a signal")
+    (logger or LOGGER).critical(msg)
+    if STRICT_THREAD_AFFINITY if strict is None else strict:
+        raise RuntimeError(msg)
 
 
 def load_stylesheet(name: str) -> str:

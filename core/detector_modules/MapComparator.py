@@ -105,16 +105,22 @@ class MapComparator:
         for ind_a, ind_b in pairs:
             focus_a = foci_a[ind_a]
             focus_b = foci_b[ind_b]
-            # Reduces focus_a to the area both detection methods agree on, and marks it "Merged"
-            # only if they overlap at all -- an empty intersection leaves it untouched and both
-            # foci are kept separately below.
-            focus_a.intersect_with(focus_b)
-            if focus_a.detection_method != "Merged":
+            # Reduces focus_a to the area both detection methods agree on. An empty intersection
+            # leaves it untouched and both foci are kept separately.
+            #
+            # The return value is asked directly rather than inferred from detection_method, which
+            # is what this did until 2026-08-15. That test was a proxy for "did the intersection
+            # happen", and a wrong one: a focus already carrying "Merged" from an earlier pass would
+            # have been counted as merged again even when this intersection was refused.
+            if focus_a.intersect_with(focus_b):
+                merged_foci.append(focus_a)
+            else:
                 added_a.append(focus_a)
                 added_b.append(focus_b)
-            else:
-                merged_foci.append(focus_a)
-        self.log(f"Channel: {foci_a[0].ident}\t{sum(matched_a)} matching foci ({sum(unmatched_a)} unmatched)"
+        # The channel name comes from whichever list has one -- foci_a[0] raised IndexError on the
+        # same empty-list case get_overlap_between_lists used to crash on, one line later
+        channel = next((x.ident for x in foci_a + foci_b), "unknown")
+        self.log(f"Channel: {channel}\t{sum(matched_a)} matching foci ({sum(unmatched_a)} unmatched)"
                  f" found and merged in {time.time() - start: .3f} secs")
         return merged_foci + added_a + added_b
 
@@ -135,7 +141,15 @@ class MapComparator:
         :return: The overlapping ROI as pairs of list indices, the matched roi in a, the matched roi in b,
         the unmatched roi in a, the unmatched roi in b
         """
-        # TODO checken ob beide Listen auch etwas enthalten
+        # An empty list is an ANSWER, not an error: one detection method found nothing in this
+        # channel, so nothing can be matched and everything the other method found is unmatched --
+        # which is what merge_overlapping_foci needs in order to keep it. cKDTree raises
+        # `ValueError: data must be of shape (n, m)` on an empty list rather than saying so, and
+        # this runs under the COMBINED method, which is the dialog's default
+        if not foci_a or not foci_b:
+            return ([],
+                    np.zeros(len(foci_a), dtype=bool), np.zeros(len(foci_b), dtype=bool),
+                    np.ones(len(foci_a), dtype=bool), np.ones(len(foci_b), dtype=bool))
         # Convert the focus list to centroids
         centroids_a = [x.get_minimal_representation()[:2] for x in foci_a]
         centroids_b = [x.get_minimal_representation()[:2] for x in foci_b]
@@ -163,16 +177,24 @@ class MapComparator:
                 # Sort the matches by distance
                 points_b = [data_b[x] for x in matches]
                 dists = np.linalg.norm(np.asarray(points_b) - np.asarray(point_a), axis=1)
-                nearest_neighbor = [matches[x] for x in np.argsort(dists)][0]
+                # The distance TO THE NEIGHBOUR THAT WAS SELECTED. dists[0] is the distance to the
+                # first candidate in query_ball_tree's order, which is only the nearest by
+                # coincidence -- so the "keep the closer match" test below, and the distance it
+                # stored for later comparisons, both described a different focus
+                nearest = int(np.argmin(dists))
+                nearest_neighbor = matches[nearest]
+                nearest_distance = float(dists[nearest])
                 # Get the nearest neighbor as ROI
                 focus_b = foci_b[nearest_neighbor]
                 # Check if the nearest neighbor was already matched, else match it
-                if not matched_b[nearest_neighbor] or dists[0] < pairs[hash(focus_b)][2]:
+                if not matched_b[nearest_neighbor] or nearest_distance < pairs[hash(focus_b)][2]:
                     matched_b[nearest_neighbor] = 1
                     matched_a[ind] = 1
-                    if pairs[hash(focus_b)][0]:
+                    # `is not None`: index 0 is a valid index and a falsy value, so a match against
+                    # the FIRST focus in the list was never displaced by a closer one
+                    if pairs[hash(focus_b)][0] is not None:
                         matched_a[pairs[hash(focus_b)][0]] = 0
-                    pairs[hash(focus_b)] = [ind, nearest_neighbor, dists[0]]
+                    pairs[hash(focus_b)] = [ind, nearest_neighbor, nearest_distance]
         unmatched_a = np.invert(matched_a)
         unmatched_b = np.invert(matched_b)
         return ([(x[0], x[1]) for x in pairs.values() if x[0] is not None],

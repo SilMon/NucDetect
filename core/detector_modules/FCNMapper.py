@@ -27,10 +27,11 @@ class FCNMapper(AreaMapper):
     """
     Class to detect foci on image channels using machine learning
     """
-    # No __slots__ -- see the note on AreaMapper. This class is the reason: its declaration named
+    # No __slots__ -- see the note on AreaMapper. This class was the reason: its declaration named
     # neither `script_dir` nor `model_type`, both of which __init__ assigned, so the list could
-    # never have been activated as written. `script_dir` has since been deleted; `model_type`
-    # remains, and is itself assigned and never read.
+    # never have been activated as written. Both attributes have since been deleted (2026-08-08 and
+    # 2026-08-15), so the original obstacle is gone; whether to declare __slots__ here is now the
+    # open question on AreaMapper rather than a defect in this class.
     STANDARD_SETTING = {
         "fcn_certainty_nuclei": 0.95,
         "fcn_certainty_foci": 0.8
@@ -51,18 +52,23 @@ class FCNMapper(AreaMapper):
     # built for a fixed input, so feeding a whole image would mean rebuilding it per image shape.
     TILE_SHAPE = (256, 256)
 
-    def __init__(self, channels: Iterable[np.ndarray] = None,
-                 settings: Dict = None, main: int = 2):
-        super().__init__(channels, settings)
+    def __init__(self, channels: Iterable[np.ndarray] = None, settings: Dict = None):
         # There was a `self.script_dir = Path().resolve().parent / "fcn" / "model"` here. It was
         # never read, and it was wrong: it derived the model directory from the CURRENT WORKING
         # DIRECTORY, which the application mutates at import time, so it pointed somewhere else
         # depending on how the process was started. load_model uses gui.Paths.model_dir, which
         # names the same directory but derives it from the package location. Use that.
+        #
+        # A `main: int = 2` parameter, `self.main` and `self.model_type` were removed on 2026-08-15.
+        # All three were leftovers of the dropped nucleus-detection model: 2 was FCN.NUCLEI, and the
+        # deleted FCN class used it to choose between two loaded models. This class loads ONE --
+        # detector.keras, the focus detector -- so the parameter selected nothing, and neither
+        # attribute was ever read. The signature was actively misleading: a caller could reasonably
+        # believe FCNMapper(..., main=1) switched it to focus detection and that it was configured
+        # for nuclei, and both readings were wrong.
+        super().__init__(channels, settings)
         self.set_gpu_memory_growth()
         self.model = self.load_model()
-        self.main = main
-        self.model_type = True
 
     @staticmethod
     def set_gpu_memory_growth() -> None:
@@ -91,7 +97,11 @@ class FCNMapper(AreaMapper):
 
     def get_marked_maps(self) -> List[np.ndarray]:
         """
-        Method to create nucleus and focus maps for the given channels
+        Method to create focus maps for the given channels
+
+        Focus maps only, despite what this said until 2026-08-15. Nucleus detection via FCN was
+        dropped: Detector.nucleus_extraction always uses NucleusMapper, and FCNMapper is only ever
+        constructed inside the focus branch (detection_method "u-net" or "combined").
 
         :return: The created maps
         """

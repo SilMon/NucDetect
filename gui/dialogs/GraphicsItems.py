@@ -4,17 +4,19 @@ from typing import List, Iterable, Dict, Optional, Sequence, Tuple
 import numpy as np
 import pyqtgraph as pg
 from PyQt5 import QtCore
-from PyQt5.QtCore import QRectF, Qt, QPointF
+from PyQt5.QtCore import QRectF, Qt, QPointF, pyqtSignal
 from PyQt5.QtGui import QColor, QKeyEvent, QMouseEvent
 from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem
 from pyqtgraph import ColorBarItem
 from skimage.draw import ellipse
 
 from core.DataProcessing import create_lg_lut, automatic_colorbalance
+from core.detector_modules.AreaAndROIExtractor import get_nearest_nucleus
 from core.logging_config import get_logger
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 from core.database.connections import Requester, Inserter
+from gui.Util import assert_main_thread
 from gui.loader import ROIDrawerTimer
 
 LOGGER = get_logger(__name__)
@@ -28,6 +30,11 @@ COMPOSITE_CHANNEL = -1
 
 
 class EditorView(pg.GraphicsView):
+    # Emitted once the white-balance and high-contrast variants have been computed. They are
+    # calculated on a background thread, and the two check boxes they enable may only be touched on
+    # the GUI thread, so the hand-off goes through a queued connection rather than a direct call
+    variants_ready_signal = pyqtSignal()
+
     COLORS = [
         QColor(255, 50, 0),  # Red
         QColor(50, 255, 0),  # Green
@@ -76,6 +83,13 @@ class EditorView(pg.GraphicsView):
         self.requester = Requester()
         self.inserter = Inserter()
         self.main_channel = self.requester.get_main_channel(self.roi.ident)
+        # The editor cannot work without one: it decides which items are nuclei (~:471) and indexes
+        # active_channels by it (~:476). get_main_channel answers None rather than raising as of
+        # 2026-08-17, so the failure is raised HERE, naming the image, instead of surfacing later
+        # as a KeyError on None from inside a drawing routine
+        if self.main_channel is None:
+            raise ValueError(f"Image {self.roi.ident} has no main channel recorded -- "
+                             f"the editor cannot be opened for it")
         self.plot_item = pg.PlotItem()
         self.view = self.plot_item.getViewBox()
         self.view.setAspectLocked(True)
@@ -117,6 +131,8 @@ class EditorView(pg.GraphicsView):
         self.scale_bar.text.setPlainText(f"{self.scale_microns} µm")
         self.scale_bar.anchor((1, 1), (1, 1), offset=(-50, -50)) # Position set to bottom right
         self.addItem(self.scale_bar)
+        # Connected before the thread is started, or a fast worker could emit into nothing
+        self.variants_ready_signal.connect(self.enable_variant_modes)
         self.initialize_wb_and_hc()
 
     def initialize_wb_and_hc(self) -> None:
@@ -127,6 +143,20 @@ class EditorView(pg.GraphicsView):
         """
         init_thread = threading.Thread(target=self.calculate_hc_and_wb_images, daemon=True)
         init_thread.start()
+
+    def enable_variant_modes(self) -> None:
+        """
+        Method to enable the two check boxes whose images are prepared in the background
+
+        Connected to variants_ready_signal, thus always executed on the GUI thread. The worker
+        used to call the two enable_* methods itself, which is undefined behaviour rather than a
+        race producing a stale pixel -- a QWidget may only be touched from the thread it lives in
+
+        :return: None
+        """
+        assert_main_thread("EditorView.enable_variant_modes")
+        self._dialog.enable_white_balance_mode()
+        self._dialog.enable_high_contrast_mode()
 
     def set_changes(self, rect: QRectF, angle: float, preview: bool = False) -> None:
         """
@@ -205,8 +235,9 @@ class EditorView(pg.GraphicsView):
         self.image_adj = automatic_colorbalance(self.image)
         self.hcimg = self.create_high_contrast_image()
         self.hcimg_adj = automatic_colorbalance(self.hcimg)
-        self._dialog.enable_white_balance_mode()
-        self._dialog.enable_high_contrast_mode()
+        # Emit, do not call: this runs on a plain threading.Thread, and the two check boxes it
+        # enables live on the GUI thread. A queued connection is what carries the hand-off
+        self.variants_ready_signal.emit()
 
     def create_high_contrast_image(self) -> np.ndarray:
         """
@@ -332,10 +363,13 @@ class EditorView(pg.GraphicsView):
                                             feedback=self.update_loading,
                                             processing=ROIDrawer.draw_roi)
 
-    def update_loading(self, items: List[QGraphicsItem]) -> None:
+    def update_loading(self, items: List[QGraphicsItem], finished: bool = False) -> None:
         """
         Method to update the progress bar
 
+        :param items: The items loaded in this batch
+        :param finished: True when the loader has no items left. Unused here -- this consumer keys
+        off the percentage rather than off the end of the load -- but part of the feedback contract
         :return: None
         """
         self._dialog.ui.prg_loading.setValue(int(self.loading_timer.percentage * 100))
@@ -444,7 +478,8 @@ class EditorView(pg.GraphicsView):
         """
         # Get click position
         pos = self.mpos
-        if self.active_channel == self.main_channel:
+        is_nucleus = self.active_channel == self.main_channel
+        if is_nucleus:
             item = NucleusItem(round(pos.x() - 45 * self.size_factor), round(pos.y() - 23 * self.size_factor),
                                round(90 * self.size_factor), round(46 * self.size_factor),
                                round(pos.x()), round(pos.y()),
@@ -454,12 +489,6 @@ class EditorView(pg.GraphicsView):
                 ROIDrawer.MARKERS["nucleus_manual"],
                 ROIDrawer.MARKERS["invisible"]
             )
-            item.add_to_view(self.plot_item)
-            self._dialog.set_mode(2)
-            self.change_mode(1)
-            self.selected_item = item
-            item.enable_editing(True)
-            self._dialog.setup_editing(item)
         else:
             item = FocusItem(round(pos.x() - 2 * self.size_factor), round(pos.y() - 2 * self.size_factor),
                              round(4 * self.size_factor), round(4 * self.size_factor),
@@ -471,8 +500,18 @@ class EditorView(pg.GraphicsView):
         item.changed = True
         self.roi_items.append(item)
         self.temp_items.append(item)
-        # Add item to view
+        # ONE add, on ONE path. The nucleus branch used to add here as well as in the tail, because
+        # enable_editing(True) below needs the item to be in the view already -- it attaches the
+        # editing rectangle to the item's scene. Qt refused the second add and printed a warning,
+        # so nothing was duplicated, but the two call sites disagreed about whose job the add was.
         item.add_to_view(self.plot_item)
+        if is_nucleus:
+            self._dialog.set_mode(2)
+            # change_mode clears any previously selected item, so it must run BEFORE the assignment
+            self.change_mode(1)
+            self.selected_item = item
+            item.enable_editing(True)
+            self._dialog.setup_editing(item)
 
     def mouse_moved(self, event: QMouseEvent) -> None:
         pos = event[0]
@@ -641,7 +680,14 @@ class EditorView(pg.GraphicsView):
         self.inserter.reset_nuclei_foci_associations(self.delete)
         # Check for changed items
         self.process_changed_items(unassociated, maps)
-        associations = self.create_associations(self.roi.idents.index(self.roi.main), maps, unassociated)
+        # The centers come from the ROI themselves rather than from the maps, so both association
+        # paths measure the same point -- calculate_dimensions is what associate_roi reads too
+        centers = {}
+        for roi in self.roi:
+            dims = roi.calculate_dimensions()
+            centers[hash(roi)] = (dims["center_y"], dims["center_x"])
+        associations = self.create_associations(self.roi.idents.index(self.roi.main), maps,
+                                                unassociated, centers)
         # Clean unassociated list
         unassociated = [x for x in unassociated if x not in associations.keys()]
         self.delete_roi(unassociated)
@@ -697,25 +743,46 @@ class EditorView(pg.GraphicsView):
         self.inserter.delete_roi_from_database(roihash)
 
     @staticmethod
-    def create_associations(main: int, maps: Iterable[np.ndarray], unassociated: List[int]) -> Dict:
+    def create_associations(main: int, maps: Iterable[np.ndarray], unassociated: List[int],
+                            centers: Dict[int, Tuple[int, int]]) -> Dict:
         """
         Method to create associations dictionary to associate nuclei with foci
+
+        Overlap decides whether a focus is associated, and the distance between the two centers
+        decides with which nucleus -- the same rule the detector's associate_roi applies, so that a
+        focus does not change owner depending on which of the two paths last wrote it. This used to
+        keep whichever nucleus the LAST SCANNED PIXEL belonged to, which is a scan order and not a
+        rule: for a focus spanning two nuclei the bottom-right one won
+
+        The scan itself was three nested Python loops over every pixel of every channel -- 2.1 M
+        iterations for a 1024x1024 image with three channels, 0.39 s on the GUI thread on every
+        save. The masked np.unique below is the same question asked once per channel
 
         :param main: Index of the main channel
         :param maps: Hash maps for each channel
         :param unassociated: List of unassociated ROI hashes
+        :param centers: The center of every roi, as {hash: (y, x)}
         :return: Dictionary containing the associations
         """
-        # Create new associations
-        associations = {}
+        # Every nucleus a focus overlaps, as {focus hash: {nucleus hash}}
+        overlaps: Dict[int, set] = {}
         for c in range(len(maps)):
-            if c != main:
-                for y in range(maps[0].shape[0]):
-                    for x in range(maps[0].shape[1]):
-                        if maps[c][y][x] and maps[main][y][x]:
-                            associations[maps[c][y][x]] = maps[main][y][x]
-        # Clean list
-        associations = {x: y for x, y in associations.items() if x in unassociated}
+            if c == main:
+                continue
+            both = (maps[c] != 0) & (maps[main] != 0)
+            if not both.any():
+                continue
+            pairs = np.unique(np.stack([maps[c][both], maps[main][both]]), axis=1)
+            for focus, nucleus in zip(pairs[0], pairs[1]):
+                overlaps.setdefault(int(focus), set()).add(int(nucleus))
+        associations = {}
+        for focus, nuclei in overlaps.items():
+            if focus not in unassociated or focus not in centers:
+                continue
+            nearest = get_nearest_nucleus(centers[focus],
+                                          {n: centers[n] for n in nuclei if n in centers})
+            if nearest:
+                associations[focus] = nearest
         return associations
 
     def delete_roi(self, unassociated: Iterable[Tuple[int]]) -> None:
@@ -859,7 +926,7 @@ class ROIDrawer:
         c = dims["minX"], dims["minY"]
         d2 = dims["height"]
         d1 = dims["width"]
-        focus = FocusItem(c[0], c[1], d1, d2, ind, hash(roi), method=roi.detection_method)
+        focus = FocusItem(c[0], c[1], d1, d2, ind, hash(roi))
         focus.set_pen(pen, ROIDrawer.MARKERS["invisible"])
         focus.setVisible(visible if roi.detection_method != "removed" else False)
         focus.add_to_view(view)
@@ -964,7 +1031,7 @@ class ROIItem(QGraphicsEllipseItem):
     # and it listed "pen" twice -- but repairing it would have bought nothing: see the note on
     # EditingRectangle above for the measurement. __slots__ does not work on a sip subclass
 
-    def __init__(self, x: int, y: int, width: int, height: float, index: int, roi_ident: int, method: str = "IP"):
+    def __init__(self, x: int, y: int, width: int, height: float, index: int, roi_ident: int):
         super().__init__(x, y, width, height)
         self.preview = False
         self.changed = False
@@ -977,7 +1044,10 @@ class ROIItem(QGraphicsEllipseItem):
         self.angle = 0
         self.channel_index = index
         self.roi_id = roi_ident
-        self.method = method
+        # A `method` parameter and attribute stood here until 2026-08-15. Nothing read it -- the
+        # drawing code goes to roi.detection_method on the ROI, not to the item -- and its default
+        # was "IP", which is not one of ROIDrawer.MARKERS' keys, so a reader that ever did consult
+        # it would have got a value the marker lookup cannot resolve.
         self.active_pen: pg.mkPen = None
         self.inactive_pen: pg.mkPen = None
         self.hover_pen: pg.mkPen = None

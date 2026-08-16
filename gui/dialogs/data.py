@@ -3,10 +3,9 @@ import os
 import threading
 import traceback
 
-import matplotlib as mpl
 from matplotlib import font_manager
 from threading import Thread
-from typing import List, Tuple, Dict, Any, Optional, Union, Callable, cast
+from typing import List, Tuple, Dict, Any, Optional, Union, Callable, Iterable, cast
 
 import numpy as np
 import pandas as pd
@@ -14,10 +13,10 @@ import pyqtgraph as pg
 from PyQt5 import uic, QtCore, QtGui
 from PyQt5.QtCore import QRectF, Qt, QPoint, QPointF, QItemSelection, QAbstractTableModel, QVariant, pyqtSignal, QTimer
 from PyQt5.QtGui import QKeyEvent, QPen, QColor, QMouseEvent, QBrush, QStandardItemModel, QStandardItem
-from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsRectItem, QGraphicsEllipseItem, QInputDialog, QLabel, \
-    QSpacerItem, QSizePolicy, QMessageBox, QSpinBox, QHBoxLayout, QCheckBox, QPushButton, QVBoxLayout, QHeaderView, \
-    QMenuBar, QMenu, QAction, QComboBox, QWidgetAction, QListWidget, QAbstractItemView, QListWidgetItem, \
-    QAbstractScrollArea
+from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsRectItem, QGraphicsEllipseItem, QInputDialog, \
+    QSizePolicy, QMessageBox, QSpinBox, QHBoxLayout, QVBoxLayout, QHeaderView, \
+    QMenuBar, QMenu, QAction, QComboBox, QListWidget, QAbstractItemView, QListWidgetItem, \
+    QAbstractScrollArea, QWidget
 from scipy import ndimage as ndi
 from skimage.draw import line
 from skimage.segmentation import watershed
@@ -39,16 +38,17 @@ from core.roi.AreaAnalysis import imprint_area_into_array
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 
+# Excel's own limit on a worksheet title. openpyxl only warns above it, but the workbook is then
+# unreadable for some applications, so the export truncates rather than relying on the warning
+MAX_SHEET_NAME_LENGTH = 31
+
 
 class DataExportDialog(QDialog):
-    __slots__ = [
-        "cur_img",
-        "disp_name",
-        "ui",
-        "req",
-        "threads",
-        "errors"
-    ]
+    # No __slots__ here: QDialog is a sip type and supplies a __dict__ from its C++ base, so the
+    # declaration removed nothing, rejected no undeclared attribute, and cost bytes per instance
+    # for the descriptors -- measured on 2026-08-15 for the equivalent declarations on the editor's
+    # graphics items. core/roi/ROI.py's ROI is the one place the memory argument holds; it is a
+    # plain class and keeps its __slots__
     STANDARD_OPTIONS = (
         "Selected Image",
         "All analysed Images",
@@ -131,17 +131,23 @@ class DataExportDialog(QDialog):
             img_hashes = [x for x in self.req.get_all_images()
                           if self.req.check_if_image_was_analysed(x)]
             # Check if the data should be saved in one file
-            file_name = "results_all_images" if self.ui.cbx_xlsx_single.isChecked() else None
-            for md5 in img_hashes:
-                self.export_image_as_table(md5, xlsx_name=file_name)
+            if self.export_goes_into_one_workbook():
+                self.export_into_one_workbook(img_hashes, "results_all_images",
+                                              self._export_image_as_table)
+            else:
+                for md5 in img_hashes:
+                    self.export_image_as_table(md5)
         # Save all defined experiments
         elif selection == DataExportDialog.STANDARD_OPTIONS[2]:  # All defined experiments
             # Get all defined experiments
             exps = self.req.get_all_experiments()
             # Check if the data should be saved in one file
-            file_name = "results_all_experiments" if self.ui.cbx_xlsx_single.isChecked() else None
-            for experiment in exps:
-                self.export_experiment_as_table(experiment, xlsx_name=file_name)
+            if self.export_goes_into_one_workbook():
+                self.export_into_one_workbook(exps, "results_all_experiments",
+                                              self._export_experiment_as_table)
+            else:
+                for experiment in exps:
+                    self.export_experiment_as_table(experiment)
         # Save selected experiment
         else:
             self.export_experiment_as_table(selection)
@@ -163,6 +169,81 @@ class DataExportDialog(QDialog):
             worker(*args)
         except Exception:
             self.errors.append(traceback.format_exc())
+
+    def export_goes_into_one_workbook(self) -> bool:
+        """
+        Method to check whether the xlsx output of this run is a single workbook
+
+        :return: True if one workbook holding one sheet per exported item is wanted
+        """
+        return self.ui.cbx_xlsx.isChecked() and self.ui.cbx_xlsx_single.isChecked()
+
+    def export_into_one_workbook(self, items: List[str], file_name: str,
+                                 exporter: Callable) -> None:
+        """
+        Method to export several items into a single workbook, one sheet per item
+
+        ONE thread for the whole workbook, not one per item. DataFrame.to_excel against a path
+        creates a NEW workbook per call, so the previous shape -- one thread and one to_excel per
+        item, every one of them writing the same path -- kept whichever sheet happened to be
+        written last and discarded the rest silently. Which one survived was a race, since the
+        threads were started without any limit
+
+        :param items: The image hashes or experiment names to export
+        :param file_name: The name of the workbook to write, without extension
+        :param exporter: The private per-item export method to drive
+        :return: None
+        """
+        export_thread = threading.Thread(target=self._run_export,
+                                         args=(self._export_workbook, items, file_name, exporter),
+                                         daemon=True)
+        export_thread.start()
+        self.threads = [x for x in self.threads if x.is_alive()]
+        self.threads.append(export_thread)
+
+    def _export_workbook(self, items: List[str], file_name: str, exporter: Callable) -> None:
+        """
+        Private method to write one workbook holding one sheet per item
+
+        :param items: The image hashes or experiment names to export
+        :param file_name: The name of the workbook to write, without extension
+        :param exporter: The private per-item export method to drive
+        :return: None
+        """
+        Paths.ensure_directories()
+        path = os.path.join(Paths.result_path, f"{file_name}.xlsx")
+        with pd.ExcelWriter(path) as writer:
+            for item in items:
+                exporter(item, writer=writer)
+
+    @staticmethod
+    def get_valid_sheet_name(name: str, taken: Iterable[str]) -> str:
+        """
+        Method to turn the given name into one Excel accepts and that is not taken yet
+
+        Sheet names come from image file names and experiment names, and Excel's rules on them are
+        stricter than the file system's: []:*?/\\ are rejected outright -- pandas raises
+        ValueError on the whole export -- more than 31 characters makes the workbook unreadable for
+        some applications, and a repeated name silently overwrites the earlier sheet. None of that
+        mattered while only one sheet survived a run
+
+        :param name: The name to derive the sheet name from
+        :param taken: The sheet names already used in this workbook
+        :return: A valid, unused sheet name
+        """
+        cleaned = "".join("_" if c in r"[]:*?/\\" else c for c in str(name)).strip() or "Sheet"
+        cleaned = cleaned[:MAX_SHEET_NAME_LENGTH]
+        taken = set(taken)
+        if cleaned not in taken:
+            return cleaned
+        # Two images can carry the same file name in different folders, and both are exported
+        counter = 2
+        while True:
+            suffix = f"_{counter}"
+            candidate = f"{cleaned[:MAX_SHEET_NAME_LENGTH - len(suffix)]}{suffix}"
+            if candidate not in taken:
+                return candidate
+            counter += 1
 
     def export_image_as_table(self, md5: str,
                               xlsx_name: str = None,
@@ -188,7 +269,8 @@ class DataExportDialog(QDialog):
     def _export_image_as_table(self, md5: str,
                                xlsx_name: str = None,
                                include_header: bool = True,
-                               sheet_name: str = None) -> None:
+                               sheet_name: str = None,
+                               writer: pd.ExcelWriter = None) -> None:
         """
         Private method to concurrently fetch the image data and save the table
 
@@ -196,6 +278,7 @@ class DataExportDialog(QDialog):
         :param xlsx_name: Optional; If given, the file will use this name
         :param include_header: If true, the table header will also be saved
         :param sheet_name: Name of the sheet
+        :param writer: Optional; the open workbook to add a sheet to, for single-file exports
         :return: None
         """
         # Get general table header
@@ -210,7 +293,8 @@ class DataExportDialog(QDialog):
         self.save_table_to_disk(img_name, rows, header,
                                 include_header=include_header,
                                 sheet_name=sheet_name if sheet_name else img_name,
-                                xlsx_name=xlsx_name)
+                                xlsx_name=xlsx_name,
+                                writer=writer)
 
     def export_experiment_as_table(self,
                                    experiment: str,
@@ -239,7 +323,8 @@ class DataExportDialog(QDialog):
                                     experiment: str,
                                     xlsx_name: str = None,
                                     include_header: bool = True,
-                                    sheet_name: str = None
+                                    sheet_name: str = None,
+                                    writer: pd.ExcelWriter = None
                                     ) -> None:
         """
         Private method to concurrently fetch the experiment data and save the table
@@ -248,6 +333,7 @@ class DataExportDialog(QDialog):
         :param xlsx_name: Optional; If given, the file will have this name
         :param include_header: If true, the table header will also be saved
         :param sheet_name: Name of the sheet
+        :param writer: Optional; the open workbook to add a sheet to, for single-file exports
         :return: None
         """
         # Get general table header
@@ -260,7 +346,8 @@ class DataExportDialog(QDialog):
                                 rows, header,
                                 include_header=include_header,
                                 sheet_name=sheet_name if sheet_name else experiment,
-                                xlsx_name=xlsx_name)
+                                xlsx_name=xlsx_name,
+                                writer=writer)
 
     def get_data_for_image(self, image: str) -> List[List]:
         """
@@ -277,7 +364,8 @@ class DataExportDialog(QDialog):
                            header: List = (),
                            include_header: bool = True,
                            xlsx_name: str = None,
-                           sheet_name: str = "Sheet 1") -> None:
+                           sheet_name: str = "Sheet 1",
+                           writer: pd.ExcelWriter = None) -> None:
         """
         Method to save the given table to the disk
 
@@ -288,6 +376,8 @@ class DataExportDialog(QDialog):
         :param xlsx_name: Optional: The file name to used for the xlsx file. If not given, name will be used
         :param sheet_name: Optional; Name of the sheet to use. Allows to save in the same file,
         if different sheet names are chosen
+        :param writer: Optional; an open workbook to add a sheet to instead of writing a file of
+        its own. The csv and html outputs stay one file per item either way
         :return: None
         """
         # Create a pandas dataframe
@@ -306,24 +396,25 @@ class DataExportDialog(QDialog):
             df.to_html(os.path.join(Paths.result_path, f"{name}.html"),
                        header=header if include_header else False, index=False)
         if self.ui.cbx_xlsx.isChecked():
-            fname = name if not xlsx_name else xlsx_name
-            df.to_excel(os.path.join(Paths.result_path, f"{fname}.xlsx"),
-                        header=header if include_header else False, index=False,
-                        sheet_name=sheet_name)
+            if writer is not None:
+                # One sheet in the shared workbook. The name has to be checked against the sheets
+                # already in it: an illegal character raises and takes the whole export with it,
+                # and a repeated name overwrites the earlier sheet without a word
+                df.to_excel(writer, header=header if include_header else False, index=False,
+                            sheet_name=self.get_valid_sheet_name(sheet_name, writer.sheets))
+            else:
+                fname = name if not xlsx_name else xlsx_name
+                df.to_excel(os.path.join(Paths.result_path, f"{fname}.xlsx"),
+                            header=header if include_header else False, index=False,
+                            sheet_name=self.get_valid_sheet_name(sheet_name, ()))
 
 
 class Editor(QDialog):
-    __slots__ = [
-        "ui",
-        "editor",
-        "image",
-        "roi",
-        "size_factor",
-        "temp_items",
-        "active_channels",
-        "x_scale",
-        "y_scale"
-    ]
+    # No __slots__ here: QDialog is a sip type and supplies a __dict__ from its C++ base, so the
+    # declaration removed nothing, rejected no undeclared attribute, and cost bytes per instance
+    # for the descriptors -- measured on 2026-08-15 for the equivalent declarations on the editor's
+    # graphics items. core/roi/ROI.py's ROI is the one place the memory argument holds; it is a
+    # plain class and keeps its __slots__
 
     def __init__(self, image: np.ndarray,
                  roi: ROIHandler,
@@ -423,8 +514,11 @@ class Editor(QDialog):
         self.ui.cbx_channel.currentIndexChanged.connect(
             lambda: self.editor.show_channel(self.ui.cbx_channel.currentText())
         )
-        self.ui.cbx_high_contrast.stateChanged.connect(self.editor.toggle_high_contrast_mode)
-        self.ui.cbx_white_balance.stateChanged.connect(self.editor.toggle_adjust_white_balance)
+        # toggled, not stateChanged: stateChanged emits the Qt check STATE (0/1/2) while both
+        # slots are annotated to take a bool. It worked by truthiness, so the annotation was the
+        # thing that was wrong -- and PartiallyChecked would have arrived as True
+        self.ui.cbx_high_contrast.toggled.connect(self.editor.toggle_high_contrast_mode)
+        self.ui.cbx_white_balance.toggled.connect(self.editor.toggle_adjust_white_balance)
         self.ui.cbx_colormap.addItems(self.get_colormaps())
         self.ui.cbx_colormap.setCurrentText("gray")
         self.editor.change_colormap("gray")
@@ -706,18 +800,27 @@ class AutoEdit(QDialog):
         self.img_item = pg.ImageItem()
         self.plot_item = pg.PlotItem()
         self.main_map = self.get_main_map(main.shape, self.roi)
+        # The BINARY map, not the intensity channel: distance_transform_edt measures the distance
+        # to the nearest zero pixel, so on raw intensities it measures the distance to the nearest
+        # pixel that happens to be exactly 0 -- camera noise. The medial ridge peaking at each
+        # nucleus centre, which is the surface the watershed is seeded from and flooded over, only
+        # exists over the mask. main_map is also what the watershed already uses as its mask
+        # (perform_adjusted_watershed), so the two used to disagree about which surface is meant
         # cast, because distance_transform_edt is typed as returning the distances, the indices,
         # both, or None, depending on its two boolean flags -- a union the checker cannot narrow
         # from the call. With the defaults (return_distances=True, return_indices=False) it
         # returns exactly one array, which is what every use of self.edm here assumes
-        self.edm: np.ndarray = cast(np.ndarray, ndi.distance_transform_edt(main))
+        self.edm: np.ndarray = cast(np.ndarray, ndi.distance_transform_edt(self.main_map))
         self.map_index = 0
         # Create a working map to enable undo
         self.temp_main = np.copy(self.main)
         self.temp_map = np.copy(self.main_map)
         self.temp_edm = np.copy(self.edm)
         self.centers: List[AutoEditCenterItem] = []
+        # The centers that seed the watershed. Only filled while the image is locked -- see
+        # add_center_to_plot for why the lock state has to be tracked
         self.active_centers: List[AutoEditCenterItem] = []
+        self.locked = False
         self.removed_centers: List[AutoEditCenterItem] = []
         self.extracted_roi = []
         self.deletion_list: List[int] = []
@@ -794,6 +897,9 @@ class AutoEdit(QDialog):
             for item in items:
                 self.plot_item.removeItem(item)
                 self.centers.remove(item)
+                # Un-seed it as well: an item taken off the plot must not still mark a basin
+                if item in self.active_centers:
+                    self.active_centers.remove(item)
                 if item.reference:
                     self.removed_centers.append(item.reference)
         else:
@@ -846,16 +952,40 @@ class AutoEdit(QDialog):
         # ValueError for any non-square editing rectangle and silently wrote a square one to the
         # wrong place
         adj_segmap[y: y + height, x: x + width] = segmap
-        # Check which predefined centers are in the areas of the segmentation map
-        for item in self.centers:
-            if item.reference:
-                # Get center of the item
-                cy, cx = item.center
-                if adj_segmap[cy][cx] == 0:
-                    self.deletion_list.append(item.reference)
+        # The second deletion pass that used to sit here has been removed. It walked self.centers
+        # -- which still holds the items lock_image took off the plot -- and marked every one whose
+        # centre fell on adj_segmap == 0, a condition that is true EVERYWHERE outside the crop by
+        # construction. So it re-collected exactly the nuclei that should never have been touched.
+        # get_replaced_roi now answers the same question once, from the editing rectangle
         return adj_segmap
 
+    def get_replaced_roi(self) -> List[int]:
+        """
+        Method to get the hashes of the roi this dialog replaces
+
+        Derived here, at accept time, from the rectangle the segmentation actually ran on. It used
+        to be accumulated in add_existing_nuclei_centers, which runs from initialize_ui while the
+        editing rectangle still covers the whole image -- so every nucleus in the image was marked
+        for deletion, shrinking the rectangle afterwards never revisited the list, and only the
+        nuclei inside the crop were re-created. Their foci went with them: apply_all_changes
+        deletes every focus of a deleted nucleus that no new nucleus adopts
+
+        get_current_editing_rect is the same rectangle perform_adjusted_watershed writes the new
+        segmentation into, which is the one that decides where replacements can appear
+
+        :return: The hashes of all main roi inside the editing rectangle
+        """
+        x, y, width, height = self.get_current_editing_rect()
+        replaced = []
+        for roi in self.roi:
+            center = roi.calculate_dimensions()["center"]
+            if y <= center[0] < y + height and x <= center[1] < x + width:
+                replaced.append(hash(roi))
+        return replaced
+
     def accept(self) -> None:
+        # Built here rather than accumulated as the centers are drawn -- see get_replaced_roi
+        self.deletion_list = self.get_replaced_roi()
         segmap = self.perform_adjusted_watershed()
         roi_areas = self.extract_roi_from_segmentationmap(segmap)
         for index, area in roi_areas.items():
@@ -879,23 +1009,36 @@ class AutoEdit(QDialog):
         """
         Method to adjust the position of the defined centers to the maxima of the EDM
 
-        :return: A list of adjusted centers
+        Reads temp_edm, the CROPPED map: lock_image rewrites the centers into crop coordinates,
+        and both consumers of the returned list -- adjust_edm and the watershed marker mask --
+        are cropped as well. Indexing the full sized self.edm with those coordinates read the
+        wrong part of the map, and could return a point outside the mask it is written into
+
+        :return: A list of adjusted centers as (y, x), in the coordinates of the cropped maps
         """
         # Adjust center values using the EDM
         adj_rad = 15
         adj_cent = []
+        edm = self.temp_edm
         for center_item in self.active_centers:
-            rect = center_item.rect()
-            p = int(rect.y() - rect.height() // 2), int(rect.x() - rect.width() // 2)
-            # Get the current lowest distance value
-            cur_val = self.edm[p[0]][p[1]]
-            # Iterate over neighborhood of center
-            for y in range(max(0, p[0] - adj_rad), min(self.edm.shape[0], p[0] + adj_rad)):
-                for x in range(max(0, p[1] - adj_rad), min(self.edm.shape[1], p[1] + adj_rad)):
-                    if self.edm[y][x] < cur_val:
-                        cur_val = self.edm[y][x]
-                        p = (y, x)
-            adj_cent.append(p)
+            cent_y, cent_x = center_item.current_center()
+            # A center outside the locked region has no position on the cropped maps
+            if not (0 <= cent_y < edm.shape[0] and 0 <= cent_x < edm.shape[1]):
+                continue
+            # Iterate over neighborhood of center, keeping the MAXIMUM: the watershed is flooded
+            # over the negated EDM (perform_adjusted_watershed), so its basins form at the EDM
+            # maxima, which is what the docstring above promises. Keeping the smallest value
+            # instead moved every seed onto a background pixel at distance 0
+            y_min, y_max = max(0, cent_y - adj_rad), min(edm.shape[0], cent_y + adj_rad + 1)
+            x_min, x_max = max(0, cent_x - adj_rad), min(edm.shape[1], cent_x + adj_rad + 1)
+            neighborhood = edm[y_min:y_max, x_min:x_max]
+            off_y, off_x = np.unravel_index(int(np.argmax(neighborhood)), neighborhood.shape)
+            # A center placed on the background has no maximum to snap to. Leave it where the user
+            # put it rather than moving it to whichever corner of the neighborhood argmax returns
+            if neighborhood[off_y][off_x] > 0:
+                adj_cent.append((y_min + int(off_y), x_min + int(off_x)))
+            else:
+                adj_cent.append((cent_y, cent_x))
         return adj_cent
 
     @staticmethod
@@ -933,11 +1076,18 @@ class AutoEdit(QDialog):
             if nearest_center:
                 # Calculate central point between both centers
                 c3 = round((center[0] + nearest_center[0]) / 2), round((center[1] + nearest_center[1]) / 2)
-                if self.edm[c3[0]][c3[1]]:
+                # adj_edm, not self.edm: the centers are in the coordinates of the CROPPED map,
+                # which is the map this method reads and writes everywhere else
+                if adj_edm[c3[0]][c3[1]]:
                     # Get vector between center and the central point
                     v = center[0] - c3[0], center[1] - c3[1]
                     # Get orthogonal vector and normalize
                     max_coord = max(abs(v[0]), abs(v[1]))
+                    # Two centers that snap to the same maximum, or that are a single pixel apart
+                    # -- round() takes the midpoint of (0, 0) and (0, 1) to (0, 0) -- leave no
+                    # direction to cut along, and dividing by that zero took the dialog down
+                    if not max_coord:
+                        continue
                     c_orth = v[1] / max_coord, -v[0] / max_coord
                     rr, cc = line(center[0], center[1],
                                   nearest_center[0], nearest_center[1])
@@ -949,34 +1099,70 @@ class AutoEdit(QDialog):
         return adj_edm
 
     @staticmethod
-    def get_end_points_of_separation_lines(edm: np.ndarray, linepoints, orth: Tuple[float, float]):
-        # TODO
-        max_distance = 10000000
+    def walk_to_border(edm: np.ndarray, start: Tuple[int, int],
+                       step: Tuple[float, float]) -> Tuple[int, int]:
+        """
+        Method to walk from the given point along the given direction, up to the background or the
+        border of the map
+
+        The point returned is the last one still inside the nucleus, so it is always a valid index
+        -- the caller draws a line through it and writes into the map along that line
+
+        :param edm: The euclidean distance map to walk over
+        :param start: The point to start the walk at, as (y, x)
+        :param step: The direction to walk in, as (y, x)
+        :return: The last point before the background or the border, as (y, x)
+        """
+        # No straight walk that stays inside the map can be longer than this, so exhausting the
+        # range means the direction is degenerate rather than that the map is large. The original
+        # loop had no bound at all, and see below for how it failed to find one
+        limit = edm.shape[0] + edm.shape[1]
+        last = start
+        for counter in range(1, limit):
+            point = start[0] + round(step[0] * counter), start[1] + round(step[1] * counter)
+            # BOTH bounds are tested. Testing only '>= shape' let a NEGATIVE index through, numpy
+            # then read the opposite edge of the map instead of stopping, and the walk wrapped
+            # around: over a region that is foreground all the way across, no end point was ever
+            # found and the loop ran forever -- with the GUI thread inside it, since this is
+            # reached from accept(). The out-of-range point was also returned as an end point,
+            # and writing the separation line through it raises IndexError
+            if not (0 <= point[0] < edm.shape[0] and 0 <= point[1] < edm.shape[1]):
+                return last
+            if edm[point[0]][point[1]] == 0:
+                return last
+            last = point
+        return last
+
+    @staticmethod
+    def get_end_points_of_separation_lines(edm: np.ndarray, linepoints,
+                                           orth: Tuple[float, float]) -> Optional[Tuple[Tuple[int, int],
+                                                                                        Tuple[int, int]]]:
+        """
+        Method to get the end points of the shortest line that separates two touching nuclei
+
+        Walks orthogonally away from every point on the line connecting the two centers and keeps
+        the narrowest crossing, which is where the two nuclei touch
+
+        :param edm: The euclidean distance map to search on
+        :param linepoints: The points on the line connecting both centers, as (y, x)
+        :param orth: The direction orthogonal to that line, as (y, x)
+        :return: Both end points of the separation line, or None if the connecting line leaves the
+        nucleus
+        """
+        # A MINIMUM tracker: the narrowest crossing is the one to cut. It was called max_distance
+        # and seeded with 10000000, which named the initial value rather than the intent
+        shortest_distance = float("inf")
         brakes = None
         for line_point in linepoints:
             # If the point is in the background, stop progression
             if edm[line_point[0]][line_point[1]] == 0:
-                brakes = None
-                break
-            left_brake = None
-            right_brake = None
-            counter = 1
-            while not left_brake or not right_brake:
-                if not right_brake:
-                    right = line_point[0] + round(orth[0] * counter), line_point[1] + round(
-                        orth[1] * counter)
-                    if right[0] >= edm.shape[0] or right[1] >= edm.shape[1] or edm[right[0]][right[1]] == 0:
-                        right_brake = right
-                if not left_brake:
-                    left = line_point[0] - round(orth[0] * counter), line_point[1] - round(
-                        orth[1] * counter)
-                    if left[0] >= edm.shape[0] or left[1] >= edm.shape[1] or edm[left[0]][left[1]] == 0:
-                        left_brake = left
-                counter += 1
+                return None
+            left_brake = AutoEdit.walk_to_border(edm, line_point, (-orth[0], -orth[1]))
+            right_brake = AutoEdit.walk_to_border(edm, line_point, orth)
             cur_dist = euclidean_distance(left_brake, right_brake)
-            if max_distance > cur_dist:
-                max_distance = cur_dist
-                brakes = left, right
+            if cur_dist < shortest_distance:
+                shortest_distance = cur_dist
+                brakes = left_brake, right_brake
         return brakes
 
     @staticmethod
@@ -1013,11 +1199,10 @@ class AutoEdit(QDialog):
             # Check if roi is inside the editing rectangle
             if y <= pos[0] <= y + height:
                 if x <= pos[1] <= x + width:
-                    # The HASH, not the ROI object. This list is declared List[int] and its two
-                    # consumers both want identifiers -- editor.delete feeds
-                    # Inserter.delete_roi_from_database, which needs a scalar id
-                    self.deletion_list.append(hash(roi))
-                    # Add the center to plot
+                    # Drawing a centre no longer marks its nucleus for deletion. This runs from
+                    # initialize_ui, when the rectangle still covers the whole image, so every
+                    # nucleus in the image ended up in deletion_list and nothing revisited it when
+                    # the rectangle was shrunk. get_replaced_roi builds that list at accept time
                     self.add_center_to_plot(center)
 
     def add_center_to_plot(self, center: QGraphicsEllipseItem) -> None:
@@ -1028,6 +1213,12 @@ class AutoEdit(QDialog):
         :return: None
         """
         self.centers.append(center)
+        # Centers placed after the lock are exactly the ones the dialog asks the user for -- and
+        # they are already in crop coordinates, like the ones lock_image rewrote. lock_image was
+        # the only place that ever filled active_centers, so every center clicked afterwards was
+        # drawn on the image and then ignored by the watershed
+        if self.locked:
+            self.active_centers.append(center)
         self.plot_item.addItem(center)
 
     def add_nucleus_center(self, event: QMouseEvent) -> None:
@@ -1050,6 +1241,10 @@ class AutoEdit(QDialog):
         :return: None
         """
         self.centers.remove(center)
+        # Same invariant as the deletion path in mousePressEvent: an item that is not in centers
+        # must not be in active_centers either, or it keeps seeding the watershed after removal
+        if center in self.active_centers:
+            self.active_centers.remove(center)
         self.plot_item.removeItem(center)
 
     def change_edit_rectangle(self) -> None:
@@ -1058,8 +1253,11 @@ class AutoEdit(QDialog):
 
         :return: None
         """
-        centerX = self.ui.spb_x.value() - round(self.ui.spb_width.value() / 2)
-        centerY = self.ui.spb_y.value() - round(self.ui.spb_height.value() / 2)
+        # '// 2', matching get_current_editing_rect. round(w / 2) disagrees with w // 2 for an odd
+        # size -- round(3.5) is 4, 7 // 2 is 3 -- so the drawn rectangle and the offset the new
+        # segmentation is written back at sat one pixel apart for odd widths and heights
+        centerX = self.ui.spb_x.value() - self.ui.spb_width.value() // 2
+        centerY = self.ui.spb_y.value() - self.ui.spb_height.value() // 2
         self.edit_rect.setRect(centerX,
                                centerY,
                                self.ui.spb_width.value(),
@@ -1073,10 +1271,14 @@ class AutoEdit(QDialog):
         :return: None
         """
         enabled = self.ui.btn_lock.isChecked()
+        self.locked = enabled
         self.enable_buttons(enabled)
         #self.edit_rect.setPen(QPen(Color.INVISIBLE))
         # Get current adjustment points
         x, y, width, height = self.get_editing_rectangle_dimensions()
+        # Rebuilt rather than extended: btn_lock is checkable, so locking, unlocking and locking
+        # again appended every center a second time and seeded the watershed twice per position
+        self.active_centers = []
         # Add all items at adjusted position
         for item in self.centers:
             # Get current item position
@@ -1183,6 +1385,10 @@ class AutoEdit(QDialog):
         self.temp_map = np.copy(self.main_map)
         self.temp_edm = np.copy(self.edm)
         self.show_map()
+        # The maps are uncropped again and reset_position puts every rect back into full image
+        # coordinates, so nothing here is a valid seed any more. lock_image refills this
+        self.locked = False
+        self.active_centers = []
         # Re-Add all removed centers
         for item in self.centers:
             item.reset_position()
@@ -1279,6 +1485,23 @@ class AutoEditCenterItem(QGraphicsEllipseItem):
         self.orig_rect = QRectF(posx - width//2, posy - height//2, width, height)
         self.reference = reference
 
+    def current_center(self) -> Tuple[int, int]:
+        """
+        Method to get the center of this item in its current coordinate space
+
+        The constructor stores the rect at (posx - width // 2, posy - height // 2), so recovering
+        the center means ADDING the half extent back. It lives here, next to the subtraction it
+        inverts, because the two have to agree; adjust_centers_to_edm used to subtract a second
+        time and place every seed 14 px up and left of the nucleus the user clicked
+
+        Not to be confused with self.center, which is the position this item was CREATED at.
+        lock_image rewrites the rect into crop coordinates, and self.center does not follow
+
+        :return: The current center of this item as (y, x)
+        """
+        rect = self.rect()
+        return int(rect.y() + rect.height() // 2), int(rect.x() + rect.width() // 2)
+
     def reset_position(self) -> None:
         """
         Function to restore the original position of this item
@@ -1286,6 +1509,32 @@ class AutoEditCenterItem(QGraphicsEllipseItem):
         :return: None
         """
         self.setRect(self.orig_rect)
+
+
+def ask_for_name(parent: QWidget, title: str, label: str) -> Tuple[str, bool]:
+    """
+    Function to ask the user for a name through a styled input dialog
+
+    Uses a QInputDialog INSTANCE rather than the static QInputDialog.getText: the static call builds
+    a dialog of its own, so styling an instance and handing it over as the parent -- which is what
+    both call sites used to do -- applied inputbox.css to a widget that was never shown.
+
+    Module level because ExperimentDialog and GroupDialog both need it and neither is the other's
+    base class.
+
+    :param parent: The dialog to parent the input box to
+    :param title: The window title
+    :param label: The prompt shown above the input field
+    :return: The entered name, stripped of surrounding whitespace, and whether it was accepted
+    """
+    dial = QInputDialog(parent)
+    dial.setWindowTitle(title)
+    dial.setWindowIcon(Icon.get_icon("LOGO"))
+    dial.setStyleSheet(Util.load_stylesheet("inputbox.css"))
+    dial.setInputMode(QInputDialog.TextInput)
+    dial.setLabelText(label)
+    ok = dial.exec() == QDialog.Accepted
+    return dial.textValue().strip(), ok
 
 
 class ExperimentDialog(QDialog):
@@ -1310,6 +1559,9 @@ class ExperimentDialog(QDialog):
         # Create connection to database
         self.inserter = Inserter()
         self.requester = Requester()
+        # What each experiment looked like when it was read, so save_changes can write only what
+        # the user actually changed
+        self.loaded_state: Dict[str, Tuple] = {}
         self.load_experiments()
 
     def initialize_ui(self):
@@ -1329,6 +1581,12 @@ class ExperimentDialog(QDialog):
         self.ui.btn_images_remove.clicked.connect(self.remove_images_from_experiment)
         self.ui.btn_images_clear.clicked.connect(self.remove_all_images_from_experiment)
         self.ui.lv_experiments.selectionModel().selectionChanged.connect(self.on_exp_selection_change)
+        # The image-selection handler was defined but never connected, so btn_images_remove was
+        # never enabled or disabled in response to a selection. Connected after setModel(), which
+        # is what creates the selection model
+        self.ui.lv_images.selectionModel().selectionChanged.connect(self.on_image_selection_change)
+        # ...and start in the state the handler would produce for an empty selection
+        self.ui.btn_images_remove.setEnabled(False)
         # Set window title and icon
         self.setWindowTitle("Experiment Dialog")
         self.setWindowIcon(Icon.get_icon("LOGO"))
@@ -1355,12 +1613,22 @@ class ExperimentDialog(QDialog):
 
         :return: None
         """
-        dial = QInputDialog()
-        dial.setWindowTitle("Add new Experiment...")
-        dial.setWindowIcon(Icon.get_icon("LOGO"))
-        dial.setStyleSheet(Util.load_stylesheet("inputbox.css"))
-        name, ok = QInputDialog.getText(dial, "Experiment Dialog", "Enter experiment name: ")
+        # The dialog that is built here is the one that is SHOWN. It used to be constructed and
+        # styled, then handed to the STATIC QInputDialog.getText as a mere parent -- and the static
+        # call builds a dialog of its own, so inputbox.css was applied to a widget nobody ever saw
+        name, ok = ask_for_name(self, "Add new Experiment...", "Enter experiment name: ")
         if ok:
+            existing = {self.exp_model.item(row).data()["name"]
+                        for row in range(self.exp_model.rowCount())}
+            # Both were accepted before: an empty name produced an experiment that cannot be
+            # picked out of the list, and a duplicate produced two rows that add_new_experiment
+            # then collapses back into one on save
+            if not name or name in existing:
+                QMessageBox.information(
+                    self, "Add new Experiment...",
+                    "Please enter a name." if not name
+                    else f"An experiment named '{name}' already exists.")
+                return
             add_item = QStandardItem()
             text = f"{name}\nNo Details\nGroups: No groups"
             add_item.setText(text)
@@ -1431,6 +1699,12 @@ class ExperimentDialog(QDialog):
         for ind in range(self.exp_model.rowCount()):
             item = self.exp_model.item(ind)
             data = item.data()
+            # Only what changed. add_new_experiment is an INSERT OR REPLACE, so an untouched
+            # experiment had its details and notes rewritten from this model on every OK, along
+            # with a group row and an image association per image it holds. An experiment absent
+            # from loaded_state is new and always written
+            if self.get_experiment_fingerprint(data) == self.loaded_state.get(data["name"]):
+                continue
             # Add experiment to database
             self.inserter.add_new_experiment(data["name"], data["details"], data["notes"])
             # Update group data
@@ -1441,6 +1715,25 @@ class ExperimentDialog(QDialog):
             for key in data["keys"]:
                 self.inserter.update_image_experiment_association(key, data["name"])
         self.inserter.commit_and_close()
+        self.requester.connector.close_connection()
+
+    def reject(self) -> None:
+        """
+        Method to close the dialog without writing anything
+
+        The connection is closed on BOTH exit paths now. save_changes closes it on OK, but a cancel
+        used to drop it with an open write transaction: remove_image_from_experiment and
+        remove_all_images_from_experiment execute while the dialog is open, and sqlite holds a
+        write lock from the first of those until the connection is committed, rolled back or
+        closed. Measured on a scratch database -- a second writer gets
+        `OperationalError: database is locked` while it is held, and the deletions are correctly
+        discarded once it goes. CPython's refcounting made the window short rather than absent
+
+        :return: None
+        """
+        self.inserter.connector.close_connection()
+        self.requester.connector.close_connection()
+        super().reject()
 
     def remove_images_from_experiment(self) -> None:
         """
@@ -1523,7 +1816,12 @@ class ExperimentDialog(QDialog):
             # the user saw an empty or short list and nothing saying why
             missing = [x for x in imgs if x not in self.data["keys"]]
             name = exp
-            details, notes = self.requester.get_info_for_experiment(exp)
+            # get_info_for_experiment answers None for an experiment that is not in the
+            # table -- unpacking that raises TypeError, and an experiment listed by
+            # get_all_experiments but missing its details row is a partially written state, not a
+            # reason to refuse to open the dialog
+            info = self.requester.get_info_for_experiment(exp)
+            details, notes = info if info else ("", "")
             groups = {}
             # Only the loaded images have a path here -- .index() raises for the others. The
             # unloaded ones stay in "keys" and in "groups" regardless, because save_changes
@@ -1553,7 +1851,24 @@ class ExperimentDialog(QDialog):
                 }
             )
             add_item.setIcon(Icon.get_icon("CLIPBOARD"))
+            self.loaded_state[name] = self.get_experiment_fingerprint(add_item.data())
             self.exp_model.appendRow(add_item)
+
+    @staticmethod
+    def get_experiment_fingerprint(data: Dict) -> Tuple:
+        """
+        Method to reduce an experiment to a value that can be compared for equality
+
+        Used to decide what save_changes has to write. Order-insensitive on both the image keys and
+        the groups, because neither carries meaning here and the models rebuild them in whatever
+        order the queries returned
+
+        :param data: The data dictionary stored on the experiment's item
+        :return: A hashable summary of everything save_changes would write
+        """
+        groups = tuple(sorted((group, tuple(sorted(images)))
+                              for group, images in data["groups"].items()))
+        return data["name"], data["details"], data["notes"], tuple(sorted(data["keys"])), groups
 
     def enable_experiment_buttons(self, enable: bool = True) -> None:
         """
@@ -1721,17 +2036,19 @@ class ExperimentDialog(QDialog):
         self.ui.btn_images_clear.setEnabled(enable)
         self.ui.btn_add_group.setEnabled(enable)
 
-    def add_image_items(self, items: List[QStandardItem]) -> None:
+    def add_image_items(self, items: List[QStandardItem], finished: bool = False) -> None:
         """
         Method to add items to the image list
 
         :param items: The items to add
+        :param finished: True when the loader has no items left. Asked rather than inferred from an
+        empty batch -- processing can empty one long before the end
         :return: None
         """
         for item in items:
             self.img_model.appendRow(item)
         self.ui.prg_images.setValue(int(self.update_timer.percentage * 100))
-        if not items:
+        if finished:
             # Enable buttons for input
             self.enable_experiment_buttons()
 
@@ -1793,8 +2110,10 @@ class StatisticsDialog(QDialog):
             "orientation": "vertical",
             "palette": "husl"
         }
-        self.plot_data()
+        # Connected BEFORE any work is started. It used to follow plot_data(), which is safe only
+        # while nothing in plot_data reaches _calculate_statistics -- an invariant nothing enforces
         self.stat_calculation_finished_signal.connect(self._display_calculated_statistics)
+        self.plot_data()
 
     def initialize_ui(self) -> None:
         """
@@ -1862,18 +2181,13 @@ class StatisticsDialog(QDialog):
         if code == QDialog.Accepted:
             self.experiment = exp_sel_dial.get_selected_experiment()
             self.active_channels = exp_sel_dial.get_active_channels()
-            # Load the data from the new experiment
-            self.get_group_data()
-            # Reset the group boxes
-            for i in reversed(range(self.ui.vl_groups.count())):
-                # Check is this is a sub-layout
-                if self.ui.vl_groups.itemAt(i).widget() is None:
-                    # Get the layout
-                    layout = self.ui.vl_groups.itemAt(i).layout()
-                    for i in reversed(range(layout.count())):
-                        layout.itemAt(i).widget().setParent(None)
-                    # Remove the layout
-                    layout.setParent(None)
+            # ASSIGNED, not discarded. self.data kept the previous experiment's DataFrame, so the
+            # table, the plot and every statistic described the old experiment under the new title
+            self.data = self.get_group_data()
+            # The layout teardown that stood here was dead: it looked for sub-layouts in vl_groups,
+            # but _add_group_boxes puts a single QListWidget there, so the branch never ran -- and
+            # its inner loop reused the outer loop variable. The real reset is the
+            # list_widget.clear() inside _add_group_boxes
             if self.ui.tv_group_statistics.model() is not None:
                 self.ui.tv_group_statistics.model().setDataFrame(pd.DataFrame())
             self._add_group_boxes()
@@ -1899,13 +2213,19 @@ class StatisticsDialog(QDialog):
         msg.setStandardButtons(QMessageBox.Ok)
         msg.exec()
 
-    def calculate_and_display_statistics(self) -> Dict[str, Dict[str, List]]:
+    def calculate_and_display_statistics(self) -> None:
         """
         Method to calculate the necessary statistics
 
+        The result is not returned: the work runs on a worker thread and comes back through
+        stat_calculation_finished_signal. The annotation used to claim a
+        Dict[str, Dict[str, List]] that the method never produced.
+
         :return: None
         """
-        thread = Thread(target=self._calculate_statistics)
+        # daemon, so closing the window does not leave the interpreter alive waiting on a
+        # statistics run nobody is going to look at
+        thread = Thread(target=self._calculate_statistics, daemon=True)
         self.setEnabled(False)
         thread.start()
 
@@ -1969,6 +2289,12 @@ class StatisticsDialog(QDialog):
 
         :return: Dictionary with each group and its activation status
         """
+        # list_widget is None only between initialize_ui and _add_group_boxes, both of which run in
+        # __init__ with nothing in between -- and _add_group_boxes has no early return, so it always
+        # creates the widget. Asserted rather than branched on: a `if self.list_widget` guard here
+        # would return an empty group list on a state that cannot occur, which reads as "no groups
+        # are selected" and silently disables the statistics button instead of failing
+        assert self.list_widget is not None, "_add_group_boxes must run before the groups are read"
         active_groups = []
         for row in range(self.list_widget.count()):
             item = self.list_widget.item(row)
@@ -1977,6 +2303,13 @@ class StatisticsDialog(QDialog):
         return active_groups
 
     def get_group_ordering(self):
+        """
+        Method to get the current top-to-bottom order of the group list
+
+        :return: The group names, in the order the user has dragged them into
+        """
+        # Same invariant as get_comparison_groups -- see the note there
+        assert self.list_widget is not None, "_add_group_boxes must run before the groups are read"
         ordering = []
         for row in range(self.list_widget.count()):
             ordering.append(self.list_widget.item(row).text())
@@ -2045,10 +2378,17 @@ class DataFrameModel(QAbstractTableModel):
         :param df: The data to display as pandas DataFrame
         :return:None
         """
-        self.data = df
-        self._values = df.to_numpy(copy=False)
-        self._columns = df.columns.to_list()
-        self._index = df.index.to_list()
+        # _df, not data: QAbstractTableModel.data() is the model's own read method, and an
+        # attribute of that name made model.data(index, role) raise
+        # "TypeError: 'DataFrame' object is not callable". Qt's rendering was unaffected -- PyQt
+        # resolves the virtual through the type -- so it was a trap for Python callers and readers
+        # rather than a rendering bug.
+        # copy(), because sort() reorders this frame: it used to be the caller's own object, so
+        # clicking a column header silently reordered StatisticsDialog.data as a side effect
+        self._df = df.copy()
+        self._values = self._df.to_numpy(copy=False)
+        self._columns = self._df.columns.to_list()
+        self._index = self._df.index.to_list()
 
     def setDataFrame(self, df):
         self.beginResetModel()
@@ -2111,12 +2451,14 @@ class DataFrameModel(QAbstractTableModel):
         # Optional: enable sorting; for large DF this is still decent
         self.layoutAboutToBeChanged.emit()
         ascending = order == Qt.AscendingOrder
-        self.data.sort_values(self._columns[column],
-                              ascending=ascending,
-                              inplace=True,
-                              kind="mergesort")
-        self._values = self.data.to_numpy(copy=False)
-        self._index = self.data.index.to_list()
+        # inplace on the model's OWN copy -- see set_df. The frame handed in by the caller is no
+        # longer touched, so sorting the view cannot reorder the dialog's data underneath it
+        self._df.sort_values(self._columns[column],
+                             ascending=ascending,
+                             inplace=True,
+                             kind="mergesort")
+        self._values = self._df.to_numpy(copy=False)
+        self._index = self._df.index.to_list()
         self.layoutChanged.emit()
 
 
@@ -2262,21 +2604,36 @@ class PlotSettingsDialog(QDialog):
         self.ui.cbx_violin_split.stateChanged.connect(self.update_timer.start)
         self.ui.cmbx_violin_inner.currentTextChanged.connect(self.update_timer.start)
 
-    def get_available_fonts(self):
-        font_files = font_manager.findSystemFonts()
-        for font_file in font_files:
-            font_manager.fontManager.addfont(font_file)
-        return font_manager.get_font_names()
+    #: The system font names, resolved once per process. Registering them is global and
+    #: cumulative -- matplotlib's font manager keeps every font ever added -- so doing it on every
+    #: open of this dialog paid the same cost repeatedly and grew that manager each time
+    _font_names = None
+
+    @classmethod
+    def get_available_fonts(cls):
+        """
+        Method to get the names of the fonts available to matplotlib
+
+        :return: The font names, resolved on the first call and cached afterwards
+        """
+        if cls._font_names is None:
+            for font_file in font_manager.findSystemFonts():
+                font_manager.fontManager.addfont(font_file)
+            cls._font_names = font_manager.get_font_names()
+        return cls._font_names
 
     def create_mockup_diagram(self):
         self.canvas_violin = PlotCanvas(self)
         self.canvas_box = PlotCanvas(self)
-        np.random.seed(42)
+        # A local Generator, not np.random.seed(42): seeding sets the PROCESS-WIDE random state,
+        # so merely opening this settings dialog made every later consumer of the global stream
+        # deterministic. The mockup stays reproducible, which is all the seed was for
+        rng = np.random.default_rng(42)
         # Create mockup data
-        group_a = [("Control", "Channel Y", x) for x in np.random.randint(0, 30, size=35)]
-        group_a.extend([("Control", "Channel X", x) for x in np.random.randint(0, 45, size=78)])
-        group_b = [("Test", "Channel Y", x) for x in np.random.randint(0, 145, size=25)]
-        group_b.extend([("Test", "Channel X", x) for x in np.random.randint(0, 112, size=44)])
+        group_a = [("Control", "Channel Y", x) for x in rng.integers(0, 30, size=35)]
+        group_a.extend([("Control", "Channel X", x) for x in rng.integers(0, 45, size=78)])
+        group_b = [("Test", "Channel Y", x) for x in rng.integers(0, 145, size=25)]
+        group_b.extend([("Test", "Channel X", x) for x in rng.integers(0, 112, size=44)])
         self.data = pd.DataFrame(group_a + group_b, columns=["Group", "Channel", "Foci"])
         v_lay = QVBoxLayout()
         v_lay.addWidget(self.canvas_violin)
@@ -2416,17 +2773,19 @@ class GroupDialog(QDialog):
                     self.img_model.appendRow(item)
             self.refresh_image_buttons()
 
-    def add_image_items(self, items: List[QStandardItem]) -> None:
+    def add_image_items(self, items: List[QStandardItem], finished: bool = False) -> None:
         """
         Method to load the images given by the list paths
 
         :param items: QStandardItems to add to the images list
+        :param finished: True when the loader has no items left. Asked rather than inferred from an
+        empty batch -- processing can empty one long before the end
         :return: None
         """
         for img in items:
             self.img_model.appendRow(img)
         self.prg_bar.setValue(int(self.update_timer.percentage * 100))
-        if not items:
+        if finished:
             self.setEnabled(True)
         self.refresh_image_buttons()
 
@@ -2566,11 +2925,18 @@ class GroupDialog(QDialog):
 
         :return: None
         """
-        dial = QInputDialog()
-        dial.setStyleSheet(Util.load_stylesheet("inputbox.css"))
-        dial.setWindowIcon(Icon.get_icon("LOGO"))
-        name, ok = QInputDialog.getText(dial, "Group Dialog", "Enter the new group: ")
+        # Same fix as ExperimentDialog.add_experiment: the styled dialog is the one shown, rather
+        # than being handed to the static call as a parent while that builds an unstyled one
+        name, ok = ask_for_name(self, "Group Dialog", "Enter the new group: ")
         if ok:
+            existing = {self.group_model.item(row).data()["name"]
+                        for row in range(self.group_model.rowCount())}
+            if not name or name in existing:
+                QMessageBox.information(
+                    self, "Group Dialog",
+                    "Please enter a name." if not name
+                    else f"A group named '{name}' already exists.")
+                return
             # Create item to add to group list
             item = QStandardItem()
             item_data = {
