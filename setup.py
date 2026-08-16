@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="UTF-8") as fh:
 
 setuptools.setup(
     name="NucDetect",
-    version="1.6.0.dev56",
+    version="1.6.0.dev59",
     description=("Module to quantify intranuclear foci on basis of "
                  "immunofluorescence images."),
     author="Romano Weiss",

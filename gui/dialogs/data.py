@@ -1559,6 +1559,9 @@ class ExperimentDialog(QDialog):
         # Create connection to database
         self.inserter = Inserter()
         self.requester = Requester()
+        # What each experiment looked like when it was read, so save_changes can write only what
+        # the user actually changed
+        self.loaded_state: Dict[str, Tuple] = {}
         self.load_experiments()
 
     def initialize_ui(self):
@@ -1696,6 +1699,12 @@ class ExperimentDialog(QDialog):
         for ind in range(self.exp_model.rowCount()):
             item = self.exp_model.item(ind)
             data = item.data()
+            # Only what changed. add_new_experiment is an INSERT OR REPLACE, so an untouched
+            # experiment had its details and notes rewritten from this model on every OK, along
+            # with a group row and an image association per image it holds. An experiment absent
+            # from loaded_state is new and always written
+            if self.get_experiment_fingerprint(data) == self.loaded_state.get(data["name"]):
+                continue
             # Add experiment to database
             self.inserter.add_new_experiment(data["name"], data["details"], data["notes"])
             # Update group data
@@ -1706,6 +1715,25 @@ class ExperimentDialog(QDialog):
             for key in data["keys"]:
                 self.inserter.update_image_experiment_association(key, data["name"])
         self.inserter.commit_and_close()
+        self.requester.connector.close_connection()
+
+    def reject(self) -> None:
+        """
+        Method to close the dialog without writing anything
+
+        The connection is closed on BOTH exit paths now. save_changes closes it on OK, but a cancel
+        used to drop it with an open write transaction: remove_image_from_experiment and
+        remove_all_images_from_experiment execute while the dialog is open, and sqlite holds a
+        write lock from the first of those until the connection is committed, rolled back or
+        closed. Measured on a scratch database -- a second writer gets
+        `OperationalError: database is locked` while it is held, and the deletions are correctly
+        discarded once it goes. CPython's refcounting made the window short rather than absent
+
+        :return: None
+        """
+        self.inserter.connector.close_connection()
+        self.requester.connector.close_connection()
+        super().reject()
 
     def remove_images_from_experiment(self) -> None:
         """
@@ -1818,7 +1846,24 @@ class ExperimentDialog(QDialog):
                 }
             )
             add_item.setIcon(Icon.get_icon("CLIPBOARD"))
+            self.loaded_state[name] = self.get_experiment_fingerprint(add_item.data())
             self.exp_model.appendRow(add_item)
+
+    @staticmethod
+    def get_experiment_fingerprint(data: Dict) -> Tuple:
+        """
+        Method to reduce an experiment to a value that can be compared for equality
+
+        Used to decide what save_changes has to write. Order-insensitive on both the image keys and
+        the groups, because neither carries meaning here and the models rebuild them in whatever
+        order the queries returned
+
+        :param data: The data dictionary stored on the experiment's item
+        :return: A hashable summary of everything save_changes would write
+        """
+        groups = tuple(sorted((group, tuple(sorted(images)))
+                              for group, images in data["groups"].items()))
+        return data["name"], data["details"], data["notes"], tuple(sorted(data["keys"])), groups
 
     def enable_experiment_buttons(self, enable: bool = True) -> None:
         """
