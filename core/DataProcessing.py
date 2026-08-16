@@ -291,19 +291,16 @@ def create_circular_mask(h: Union[int, float], w: Union[int, float],
     return mask
 
 
-@njit
-def relabel_array(array: np.ndarray) -> None:
-    """
-    Function to relabel a given binary map
-
-    :param array: The map to relabel
-    :return: None
-    """
-    unique = list(np.unique(array))
-    nums = np.arange(len(unique) + 1)
-    for y in range(len(array)):
-        for x in range(len(array[0])):
-            array[y][x] = nums[unique.index(array[y][x])]
+# relabel_array was deleted here on 2026-08-17, together with the @njit that decorated it -- left
+# in place, that decorator fell onto the next function, which is already jitted, and numba raised
+# "A jit decorator was called on an already jitted function" at import time. It took five harnesses
+# down at once, which is what deleting a function without its decorator looks like.
+# It called unique.index() inside a double loop over
+# every pixel, making it O(pixels x labels) -- 2.37 s on a 1024x1024 map, against 44 ms for
+# np.unique(..., return_inverse=True), which computes the same relabelling. It was NOT vectorised,
+# because it had no callers: a grep for the name over the whole tree returned its own def and
+# nothing else. The checklist item that filed it grouped it with two real hot-path loops and said
+# all three "dominate analysis time"; for this one that could not have been true in any run.
 
 
 @njit

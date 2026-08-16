@@ -193,7 +193,7 @@ class ImageSelectionDialog(QDialog):
                             QtCore.Qt.WindowSystemMenuHint |
                             QtCore.Qt.WindowMinMaxButtonsHint)
 
-    def load_images(self, items: List[QStandardItem]) -> None:
+    def load_images(self, items: List[QStandardItem], finished: bool = False) -> None:
         """
         Method to load the images given by the list paths
 
@@ -203,7 +203,10 @@ class ImageSelectionDialog(QDialog):
         for img in items:
             self.img_model.appendRow(img)
         self.prg_bar.setValue(int(self.update_timer.percentage * 100))
-        if not items:
+        # The loader says when it is done. `if not items` inferred it from an empty batch, which a
+        # folder containing non-image files produces long before the end -- and the list was then
+        # enabled over a partial model
+        if finished:
             # Enable image list
             self.ui.lv_images.setEnabled(True)
             self.ui.buttonBox.setEnabled(True)

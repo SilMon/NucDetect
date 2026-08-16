@@ -1379,7 +1379,11 @@ class NucDetect(QMainWindow):
             temproi = ROI(channel=entry[3], main=entry[8] is None,
                           auto=bool(entry[2]), associated=entry[8], method=entry[9], match=entry[10])
             stats = self.requester.get_statistics_for_roi(entry[0])
-            temproi.stats = dict(zip(statkeys, stats[2:10]))
+            # None means the roi has no statistics row. It used to be an empty tuple, which sliced
+            # to another empty tuple and produced {} without anyone noticing; the ROI is still
+            # usable -- its area comes from the points table below -- so the empty dict is kept as
+            # the behaviour, just written down
+            temproi.stats = dict(zip(statkeys, stats[2:10])) if stats else {}
             if temproi.main:
                 main_.append(temproi)
             else:
@@ -1388,7 +1392,9 @@ class NucDetect(QMainWindow):
             for p in self.requester.get_points_for_roi(entry[0]):
                 rle.append((p[1], p[2], p[3]))
             temproi.set_area(rle)
-            ellp = self.extract_statistics_for_roi(stats, temproi.main)
+            # extract_statistics_for_roi indexes statistics[10:18] for a main roi, so a
+            # missing statistics row cannot produce ellipse parameters either
+            ellp = self.extract_statistics_for_roi(stats, temproi.main and stats is not None)
             temproi.ell_params = dict(zip(ellkeys, ellp))
             temproi.id = entry[0]
             ind += 1

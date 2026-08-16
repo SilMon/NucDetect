@@ -1816,7 +1816,12 @@ class ExperimentDialog(QDialog):
             # the user saw an empty or short list and nothing saying why
             missing = [x for x in imgs if x not in self.data["keys"]]
             name = exp
-            details, notes = self.requester.get_info_for_experiment(exp)
+            # get_info_for_experiment answers None for an experiment that is not in the
+            # table -- unpacking that raises TypeError, and an experiment listed by
+            # get_all_experiments but missing its details row is a partially written state, not a
+            # reason to refuse to open the dialog
+            info = self.requester.get_info_for_experiment(exp)
+            details, notes = info if info else ("", "")
             groups = {}
             # Only the loaded images have a path here -- .index() raises for the others. The
             # unloaded ones stay in "keys" and in "groups" regardless, because save_changes
@@ -2031,17 +2036,19 @@ class ExperimentDialog(QDialog):
         self.ui.btn_images_clear.setEnabled(enable)
         self.ui.btn_add_group.setEnabled(enable)
 
-    def add_image_items(self, items: List[QStandardItem]) -> None:
+    def add_image_items(self, items: List[QStandardItem], finished: bool = False) -> None:
         """
         Method to add items to the image list
 
         :param items: The items to add
+        :param finished: True when the loader has no items left. Asked rather than inferred from an
+        empty batch -- processing can empty one long before the end
         :return: None
         """
         for item in items:
             self.img_model.appendRow(item)
         self.ui.prg_images.setValue(int(self.update_timer.percentage * 100))
-        if not items:
+        if finished:
             # Enable buttons for input
             self.enable_experiment_buttons()
 
@@ -2766,17 +2773,19 @@ class GroupDialog(QDialog):
                     self.img_model.appendRow(item)
             self.refresh_image_buttons()
 
-    def add_image_items(self, items: List[QStandardItem]) -> None:
+    def add_image_items(self, items: List[QStandardItem], finished: bool = False) -> None:
         """
         Method to load the images given by the list paths
 
         :param items: QStandardItems to add to the images list
+        :param finished: True when the loader has no items left. Asked rather than inferred from an
+        empty batch -- processing can empty one long before the end
         :return: None
         """
         for img in items:
             self.img_model.appendRow(img)
         self.prg_bar.setValue(int(self.update_timer.percentage * 100))
-        if not items:
+        if finished:
             self.setEnabled(True)
         self.refresh_image_buttons()
 

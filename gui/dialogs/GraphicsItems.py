@@ -83,6 +83,13 @@ class EditorView(pg.GraphicsView):
         self.requester = Requester()
         self.inserter = Inserter()
         self.main_channel = self.requester.get_main_channel(self.roi.ident)
+        # The editor cannot work without one: it decides which items are nuclei (~:471) and indexes
+        # active_channels by it (~:476). get_main_channel answers None rather than raising as of
+        # 2026-08-17, so the failure is raised HERE, naming the image, instead of surfacing later
+        # as a KeyError on None from inside a drawing routine
+        if self.main_channel is None:
+            raise ValueError(f"Image {self.roi.ident} has no main channel recorded -- "
+                             f"the editor cannot be opened for it")
         self.plot_item = pg.PlotItem()
         self.view = self.plot_item.getViewBox()
         self.view.setAspectLocked(True)
@@ -356,10 +363,13 @@ class EditorView(pg.GraphicsView):
                                             feedback=self.update_loading,
                                             processing=ROIDrawer.draw_roi)
 
-    def update_loading(self, items: List[QGraphicsItem]) -> None:
+    def update_loading(self, items: List[QGraphicsItem], finished: bool = False) -> None:
         """
         Method to update the progress bar
 
+        :param items: The items loaded in this batch
+        :param finished: True when the loader has no items left. Unused here -- this consumer keys
+        off the percentage rather than off the end of the load -- but part of the feedback contract
         :return: None
         """
         self._dialog.ui.prg_loading.setValue(int(self.loading_timer.percentage * 100))
