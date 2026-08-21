@@ -13,7 +13,16 @@ def get_main_folder_path() -> str:
     else:
         # during development, use project root (one level above gui/)
         exe_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    os.chdir(exe_dir)
+    # DO NOT os.chdir(exe_dir) HERE. This function used to, and because it runs at import time the
+    # whole program's working directory depended on when this module was first imported. Every path
+    # in this module is absolute already, so nothing here ever needed it; what needed it was the
+    # relative url()s in main.css, which resolved against the cwd and therefore only worked in a
+    # development run. Those now go through Util.load_stylesheet's @@CSS_DIR@@ placeholder, so the
+    # side effect has no remaining dependent -- verified by grep before removal: no relative open(),
+    # os.getcwd or Path().resolve() anywhere in core/, gui/ or fcn/.
+    #
+    # Restoring it would also silently re-hide the class of defect it caused: any future path
+    # resolved against the cwd would appear to work, but only for whoever imports this module first.
     return exe_dir
 
 gen = get_main_folder_path()
@@ -63,8 +72,10 @@ def ensure_directories() -> List[str]:
     without the GUI fails on a missing folder, and constructing a ``Connector`` against a fresh
     HOME raises ``sqlite3.OperationalError: unable to open database file``. But doing it on import
     would make merely importing this module create folders in the user's home, which is the same
-    class of hidden side effect as the ``os.chdir`` above and a more consequential one. Callers ask
-    for it explicitly.
+    class of hidden side effect as the import-time ``os.chdir`` this module used to perform -- and a
+    more consequential one, since it writes to the filesystem. That ``chdir`` has since been removed
+    (see ``get_main_folder_path``); this is the reasoning it left behind. Callers ask for it
+    explicitly.
 
     :return: The directories that were created by this call, in creation order. Empty if they all
              existed already. Callers that seed a newly created directory -- see

@@ -55,7 +55,9 @@ class FocusMapper(AreaMapper):
             raise ValueError("No channels were set to map foci on!")
         # Check if settings contain anything
         if not self.settings:
-            self.settings = self.STANDARD_SETTINGS
+            # Through set_settings, not by assigning self.settings: the assignment alone leaves
+            # self.log on whatever it was, which is the binding defect QualityTester carried
+            self.set_settings(self.STANDARD_SETTINGS)
             warnings.warn("No settings found, standard settings used for focus mapping")
         return self.map_foci()
 
@@ -75,6 +77,24 @@ class FocusMapper(AreaMapper):
         count = max(1, len(channels))
         # Weight preprocessing against detection within each channel's share of the stage
         pre_share = FOCI_IP_BOUNDS["blob_log"][0] / FOCI_IP_BOUNDS["blob_log"][1]
+        # What the detection parameters actually were. Reported once rather than per channel:
+        # they do not vary between channels, and they are the first thing anyone asks about when a
+        # run finds too many or too few foci
+        # .get throughout, NOT [], and the difference is not defensiveness for its own sake: the
+        # settings dict the GUI builds is NOT STANDARD_SETTINGS and does not carry every key in it.
+        # The first draft of this reported settings["use_signal_improvement"], which exists only in
+        # STANDARD_SETTINGS -- nothing reads it and the settings dialog never supplies it -- and a
+        # real analysis died with KeyError inside the log line. A diagnostic that can take down the
+        # run it is describing is worse than no diagnostic, so nothing here may raise
+        get = self.settings.get
+        self.log("Focus Detection:")
+        self.log(f"Channels to process: {count}")
+        self.log(f"Sigma range: {get('min_sigma', '?')}-{get('max_sigma', '?')} "
+                 f"({get('num_sigma', '?')} steps)")
+        self.log(f"Accumulator threshold: {get('acc_thresh', '?')}, "
+                 f"max overlap: {get('overlap', '?')}")
+        self.log(f"Preprocessing: smoothing={get('use_smoothing', '?')}, "
+                 f"background reduction={get('use_background_reduction', '?')}")
         # Detect foci on each channel
         for ind, channel in enumerate(channels):
             channel_progress = self.progress.sub(ind / count, (ind + 1) / count)
@@ -84,8 +104,12 @@ class FocusMapper(AreaMapper):
             # Detect foci on preprocessed channel
             channel_progress(pre_share, f"Detecting foci on channel {ind + 1}/{count}")
             foci = self.detect_foci_on_acc_map(self.settings, pchannel)
+            # The per-channel count is the number a user compares against what they see, and the
+            # one number that makes an empty or runaway channel obvious in the log
+            self.log(f"Channel {ind + 1}/{count}: {len(foci)} foci detected")
             # Create foci map and append
             foci_maps.append(foci)#self.create_foci_map(pchannel.shape, foci))
+        self.log(f"Foci detected in total: {sum(len(f) for f in foci_maps)}")
         return foci_maps
 
     @staticmethod

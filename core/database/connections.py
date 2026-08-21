@@ -2,7 +2,7 @@ import os
 import sqlite3
 import time
 from enum import Enum
-from typing import Tuple, Dict, List, Union, Iterable, Any
+from typing import Tuple, Dict, List, Optional, Union, Iterable, Any
 
 from core.detector_modules.ImageLoader import ImageLoader
 from core.logging_config import get_logger
@@ -862,8 +862,8 @@ class Inserter(DatabaseInteractor):
     """
 
     def add_new_image(self, md5: str, year: int, month: int, day: int, hour: int, minute: int,
-                      channels: int, width: int, height: int, xres: float, yres: float,
-                      res_unit: str) -> None:
+                      channels: int, width: int, height: int, xres: Optional[float],
+                      yres: Optional[float], res_unit: str) -> None:
         """
         Method to add a new image to the database
 
@@ -871,6 +871,11 @@ class Inserter(DatabaseInteractor):
         produces year..minute as int (from datetime.timetuple()) and x_res/y_res as float (from
         _rational_to_scale), and create_tables.sql declares the five date columns INTEGER. The
         annotations said str until 2026-08-15, which nothing caught because SQLite accepts either.
+
+        **xres/yres are Optional since 2026-08-21.** An image that declares no usable resolution
+        yields None, which is stored as SQL NULL rather than as an in-band numeric sentinel -- the
+        x_res/y_res columns are nullable and have always been. Readers must treat NULL as "unknown"
+        and not as a scale.
 
         :param md5: The md5 hash of the image
         :param year: The year the image was created
@@ -881,8 +886,8 @@ class Inserter(DatabaseInteractor):
         :param channels: Number of image channels
         :param width: The width of the image
         :param height: The height of the image
-        :param xres: The x resolution of the image
-        :param yres: The y resolution of the image
+        :param xres: The x resolution of the image, or None if it declares none
+        :param yres: The y resolution of the image, or None if it declares none
         :param res_unit: The resolution unit of the image
         :return: None
         """

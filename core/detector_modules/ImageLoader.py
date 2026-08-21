@@ -8,11 +8,16 @@ import numpy as np
 import piexif
 from skimage import io
 
-# Value written to x_res/y_res when an image declares no usable resolution. Both branches of
-# get_image_data use it, so "unknown" has one representation rather than one per file format.
-# Deliberately private: a future change replaces it with None/SQL NULL, and publishing a name
-# that is meant to be retracted would invite callers to couple to it.
-_UNKNOWN_SCALE = -1
+# "Unknown resolution" is None, which reaches the database as SQL NULL.
+#
+# It used to be an in-band sentinel, _UNKNOWN_SCALE = -1 (option A of the 2026-08-05 fix, which made
+# "unknown" consistent across both format branches but left it a number). That was retracted on
+# 2026-08-21 as option B, because in-band is the whole problem: a consumer that forgets to check
+# multiplies by -1 and silently flips a sign, and nothing about the value announces that it is not a
+# measurement. None cannot be multiplied by accident -- it raises.
+#
+# images.x_res / images.y_res are nullable (create_tables.sql, no NOT NULL), so no schema change was
+# needed and no existing database was touched.
 
 
 def dtype_max(dtype: np.dtype) -> float:
@@ -55,9 +60,11 @@ class ImageData(TypedDict):
     datetime: datetime.datetime
     height: int
     width: int
-    #: Pixels per `unit`, or _UNKNOWN_SCALE when the image declares no usable resolution
-    x_res: float
-    y_res: float
+    #: Pixels per `unit`, or None when the image declares no usable resolution. None reaches the
+    #: database as SQL NULL -- it is deliberately NOT a number, so that arithmetic on an unknown
+    #: scale raises instead of silently producing one
+    x_res: Optional[float]
+    y_res: Optional[float]
     channels: int
     #: Resolution unit name, e.g. "Inch" or "Centimeter"
     unit: str
@@ -112,8 +119,8 @@ class ImageLoader:
         else:
             height = img.shape[0]
             width = img.shape[1]
-            x_res = _UNKNOWN_SCALE
-            y_res = _UNKNOWN_SCALE
+            x_res = None
+            y_res = None
             channels = 1 if len(img.shape) == 2 else 3
             unit = "Inch"
         # Built in one literal rather than filled in two stages: a TypedDict has to be complete at
@@ -137,29 +144,48 @@ class ImageLoader:
         )
 
     @staticmethod
-    def _rational_to_scale(value: Optional[Tuple[int, int]]) -> float:
+    def _rational_to_scale(value: Optional[Tuple[int, int]]) -> Optional[float]:
         """
         Method to convert an EXIF RATIONAL (numerator, denominator) into a scale
 
-        Returns _UNKNOWN_SCALE when the tag is absent, malformed, or carries a zero
-        denominator. The previous default of (-1, -1) did not survive Fraction, which
-        normalises signs: Fraction(-1, -1) is 1, so a missing tag produced a scale of exactly
-        1.0 -- both a legal resolution and the multiplicative identity, so no consumer could
-        tell it from real metadata and no conversion visibly changed anything. A zero
-        denominator (written by some microscope software for "unset") raised ZeroDivisionError
-        out of image import instead.
+        Returns None when the tag is absent, malformed, or carries a zero denominator. The
+        previous default of (-1, -1) did not survive Fraction, which normalises signs:
+        Fraction(-1, -1) is 1, so a missing tag produced a scale of exactly 1.0 -- both a legal
+        resolution and the multiplicative identity, so no consumer could tell it from real
+        metadata and no conversion visibly changed anything. A zero denominator (written by some
+        microscope software for "unset") raised ZeroDivisionError out of image import instead.
+
+        None rather than a numeric sentinel is deliberate, and is the point of the change: a
+        sentinel is only safe while every consumer remembers to test for it, whereas None makes
+        the arithmetic fail loudly at the first consumer that does not.
+
+        **A non-positive NUMERATOR OR DENOMINATOR is also None** (added 2026-08-21, found by the
+        harness for this change). A tag can parse cleanly and still not be a resolution: (-300, 1)
+        yielded -300.0 and (0, 1) yielded 0.0. A negative scale is the exact sign flip this whole
+        item exists to prevent -- merely sourced from the tag rather than from a sentinel -- and a
+        zero scale makes any physical size derived from it either zero or a division by zero.
+
+        The components are tested rather than the quotient, because Fraction normalises signs: a
+        literal (-1, -1) divides to exactly 1.0 and passes any test on the result. That is the
+        same trap the removed .get() default fell into, and (-1, -1) is precisely the value some
+        software writes for "unset".
 
         :param value: The RATIONAL tag value, or None if the tag is absent
-        :return: The scale as float, or _UNKNOWN_SCALE if it cannot be determined
+        :return: The scale as float, or None if it cannot be determined
         """
         if not value:
-            return _UNKNOWN_SCALE
+            return None
         try:
             num, den = value
         except (TypeError, ValueError):
-            return _UNKNOWN_SCALE
-        if den == 0:
-            return _UNKNOWN_SCALE
+            return None
+        # Both COMPONENTS must be positive, and this must be tested BEFORE Fraction rather than on
+        # its result: Fraction normalises signs, so (-1, -1) becomes exactly 1 and would pass a
+        # test on the quotient. That is the same trap the removed .get() default fell into.
+        # A zero denominator (written by some microscope software for "unset") is covered here too;
+        # it used to raise ZeroDivisionError out of image import
+        if num <= 0 or den <= 0:
+            return None
         return float(Fraction(num, den))
 
     @staticmethod

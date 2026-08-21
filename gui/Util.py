@@ -68,6 +68,13 @@ def assert_main_thread(operation: str, strict: bool = None, logger=None) -> None
         raise RuntimeError(msg)
 
 
+#: Placeholder every `url()` in a stylesheet is written against. `load_stylesheet` replaces it with
+#: the absolute path of the css directory, because Qt resolves a relative `url()` against the
+#: current working directory rather than against the stylesheet's own location -- see the header
+#: comment in `main.css` for why this is a placeholder and not a silent rewrite of relative paths.
+CSS_DIR_PLACEHOLDER = "@@CSS_DIR@@"
+
+
 def load_stylesheet(name: str) -> str:
     """
     Method to read a stylesheet from the css directory
@@ -76,17 +83,25 @@ def load_stylesheet(name: str) -> str:
     Windows the handle survived until the GC ran, and no encoding, so the file was read in the
     platform codepage
 
+    Also substitutes `CSS_DIR_PLACEHOLDER`, which is what makes the images a stylesheet references
+    resolve independently of the working directory. **This is the only supported way to read a
+    stylesheet** -- a bare `open().read()` returns the placeholder verbatim and the images silently
+    do not draw
+
     :param name: The file name of the stylesheet, e.g. "main.css"
     :return: The stylesheet, or an empty string if it could not be read
     """
     path = os.path.join(Paths.css_dir, name)
     try:
         with open(path, "r", encoding="utf-8") as stylesheet:
-            return stylesheet.read()
+            sheet = stylesheet.read()
     except OSError:
         # Styling is cosmetic -- an unreadable css file must not take a dialog down with it
         LOGGER.exception(f"Stylesheet {name} could not be read from {path} -- widget shown unstyled")
         return ""
+    # Forward slashes even on Windows: Qt parses the url() itself and a backslash is an escape
+    # character there, so a native path would be mangled rather than resolved
+    return sheet.replace(CSS_DIR_PLACEHOLDER, Paths.css_dir.replace(os.sep, "/"))
 
 
 def create_scroll_area(layout_type: bool = False,

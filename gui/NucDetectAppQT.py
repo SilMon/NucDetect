@@ -344,8 +344,7 @@ class NucDetect(QMainWindow):
         # loadUi's source and infers "Unknown | None" from its baseinstance parameter. Every
         # self.ui.<widget> access is then reported as an error on a possibly-None object
         self.ui: Any = uic.loadUi(gpaths.ui_main, self)
-        with open(os.path.join(gpaths.css_dir, "main.css"), "r", encoding="utf-8") as f:
-            self.ui.setStyleSheet(f.read())
+        self.ui.setStyleSheet(Util.load_stylesheet("main.css"))
         # General Window Initialization
         self.setWindowTitle("NucDetect - Focus Analysis Software")
         self.setWindowIcon(Icon.get_icon("LOGO"))
@@ -798,8 +797,7 @@ class NucDetect(QMainWindow):
         :return: The exit code of the dialog
         """
         msg = QMessageBox()
-        with open(os.path.join(gpaths.css_dir, "messagebox.css"), "r", encoding="utf-8") as f:
-            msg.setStyleSheet(f.read())
+        msg.setStyleSheet(Util.load_stylesheet("messagebox.css"))
         msg.setWindowIcon(Icon.get_icon("LOGO"))
         msg.setIcon(QMessageBox.Information)
         msg.setWindowTitle(title)
@@ -1765,8 +1763,7 @@ class NucDetect(QMainWindow):
             msg = QMessageBox()
             msg.setWindowIcon(Icon.get_icon("LOGO"))
             msg.setIcon(QMessageBox.Information)
-            with open(os.path.join(gpaths.css_dir, "messagebox.css"), "r", encoding="utf-8") as f:
-                msg.setStyleSheet(f.read())
+            msg.setStyleSheet(Util.load_stylesheet("messagebox.css"))
             msg.setWindowTitle("Warning")
             msg.setText("No experiments were defined")
             msg.setInformativeText("Statistics can only be displayed, if images are assigned to an experiment")
@@ -1841,8 +1838,7 @@ class NucDetect(QMainWindow):
             msg.setTextFormat(Qt.RichText)
             msg.setText(f.read())
             msg.setWindowTitle("About NucDetect")
-            with open(os.path.join(gpaths.css_dir, "main.css"), "r", encoding="utf-8") as cf:
-                msg.setStyleSheet(cf.read())
+            msg.setStyleSheet(Util.load_stylesheet("main.css"))
             msg.exec()
 
     def reflect_item_status_changes(self) -> None:
@@ -2180,8 +2176,7 @@ def show_error_message(title: str, info: str, text: str) -> None:
     msg = QMessageBox()
     msg.setIcon(QMessageBox.Critical)
     msg.setWindowIcon(Icon.get_icon("LOGO"))
-    with open(os.path.join(gpaths.css_dir, "messagebox.css"), "r", encoding="utf-8") as f:
-        msg.setStyleSheet(f.read())
+    msg.setStyleSheet(Util.load_stylesheet("messagebox.css"))
     msg.setText(text)
     msg.setInformativeText(info)
     msg.setWindowTitle(title)
