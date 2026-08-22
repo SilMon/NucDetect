@@ -86,15 +86,24 @@ class ImageLoader:
     ]
 
     @staticmethod
-    def get_image_data(path: str) -> ImageData:
+    def get_image_data(path: str, img: Optional[np.ndarray] = None) -> ImageData:
         """
         Method to extract relevant metadata from an image
 
+        The pixels are only needed for the height/width fallback, but reading them is the expensive
+        part of this call. `img` lets a caller that has already decoded the file hand the array in
+        rather than making this method read it a second time -- which is what `gui.Util` does when
+        it builds a list item and a thumbnail from the same file. Passing an array for a DIFFERENT
+        file would silently mis-report the dimensions, so it is the caller's job to pass the pixels
+        of `path` or nothing at all.
+
         :param path: The URL of the image
+        :param img: The already-decoded pixels of `path`, if the caller has them. Read from disk
+            when omitted
         :return: The extracted metadata, see ImageData for the keys and their types
         """
         filename, file_extension = os.path.splitext(path)
-        img = ImageLoader.load_image(path)
+        img = ImageLoader.load_image(path) if img is None else img
         # Hoisted out of the two branches, which computed it identically. It is also what the six
         # calendar fields are derived from, so reading the clock once keeps them consistent with it
         created = datetime.datetime.fromtimestamp(os.path.getctime(path))

@@ -455,8 +455,17 @@ class Detector:
         self.qualitytester.set_channels(())
         self.qualitytester.set_channel_names(())
         self.qualitytester.set_roi([])
-        # Holds a loaded Keras model, which is the bulk of the u-net figure above. It is rebuilt on
-        # every ml_roi_extraction call regardless, so dropping it here costs nothing extra
+        # Holds a reference to the Keras model, which is the bulk of the u-net figure above.
+        #
+        # The reason this is free CHANGED on 2026-08-21 and the old one no longer holds. It used to
+        # be "it is rebuilt on every ml_roi_extraction call regardless" -- true then, and the reason
+        # rebuilding was so expensive. FCNMapper now caches the model at module level, so dropping
+        # the mapper no longer forces a reload: the next ml_roi_extraction builds a mapper that
+        # picks the cached model straight back up.
+        #
+        # Dropping it here is therefore still free AND still necessary. Necessary because the model
+        # must not be reachable from this object when a ProcessPoolExecutor pickles it once per
+        # image -- a module-level cache is not pickled, but `self.fcnmapper.model` would be.
         self.fcnmapper = None
 
     def add_log_message(self, msg: str) -> None:

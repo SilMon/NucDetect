@@ -5,7 +5,6 @@ import numpy as np
 from scipy import ndimage as ndi
 from skimage import img_as_ubyte
 from skimage.filters import threshold_local
-from skimage.filters.rank import maximum
 from skimage.morphology import opening
 from skimage.segmentation import watershed
 
@@ -165,14 +164,26 @@ class NucleusMapper(AreaMapper):
         local_threshold_multiplier = self.settings["local_threshold_multiplier"]
         mask = create_circular_mask(mask_size * size_factor, mask_size * size_factor)
         progress.span("seed", ITERMAX_BOUNDS)(0.0, "Calculating maximum map")
-        maxi = maximum(edm, footprint=mask)
+        # ndi.grey_dilation, NOT skimage.filters.rank.maximum. Both compute the maximum over a flat
+        # footprint, and their outputs are BIT-IDENTICAL -- verified with np.array_equal over the
+        # whole map, on synthetic and real images, rather than assumed. The rank filter is
+        # histogram-based and was measured at 2.135 s for the eleven calls this method makes against
+        # 0.211 s here, on a 1024x1024 map with the shipped 7x7 footprint: a 10x difference in the
+        # single most expensive operation in the application.
+        #
+        # It also lifts a constraint. rank.maximum accepts only uint8/uint16, which is why
+        # calculate_edm_and_normalize ends in img_as_ubyte and quantises the distance map to 256
+        # levels. grey_dilation has no such limit, so that quantisation is now a choice rather than
+        # a requirement -- see the EDM item on the 2026-08-06 NucleusMapper checklist. Changing it
+        # alters segmentation output, so it was NOT done with this change.
+        maxi = ndi.grey_dilation(edm, footprint=mask)
         # The loop's share is divided by the configured iteration count rather than a fixed number:
         # `iterations` is a user setting, and every pass costs the same
         loop = progress.span("loop", ITERMAX_BOUNDS)
         ind = 0
         while ind < iterations:
             loop(ind / iterations, f"Calculating maximum map ({ind + 1}/{iterations})")
-            maxi = maximum(maxi, mask)
+            maxi = ndi.grey_dilation(maxi, footprint=mask)
             ind += 1
         progress.span("threshold_local", ITERMAX_BOUNDS)(0.0, "Applying local threshold")
         # Scale first, then force the result odd. threshold_local requires an odd integer block

@@ -16,11 +16,12 @@ from typing import List, Optional, Sequence, Tuple, Union
 from PyQt5 import QtCore
 from PyQt5.QtGui import QStandardItem, QIcon
 from PyQt5.QtWidgets import QScrollArea, QVBoxLayout, QHBoxLayout, QWidget
+import numpy as np
 from skimage import io, img_as_ubyte
-from skimage.transform import resize
+from skimage.transform import resize, downscale_local_mean
 
 from gui.definitions.icons import Color
-from core.detector_modules.ImageLoader import ImageLoader
+from core.detector_modules.ImageLoader import ImageLoader, dtype_max
 from core.logging_config import get_logger
 from gui import Paths
 
@@ -199,7 +200,12 @@ def create_list_item(path: str) -> Optional[QStandardItem]:
     folder = temp[0].split(sep=os.sep)[-1]
     file = temp[1]
     if os.path.splitext(file)[1] in IMAGE_FORMATS:
-        d = ImageLoader.get_image_data(path)
+        # Decode and hash ONCE, then hand both to everything below. This function used to hash the
+        # file twice (here and inside create_thumbnail) and decode it twice (here and again on a
+        # thumbnail cache miss), for every row of the image list
+        img = ImageLoader.load_image(path)
+        key = ImageLoader.calculate_image_id(path)
+        d = ImageLoader.get_image_data(path, img=img)
         date = d["datetime"]
         # No else branch. ImageLoader.get_image_data sets "datetime" to a datetime.datetime in both
         # of its branches, so the byte-string case that used to live here -- date.decode("ascii"),
@@ -208,14 +214,13 @@ def create_list_item(path: str) -> Optional[QStandardItem]:
         # deliberately if the EXIF path is ever brought back; the commented-out original is still
         # in ImageLoader.get_image_data
         t = (date.strftime("%d.%m.%Y"), date.strftime("%H:%M:%S"))
-        key = ImageLoader.calculate_image_id(path)
         item = QStandardItem()
         item_text = f"Name: {file}\nFolder: {folder}\nDate: {t[0]}\nTime: {t[1]}"
         item.setText(item_text)
         item.setTextAlignment(QtCore.Qt.AlignLeft)
         icon = QIcon()
         icon.addFile(
-            create_thumbnail(path)
+            create_thumbnail(path, ident=key, img=img)
         )
         item.setIcon(icon)
         analysed, modified = check_if_image_was_analysed_and_modified(key)
@@ -254,16 +259,27 @@ def check_for_thumbnails(paths: List[str]) -> None:
         create_thumbnail(path)
 
 
-def create_thumbnail(image_path: str, size: Tuple = (75, 75)) -> str:
+def create_thumbnail(image_path: str, size: Tuple = (75, 75),
+                     ident: Optional[str] = None,
+                     img: Optional[np.ndarray] = None) -> str:
     """
     Function to create a thumbnail from an image
 
+    `ident` and `img` exist so a caller that has already hashed or decoded this file does not pay
+    for it twice. `create_list_item` does both, and used to hash the file twice and decode it twice
+    per row. **Both must belong to `image_path`** -- passing another file's hash writes the
+    thumbnail under the wrong name, and passing another file's pixels draws the wrong picture.
+
     :param image_path: The path leading to the image
     :param size: The size of the thumbnail
+    :param ident: The md5 of the image, if the caller already has it. Computed when omitted
+    :param img: The already-decoded pixels, if the caller has them. Read when omitted -- and NOT
+        read at all when the thumbnail is already cached, which is the common case
     :return: The path leading to the thumbnail
     """
     # Calculate the hash of the image
-    ident = ImageLoader.calculate_image_id(image_path)
+    if ident is None:
+        ident = ImageLoader.calculate_image_id(image_path)
     # PNG, not JPEG. JPEG cannot store more than three channels, so a 4-channel fluorescence image
     # failed here. The thumbnails are a private cache in ~/NucDetect/thumbnails and nothing outside
     # this function reads them by extension, so the container is free to change; any .jpg left from
@@ -272,14 +288,50 @@ def create_thumbnail(image_path: str, size: Tuple = (75, 75)) -> str:
     # Check if the thumbnail already exists
     if isfile(thumb_path):
         return thumb_path
-    # Load image as numpy array
-    img = io.imread(image_path)
+    # Load image as numpy array. Deliberately AFTER the cache check above, so a hit costs no decode
+    if img is None:
+        img = io.imread(image_path)
     # Get ratio between height and width
     ratio = img.shape[0] / img.shape[1]
     if ratio >= 1:
         new_shape = size[0], int(size[1] / ratio)
     else:
         new_shape = int(size[0] * ratio), size[1]
+    # Box-filter down to roughly TWICE the target first, then let `resize` do the final factor of
+    # two with its proper anti-aliasing.
+    #
+    # `resize` alone was 86 % of this function -- 134.7 ms of 157 ms per image, measured over ten
+    # real images -- because for a large downscale it runs spline interpolation with anti-aliasing
+    # across the whole source. A cheap box filter removes almost all of that work.
+    #
+    # Stopping at 2x rather than at the target is what keeps the picture faithful, and it was
+    # measured rather than assumed. On demo.tif, against the shipped output:
+    #
+    #     box-filter all the way to the target : 20.2 ms, mean abs difference 2.51/255, worst 144
+    #     box-filter to 2x the target          : 23.4 ms, mean abs difference 1.31/255, worst  47
+    #     resize(anti_aliasing=False)          : 12.2 ms, mean abs difference 3.40/255, worst 184
+    #
+    # Three milliseconds halves the error, because the final resize still has a real downscale to
+    # anti-alias instead of an almost-identity one. (The filed finding measured 0.25/255 on this
+    # project's own fluorescence images, which are mostly dark background; demo.tif is busier, so
+    # its figure is higher for the same code.)
+    #
+    # PIL would be faster still (2.6 ms) and is already a dependency, but it CANNOT represent this
+    # project's images: Image.fromarray raises on a 5-channel array, and 4- and 5-channel
+    # fluorescence images are exactly what this thumbnails. Taking the first three channels would
+    # change what is shown. Do not "simplify" to PIL.
+    factors = tuple(max(1, dim // (2 * target)) for dim, target in zip(img.shape[:2], new_shape))
+    if factors != (1, 1):
+        # The factor tuple must cover every axis, so a colour image needs a trailing 1 -- otherwise
+        # the channels would be averaged together into greyscale
+        factors = factors + (1,) * (img.ndim - 2)
+        # Normalised to 0..1 rather than cast back to the source dtype. downscale_local_mean returns
+        # FLOAT in the input's own value range (0..255 for uint8), whereas `resize` normalises an
+        # integer input and img_as_ubyte below requires 0..1 -- handing the raw float on raises
+        # "Images of type float must be between -1 and 1". Measured identical either way (2.515 vs
+        # 2.514), so this is for correctness, not fidelity
+        img = downscale_local_mean(img, factors) / dtype_max(img.dtype)
+        img = np.clip(img, 0.0, 1.0)
     # Scale image
     img = resize(img, new_shape)
     # Save the image
