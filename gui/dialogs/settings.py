@@ -117,7 +117,27 @@ class AnalysisSettingsDialog(QDialog):
         """
         button = self.channel_main[index]
         button.setEnabled(active)
-        if active or not button.isChecked():
+        if active:
+            # RE-ENABLING IS NOT A NO-OP, and treating it as one was a defect reported from real use
+            # on 2026-08-22: "if all channels are disabled and re-enabled, it is still possible to
+            # have no selected main channel."
+            #
+            # Deactivating channels one by one hands the nomination on each time, until the last
+            # one leaves the group with nothing checked -- the `No channel is active` case below.
+            # Re-enabling then only re-enabled the radio button and returned, so the group stayed
+            # empty however many channels came back. get_main_channel_index falls back to channel 0
+            # for an empty group, so the analysis ran on a channel the user had not nominated and
+            # the dialog showed no selection at all.
+            #
+            # The channel being switched on takes the nomination when nothing holds it. It is the
+            # only active one at that moment in the case that produces this, and "you turned it on,
+            # so it is the main channel" is the predictable reading when it is not
+            if self.ui.main_channel_btn_group.checkedId() < 0:
+                button.setChecked(True)
+                LOGGER.info(f"Channel {index} was activated while no main channel was nominated "
+                            f"-- it is now the main channel")
+            return
+        if not button.isChecked():
             return
         # setExclusive(False) is required: unchecking an auto-exclusive button is a no-op while
         # the group is exclusive, so setChecked(False) alone would leave the invalid state intact

@@ -1035,6 +1035,24 @@ class Inserter(DatabaseInteractor):
         self.save_roi_to_database(roi_data, line_data, stat_data)
         self.connector.update("images", ("analysed", True), ("md5", Specifiers.EQUALS, image))
 
+    def set_image_analysed(self, image: str, analysed: bool = True) -> None:
+        """
+        Method to mark an image as analysed, independently of whether anything was found
+
+        **This exists because "analysed" means "an analysis ran", not "an analysis found
+        something", and the code used to conflate the two.** The flag was set only as a side effect
+        of `save_roi_data_for_image`, which the caller skips when there is no ROI data -- so an
+        image whose nuclei the detector could not find was never marked, and the manual editor,
+        which is gated on the flag, could not be opened to add them by hand. That is precisely the
+        image a user most needs the editor for.
+
+        :param image: The md5 hash of the image
+        :param analysed: The value to set
+        :return: None
+        """
+        self.connector.update("images", ("analysed", analysed),
+                              ("md5", Specifiers.EQUALS, image))
+
     def save_general_roi_data(self, roi_data: List) -> None:
         """
         Method to save the given general ROI data to the database

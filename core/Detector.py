@@ -236,7 +236,15 @@ class Detector:
                                                   analysis_settings, rois)
                 self.add_log_message(f"QR: Removed foci: {len(rois) - len(qroi)}")
             else:
-                qroi = []
+                # `rois`, NOT an empty list. This read `qroi = []`, so **switching the quality check
+                # off discarded every detected ROI** and the analysis produced nothing at all --
+                # silently, with a full progress bar and no error. The setting is a user-facing
+                # checkbox ("Analysis - Quality Check"), so anyone who turned it off to save time
+                # got an empty result and no indication why.
+                #
+                # Found 2026-08-22 while investigating the empty-nuclei report. The branch also
+                # covers `not rois`, where rois is already empty and this is a no-op.
+                qroi = rois
             handler.add_rois(qroi)
         imgdat["x_scale"] = analysis_settings["dots_per_micron"]
         imgdat["y_scale"] = analysis_settings["dots_per_micron"]

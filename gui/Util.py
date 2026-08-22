@@ -252,6 +252,13 @@ def check_for_thumbnails(paths: List[str]) -> None:
     Function to check if the given images already have a thumbnail created.
     If not, the thumbnails will be created
 
+    **NOTHING CALLS THIS.** Grepped 2026-08-22: no caller in `core/`, `gui/` or `fcn/`. It is left
+    in place rather than deleted because deleting it is a decision, not a clean-up.
+
+    It carries the same hole that crashed the startup walk -- it thumbnails whatever it is given,
+    with no format filter -- so **it must not be wired up without one**. The filter now lives in the
+    two live callers rather than here, because they are the ones that walk directories.
+
     :param paths: List of image paths
     :return:None
     """
@@ -288,9 +295,15 @@ def create_thumbnail(image_path: str, size: Tuple = (75, 75),
     # Check if the thumbnail already exists
     if isfile(thumb_path):
         return thumb_path
-    # Load image as numpy array. Deliberately AFTER the cache check above, so a hit costs no decode
+    # Load image as numpy array. Deliberately AFTER the cache check above, so a hit costs no decode.
+    #
+    # Through ImageLoader.load_image rather than io.imread directly, so an unsupported file raises
+    # the documented ValueError naming the extension instead of imageio's "Could not find a backend
+    # to open ... with iomode 'r'". Callers are expected to filter -- and as of 2026-08-22 they do,
+    # after a .txt in the user's image folder killed the application during the splash screen --
+    # but a utility that reads whatever it is handed should say clearly what it refused
     if img is None:
-        img = io.imread(image_path)
+        img = ImageLoader.load_image(image_path)
     # Get ratio between height and width
     ratio = img.shape[0] / img.shape[1]
     if ratio >= 1:

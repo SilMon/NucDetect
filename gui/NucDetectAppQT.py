@@ -920,16 +920,34 @@ class NucDetect(QMainWindow):
         """
         paths = []
         loaded_set = set(self.loaded_files)
-        for t in os.walk(url):
-            tpaths = [os.path.join(t[0], x) for x in t[2]]
-            paths.extend([x for x in tpaths if x not in loaded_set])
+
+        def images_in(folder: str) -> List[str]:
+            """
+            Every not-yet-loaded IMAGE file under `folder`
+
+            Filtered by extension, because everything collected here is handed to
+            add_images_to_database, which reads each file to get its metadata. A folder holding
+            anything that is not an image -- and a user's image folder routinely does -- otherwise
+            took the whole load down on the first non-image file it met.
+
+            :param folder: The folder to walk
+            :return: The image paths found, excluding those already loaded
+            """
+            found = []
+            for walked_root, _dirs, walked_files in os.walk(folder):
+                for name in walked_files:
+                    full = os.path.join(walked_root, name)
+                    if full in loaded_set:
+                        continue
+                    if os.path.splitext(name)[1].lower() in Util.IMAGE_FORMATS:
+                        found.append(full)
+            return found
+
+        paths.extend(images_in(url))
         # If no images where found, open a file dialog to add images
         if not paths:
             files = str(QFileDialog.getExistingDirectory(self, "Select Directory to load images from"))
-            # Walk the folder to find all files inside it
-            for t in os.walk(files):
-                tpaths = [os.path.join(t[0], x) for x in t[2]]
-                paths.extend([x for x in tpaths if x not in loaded_set])
+            paths.extend(images_in(files))
         self.loaded_files.extend(sorted(paths, key=lambda x: os.path.basename(x)))
         # Add new paths to database
         self.add_images_to_database(self.loaded_files)
@@ -1331,8 +1349,19 @@ class NucDetect(QMainWindow):
             roidat, pdat, elldat = NucDetect.prepare_roihandler_for_database(data["handler"], data["channels"])
             # Check if there is any data to save
             if roidat:
-                # Save data to database
+                # Save data to database. This ALSO sets `analysed` as a side effect, which is what
+                # the editor's own save path relies on; the explicit call below is what covers the
+                # case where this branch is skipped
                 ins.save_roi_data_for_image(key, roidat, pdat, elldat)
+            # Mark the image analysed WHETHER OR NOT anything was found.
+            #
+            # The flag used to be set only inside save_roi_data_for_image, above, so an analysis
+            # that detected no nuclei left the image unmarked. The consequences were not obvious:
+            # the result table would not reload on re-selection, and -- reported from real use on
+            # 2026-08-22 -- **the manual editor could not be opened**, because it is gated on the
+            # flag. So the one image a user most needs to correct by hand was the one they could
+            # not open. "Analysed" means an analysis ran, not that it found something.
+            ins.set_image_analysed(key)
             # Only commit once all writes succeeded, so a failed save doesn't persist a partial state
             ins.commit()
             req.commit()
@@ -2341,19 +2370,29 @@ def main() -> None:
         splash.showMessage("Checking for thumbnails...")
         LOGGER.info("Check files for thumbnails...")
         # Count number of available images
-        total = 0
+        # ONLY image files, and this filter is the whole of the fix for a startup crash.
+        #
+        # This walk used to thumbnail EVERY file it found. A single non-image file in
+        # ~/NucDetect/images -- a .txt, a spreadsheet, a stray note -- reached io.imread and
+        # killed the application during the splash screen with "Could not find a backend to open
+        # ... with iomode 'r'". Reported from real use on 2026-08-22, with .txt files there.
+        #
+        # The folder is the user's own and nothing stops them keeping other files in it, so
+        # filtering is the correct behaviour rather than a guard against the impossible.
+        images = []
         for root, dirs, files in os.walk(gpaths.images_path):
-            total += len(files)
+            images.extend(os.path.join(root, f) for f in files
+                          if os.path.splitext(f)[1].lower() in Util.IMAGE_FORMATS)
+        total = len(images)
         file_index = 1
-        for root, dirs, files in os.walk(gpaths.images_path):
-            for file in files:
-                msg = f"{file_index: 04d}:{total: 04d} checked..."
-                # Deliberately not logged: this is a transient progress indicator that overwrites
-                # itself on one console line, not a diagnostic worth a line in the log file
-                print(msg, end="\r", flush=True)
-                splash.showMessage(msg)
-                Util.create_thumbnail(os.path.join(root, file))
-                file_index += 1
+        for image in images:
+            msg = f"{file_index: 04d}:{total: 04d} checked..."
+            # Deliberately not logged: this is a transient progress indicator that overwrites
+            # itself on one console line, not a diagnostic worth a line in the log file
+            print(msg, end="\r", flush=True)
+            splash.showMessage(msg)
+            Util.create_thumbnail(image)
+            file_index += 1
         # Close the in-place progress line before anything else writes to the console
         print()
         LOGGER.info("All files checked for thumbnails, starting...")
