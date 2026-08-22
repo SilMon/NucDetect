@@ -377,6 +377,12 @@ class NucDetect(QMainWindow):
         :return: None
         """
         self.res_table_model = QStandardItemModel(self.ui.table_results)
+        # The md5 hashes of the image(s) the result table currently shows, and the flag that keeps a
+        # PROGRAMMATIC selection change from replacing it. Romano's rule, 2026-08-22: "Selecting a
+        # new image from the list manually should still change the result table, changing it
+        # automatically should retain the original result table."
+        self._displayed_keys: List[str] = []
+        self._suppress_table_reload = False
         # Initialize the header
         self.res_table_model.setHorizontalHeaderLabels(NucDetect.STANDARD_TABLE_HEADER)
         # Enable sorting
@@ -471,6 +477,9 @@ class NucDetect(QMainWindow):
         self.table_signal.connect(self._apply_result_table)
         self.row_signal.connect(self._append_result_row)
         self.status_signal.connect(self._apply_item_status)
+        # The image list is lazy: rows revealed after the table was filled would carry no marker, so
+        # it is re-applied whenever a page arrives. Cheap -- it walks only the revealed rows
+        self.img_list_model.rowsInserted.connect(lambda *_: self._mark_displayed_images())
         # Connected exactly once, here. The parameters the slot needs live on the instance, so
         # save_results() does not have to (re-)connect a partial on every export
         self.check_timer.timeout.connect(self.check_for_running_threads)
@@ -577,6 +586,10 @@ class NucDetect(QMainWindow):
         self.ui.table_results.resizeColumnsToContents()
         # setRowCount(0) above drops every span, so they are rebuilt for the rows just added
         self._update_result_table_spans()
+        # Marked here rather than where _displayed_keys is set, because that runs on a worker
+        # thread for the database-backed loads, and touching list items off the GUI thread is
+        # not allowed
+        self._mark_displayed_images()
 
     def _update_result_table_spans(self, *_) -> None:
         """
@@ -747,7 +760,18 @@ class NucDetect(QMainWindow):
         # offered an enabled Analyse button with nothing loaded, and clicking it opened the settings
         # dialog before failing on cur_img
         self.ui.btn_analyse.setEnabled(self.cur_img is not None)
-        if self.cur_img:
+        if self.cur_img and self._suppress_table_reload:
+            # A PROGRAMMATIC selection change -- the advance after an analysis, or the return to the
+            # first image after a batch. cur_img and the buttons follow the new selection, because
+            # the next Analyse must act on it, but the RESULT TABLE STAYS as it is: it still shows
+            # the analysis that just finished, which is the thing the user actually wants to read.
+            # Which image it belongs to is stated in lbl_exp_details and marked in the list, so the
+            # table and the selection disagreeing is visible rather than silent.
+            #
+            # Before 2026-08-22 this branch did not exist, and the advance cleared the table through
+            # the `else` below on every single-image analysis.
+            self.enable_buttons(True, ana_buttons=True)
+        elif self.cur_img:
             ana = self.cur_img["analysed"]
             if ana:
                 # Get information for this image
@@ -758,6 +782,13 @@ class NucDetect(QMainWindow):
             else:
                 self.ui.lbl_status.setText("Program ready")
                 self.res_table_model.setRowCount(0)
+                # The table is now empty, so nothing is on display -- the marker and the label have
+                # to go with it. Without this the previously shown image stayed bold in the list and
+                # its name stayed above an empty table, which is the exact inconsistency the marker
+                # exists to prevent
+                self._displayed_keys = []
+                self._mark_displayed_images()
+                self.set_experiment_status_label_text("")
                 self.enable_buttons(False, ana_buttons=False)
         else:
             self.ui.btn_analyse.setEnabled(False)
@@ -1042,6 +1073,11 @@ class NucDetect(QMainWindow):
             # If the dialog was rejected, abort analysis
             return
         self.res_table_model.setRowCount(0)
+        # The table is being emptied for a new run, so nothing is on display any more. Without this
+        # the previous image would keep its marker and its name would stay above an empty table
+        self._displayed_keys = []
+        self._mark_displayed_images()
+        self.set_experiment_status_label_text("")
         self.prg_signal.emit(f"Analysing {self.cur_img['file_name']}",
                              0, 100, "")
         thread = Thread(target=self._run_guarded,
@@ -1096,12 +1132,22 @@ class NucDetect(QMainWindow):
                              percent, maxi, "")
         self.enable_signal.emit(True)
         self.status_signal.emit(False)
-        # Advance to the next image, which is what makes _select_next_image live in production for
-        # the first time -- until 2026-08-15 both emits passed first=True, so a method named
-        # "select next image" only ever selected the first one. Working through a folder image by
-        # image is the normal use, and it should not need a click between each one. Stops at the
-        # last image rather than wrapping; the batch path below still emits True, because after a
-        # whole run the first image is the sensible place to be
+        # Advance to the next image. Restored 2026-08-22 after the table was decoupled from the
+        # selection -- see on_image_selection_change and _select_next_image.
+        #
+        # This emit was added 2026-08-15 and removed earlier on 2026-08-22, because advancing fired
+        # on_image_selection_change, which cleared the result table this method had just built. The
+        # analysis result was discarded on every single run and Romano reported it from real use.
+        #
+        # It works now because a PROGRAMMATIC selection change no longer replaces the table:
+        # _select_next_image raises _suppress_table_reload while it moves the selection, so the
+        # table keeps showing the analysis that just finished while the selection moves on to the
+        # next image, ready for the next Analyse. Which image the table belongs to is stated in
+        # lbl_exp_details and marked in the image list, so the two disagreeing is visible.
+        #
+        # Manual selection is untouched and still reloads -- that is Romano's rule, 2026-08-22:
+        # "Selecting a new image from the list manually should still change the result table,
+        # changing it automatically should retain the original result table."
         self.selec_signal.emit(False)
 
     def _report_analysis_progress(self, fraction: float, message: str) -> None:
@@ -1461,6 +1507,10 @@ class NucDetect(QMainWindow):
         :param experiment: Name of the experiment to show. None if only the current image should be shown
         :return: The prepared rows
         """
+        # The label and the list marker both answer "what am I looking at?", which stopped being
+        # obvious on 2026-08-22: an automatic advance moves the SELECTION without changing the
+        # table, so the two can legitimately disagree. Naming the source here is what makes that
+        # visible instead of silent -- Romano asked for the names, not just the counts
         if experiment:
             # Get all assigned images
             num_imgs = self.requester.get_number_of_associated_images_for_experiment(experiment)
@@ -1469,14 +1519,18 @@ class NucDetect(QMainWindow):
             # Sort rows according to group
             rows = sorted(rows, key=lambda x: x[1])
             self.set_experiment_status_label_text(
-                f"Experiment: {experiment}\nImages: {num_imgs}"
+                f"Showing experiment: {experiment}\nImages: {num_imgs}"
             )
             self.cur_exp = experiment
+            # Every image of the experiment is on screen, so every one of them is marked
+            self._displayed_keys = list(
+                self.requester.get_associated_images_for_experiment(experiment))
         else:
             rows = self.get_table_data_for_image(self.cur_img["key"])
             self.set_experiment_status_label_text(
-                f"Experiment: None\nImages: 1"
+                f"Showing image: {self.cur_img['file_name']}\nExperiment: None"
             )
+            self._displayed_keys = [self.cur_img["key"]]
         return rows
 
     def create_table_rows(self, rows: List[List[str]], append: bool = True) -> Union[None, List[List[QStandardItem]]]:
@@ -1565,6 +1619,40 @@ class NucDetect(QMainWindow):
         """
         self.ui.lbl_exp_details.setText(status)
 
+    def _mark_displayed_images(self) -> None:
+        """
+        Method to mark, in the image list, the image(s) the result table currently shows
+
+        **Necessary because the table and the selection can now disagree.** An automatic advance
+        moves the selection without changing the table, so without a marker the user would have no
+        way to tell which image the numbers on screen belong to. Romano asked for this together with
+        the label above the table, and the two answer the same question in two places.
+
+        **Bold plus a foreground colour, not a background one.** The background already carries the
+        analysed/modified state (`Color.ITEM_ANALYSED` / `ITEM_MODIFIED`), and those are orthogonal
+        to "is being shown" -- an image can be any combination of the three. Reusing the background
+        would have made one state hide another.
+
+        Only REVEALED rows can be marked, because the model is lazy and unrevealed rows have no
+        item yet. That is why this is also connected to the model's rowsInserted.
+
+        :return: None
+        """
+        self._assert_main_thread("_mark_displayed_images")
+        shown = set(self._displayed_keys)
+        for row in range(self.img_list_model.rowCount()):
+            item = self.img_list_model.get_item_at_index(row)
+            if item is None:
+                continue
+            data = item.data()
+            font = item.font()
+            is_shown = bool(data) and data.get("key") in shown
+            font.setBold(is_shown)
+            item.setFont(font)
+            # QStandardItem has no "clear the foreground" call, so the unmarked state is an explicit
+            # default brush rather than an omission
+            item.setForeground(Color.ITEM_DISPLAYED if is_shown else Color.ITEM_DEFAULT_TEXT)
+
     def enable_buttons(self, state: bool = True, ana_buttons: bool = True) -> None:
         """
         Method to disable or enable the GUI buttons
@@ -1628,8 +1716,20 @@ class NucDetect(QMainWindow):
                 return
             row = cur_ind.row() + 1
         nex = model.index(row, 0)
-        self.ui.list_images.selectionModel().select(nex, QItemSelectionModel.Select)
-        self.ui.list_images.setCurrentIndex(nex)
+        # EVERY selection change made from here is programmatic, so none of them may replace the
+        # result table -- that is the whole difference between "the user picked an image" and "the
+        # program moved on". The flag is read by on_image_selection_change, which Qt delivers
+        # synchronously for a same-thread selection change, so the try/finally covers it exactly.
+        #
+        # This also protects the BATCH summary table: the emit at the end of a batch run selects the
+        # first image, which used to reload that image's data over the summary the run had just
+        # produced. Same defect as the single-image one, one layer along.
+        self._suppress_table_reload = True
+        try:
+            self.ui.list_images.selectionModel().select(nex, QItemSelectionModel.Select)
+            self.ui.list_images.setCurrentIndex(nex)
+        finally:
+            self._suppress_table_reload = False
 
     def _set_progress(self, text: str, progress: Union[int, float], maxi: Union[int, float], symbol: str) -> None:
         """
