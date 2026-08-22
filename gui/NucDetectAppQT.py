@@ -584,6 +584,18 @@ class NucDetect(QMainWindow):
         # resize mode so the cost is paid once per fill instead of on every data change, and so
         # the widths stay draggable afterwards
         self.ui.table_results.resizeColumnsToContents()
+        # ...and then re-assert the stretch, because the call above just undid it.
+        # resizeColumnsToContents assigns an explicit width to EVERY column, the last one included,
+        # and Qt only recomputes the stretched section when a resize event arrives. So the table sat
+        # narrower than its viewport until the window was resized -- reported from real use on
+        # 2026-08-22, with minimise-and-restore as the workaround, which is precisely the resize
+        # event it was waiting for. Measured on a 2600px window: 76px of unused width, 0 after this.
+        #
+        # The toggle is not redundant: the flag is already True, so setting it to True again is a
+        # no-op. Turning it off and on is what forces the recomputation here rather than later
+        result_header = self.ui.table_results.horizontalHeader()
+        result_header.setStretchLastSection(False)
+        result_header.setStretchLastSection(True)
         # setRowCount(0) above drops every span, so they are rebuilt for the rows just added
         self._update_result_table_spans()
         # Marked here rather than where _displayed_keys is set, because that runs on a worker
@@ -1916,7 +1928,11 @@ class NucDetect(QMainWindow):
         :return: None
         """
         sett = SettingsDialog(self.inserter)
-        sett.initialize_from_file(os.path.join(gpaths.settings_path, "settings.json"))
+        # self.settings, so the dialog shows what an analysis actually uses. It is the database's
+        # settings table, loaded by load_settings; the JSON supplies only the widgets. The two used
+        # to disagree on nine keys -- `percent_hmax` read 0.45 in the file and 0.05 in the database
+        # -- so the dialog displayed values no analysis had ever run with
+        sett.initialize_from_file(os.path.join(gpaths.settings_path, "settings.json"), self.settings)
         # SettingsDialog.accept() performs the database update, the commit and the JSON save
         # itself; this block used to repeat all three. It was unreachable until accept() started
         # returning Accepted, so the repetition was never visible
@@ -2349,6 +2365,48 @@ def thread_exception_hook(args) -> None:
         _MAIN_WINDOW.err_signal.emit(thread_name, text)
 
 
+def prewarm_analysis_jit() -> None:
+    """
+    Compile the numba-jitted ellipse path, so the first analysis does not have to
+
+    **Why this exists.** ~27 `@njit` functions compile on their first call, and the cost lands
+    almost entirely in ellipse parameter calculation: measured 2.239 s for the first real pass in a
+    cold process against 0.001 s once warm. That is a stall the user sees at ~98.7 % of the progress
+    bar, on the first analysis after every launch, and the progress weights deliberately model warm
+    runs only -- so the bar sits still there rather than misreporting.
+
+    **A synthetic ROI, driven through the real method.** Calling `calculate_ellipse_parameters` on a
+    throwaway ROI compiles exactly the signatures the real call needs, because numba compiles per
+    type signature and the area is a plain list of `(row, first_col, length)` int tuples either way.
+    Reaching into the jitted functions directly would compile whatever signature this function
+    happened to spell, which could drift from the real one without anything failing -- the warm-up
+    would simply stop working.
+
+    **NOT numba's `cache=True`**, which was used here once and removed: it keys on a function's own
+    bytecode and does not reliably invalidate on the jitted helpers it calls, so editing one can
+    leave a stale compiled caller silently running the old logic.
+
+    **Batch analysis is deliberately not covered.** Its workers are separate processes that do not
+    inherit anything compiled here, and each pays its own compilation on its first image --
+    concurrently, which is what warming them in the pool initializer would also do. There is no
+    saving there to collect.
+
+    :return: None
+    """
+    try:
+        start = time.time()
+        warm = ROI(main=True, channel="Blue", auto=True)
+        # A small filled block. The values are irrelevant; only their TYPES reach the compiler
+        warm.set_area([(row, 5, 12) for row in range(5, 17)])
+        warm.calculate_ellipse_parameters()
+        LOGGER.info("Analysis routines compiled in %.2f secs", time.time() - start)
+    except Exception:
+        # An optimisation must never take down the application it is speeding up. A failure here
+        # costs the first analysis a stall, which is exactly the shipped behaviour without it
+        LOGGER.exception("Pre-compiling the analysis routines failed -- the first analysis will "
+                         "pay the compilation instead")
+
+
 def main() -> None:
     """
     Function to start the program
@@ -2400,6 +2458,14 @@ def main() -> None:
         _MAIN_WINDOW = main_win
         splash.finish(main_win)
         main_win.show()
+        # AFTER show(), on a background thread, and deliberately not during the splash screen: the
+        # compilation costs a few seconds and would lengthen EVERY launch, including the ones where
+        # nobody analyses anything. Started here the window is already usable, and by the time an
+        # image has been loaded and Analyse pressed it has long finished. Romano's call, 2026-08-22.
+        #
+        # A daemon thread, so it cannot hold the application open if someone quits immediately; it
+        # touches no Qt object and no database, only numba
+        threading.Thread(target=prewarm_analysis_jit, name="jit-prewarm", daemon=True).start()
         sys.exit(app.exec_())
 
 

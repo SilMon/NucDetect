@@ -318,8 +318,12 @@ class SettingsDialog(QDialog):
         for key, value in self.changed.items():
             self.inserter.update_setting(key, value[0])
         self.inserter.commit()
-        # Save the menu to JSON
-        self.save_menu_settings()
+        # THE JSON IS NOT WRITTEN. It used to be: save_menu_settings() copied every changed value
+        # into the loaded JSON and dumped the file, which made that file a second, competing store
+        # of the settings. An analysis reads them from the DATABASE, so writing them anywhere else
+        # can only drift -- and it had, on nine keys, `percent_hmax` by a factor of nine. The file
+        # describes the widgets now and nothing else, so there is nothing here left to save
+        #
         # super().accept(), not close(): close() makes exec() return Rejected, so no caller could
         # tell OK from Cancel while these writes had already happened
         super().accept()
@@ -376,11 +380,27 @@ class SettingsDialog(QDialog):
             reset_log_file(gpaths.log_path)
             LOGGER.info("Log file erased")
 
-    def initialize_from_file(self, url: str) -> None:
+    def initialize_from_file(self, url: str,
+                             values: Optional[Dict[str, Union[str, int, float, bool]]] = None) -> None:
         """
         Method to initialize the settings window from a JSON file
 
+        **The JSON describes the widgets; it does not hold the values.** ``id``, ``title``, ``desc``,
+        ``type`` and the ``values`` block (ranges, steps, decimals, units) come from the file, and
+        each menu point's *current* value comes from ``values`` -- the settings as stored in the
+        database, which is what an analysis actually reads.
+
+        Until 2026-08-22 the file supplied the value too, and the two sources had drifted apart:
+        nine keys disagreed, ``percent_hmax`` by a factor of nine (0.45 in the file, 0.05 in the
+        database). **The dialog therefore showed numbers that no analysis had ever used**, and
+        nudging such a control wrote the file's value into the database, changing detection
+        behaviour without the user meaning to change anything. Romano ruled on the split: the
+        database is authoritative, the JSON builds the window.
+
         :param url: The URL leading to the JSON
+        :param values: The stored settings, keyed by menu point id. A key absent from here keeps the
+                       value declared in the file, which is how a newly added setting looks before
+                       its first seeded launch
         :return: None
         """
         if not url.lower().endswith(".json"):
@@ -390,7 +410,32 @@ class SettingsDialog(QDialog):
             j_dat = json.load(json_file)
             self.json = j_dat
             for section, p in j_dat.items():
-                self.add_menu_point(section, p)
+                self.add_menu_point(section, self._with_stored_values(p, values))
+
+    @staticmethod
+    def _with_stored_values(menupoints: List[MenuPoint],
+                            values: Optional[Dict[str, Union[str, int, float, bool]]]
+                            ) -> List[MenuPoint]:
+        """
+        Overlay the stored settings onto the menu points read from the JSON
+
+        Copies rather than mutating, so ``self.json`` keeps describing the FILE. Nothing downstream
+        needs a check-state conversion: every check menu point declares ``"tristate": 0`` and
+        ``Widgets._as_check_state`` already reads a bool -- which is what the database yields for a
+        ``bool`` setting -- as Unchecked/Checked rather than as the raw enum value.
+
+        :param menupoints: The menu points of one section, as read from the JSON
+        :param values: The stored settings, keyed by menu point id, or None to use the file's values
+        :return: The menu points with their stored values applied
+        """
+        if not values:
+            return menupoints
+        applied = []
+        for mp in menupoints:
+            if mp["id"] in values:
+                mp = {**mp, "value": values[mp["id"]]}
+            applied.append(mp)
+        return applied
 
     def add_section(self, section: str) -> QScrollArea:
         """
@@ -549,8 +594,7 @@ class SettingsDialog(QDialog):
         :param value: The value of the widget, wrapped in a list by the widgets' signal
         :return: None
         """
-        # self.changed keeps the signal's list shape -- accept() and save_menu_settings() both
-        # index [0] out of it
+        # self.changed keeps the signal's list shape -- accept() indexes [0] out of it
         self.changed[_id] = value
         # self.data is nested per section, the shape add_menu_point builds. Writing self.data[_id]
         # here left two incompatible layouts in one dictionary, and a consumer walking it per
@@ -561,25 +605,3 @@ class SettingsDialog(QDialog):
                            f"section data")
             return
         self.data[section][_id] = value[0]
-
-    def save_menu_settings(self) -> None:
-        """
-        Method to save the changes of the settings back to the defining JSON file
-
-        :return: None
-        :raises: RuntimeError if no JSON was loaded
-        """
-        if self.json is not None:
-            if self.changed:
-                # Update the saved JSON data
-                for section, p in self.json.items():
-                    for ind in range(len(p)):
-                        try:
-                            p[ind]["value"] = self.changed[p[ind]["id"]][0]
-                        except KeyError:
-                            pass
-                # Dump JSON data back to file
-                with open(self.url, 'w', encoding="utf-8") as file:
-                    json.dump(self.json, file)
-        else:
-            raise RuntimeError("Settings not initialized!")
