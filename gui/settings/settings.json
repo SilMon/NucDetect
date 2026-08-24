@@ -422,7 +422,7 @@
       "value": 115,
       "values": {
         "min": 115,
-        "max": 9350,
+        "max": 30000,
         "step": 50,
         "unit": "µm²"
       }
@@ -432,10 +432,10 @@
       "title": "Maximal Nucleus Size",
       "desc": "Maximal size in µm² a detected nucleus can have",
       "type": "slider",
-      "value": 4650,
+      "value": 15000,
       "values": {
         "min": 155,
-        "max": 9350,
+        "max": 30000,
         "step": 50,
         "unit": "µm²"
       }

@@ -75,6 +75,71 @@ def assert_main_thread(operation: str, strict: bool = None, logger=None) -> None
 #: comment in `main.css` for why this is a placeholder and not a silent rewrite of relative paths.
 CSS_DIR_PLACEHOLDER = "@@CSS_DIR@@"
 
+# False colours for compositing a fluorescence stack down to RGB, in channel order: red, green,
+# blue, yellow, magenta.
+#
+# The first THREE are the identity -- channel 0 goes to red and nothing else, and so on -- so a
+# 1-, 2- or 3-channel image composites to exactly the array it already was. That is deliberate:
+# those already render correctly everywhere, and changing them would alter every existing thumbnail
+# and editor session.
+#
+# NOT `EditorView.COLORS`, which is (red, green, YELLOW, magenta, cyan). That list colours the roi
+# MARKERS drawn on top of this composite, and Romano's reason for the difference is that the
+# markers have to contrast with what is underneath (2026-08-22): "Yellow is used only in the editor
+# instead of blue to get a contrast to the blue nuclei in the composite image." The two lists
+# disagreeing is the design working; do not reconcile them.
+CHANNEL_COLORS = (
+    (1, 0, 0),   # 0 red
+    (0, 1, 0),   # 1 green
+    (0, 0, 1),   # 2 blue -- the nucleus channel by default, and what the markers contrast against
+    (1, 1, 0),   # 3 yellow
+    (1, 0, 1),   # 4 magenta
+)
+
+
+def composite_channels(img: np.ndarray) -> np.ndarray:
+    """
+    Composite a multi-channel image down to three channels, false-colouring the extras
+
+    **Three channels or fewer are returned untouched**, so this is safe to call unconditionally.
+    Above that the stack is folded onto RGB using :data:`CHANNEL_COLORS`.
+
+    Both renderers this project hands images to accept at most four channels, and read a fourth as
+    ALPHA rather than as data:
+
+    * ``pyqtgraph.functions.makeARGB`` raises ``data.shape[2] must be <= 4``, which took the editor
+      down on any 5-channel image;
+    * PNG has no meaning for a fifth channel either, so a thumbnail written from one loaded back as
+      a 5-pixel-wide sliver -- and a 4-channel one came back almost fully transparent, because a
+      fluorescence channel is mostly dark and it was being used as alpha.
+
+    Channels are combined with a **maximum**, not a sum. A sum saturates wherever two channels
+    overlap, so two moderate signals render as one bright one; the maximum keeps every channel's own
+    intensity readable, which matters more in a tool whose whole purpose is measuring intensity.
+    This is a display choice and nothing downstream depends on it.
+
+    :param img: The image, as (height, width) or (height, width, channels)
+    :return: The image with at most three channels, dtype preserved
+    """
+    if img.ndim < 3 or img.shape[2] <= 3:
+        return img
+    channels = img.shape[2]
+    out = np.zeros(img.shape[:2] + (3,), dtype=img.dtype)
+    for index in range(channels):
+        # More channels than colours: the palette repeats rather than dropping the extras
+        # silently. Two channels then share a colour, which is ambiguous but visible -- losing them
+        # would not be. Nothing in this project produces such an image today
+        colour = CHANNEL_COLORS[index % len(CHANNEL_COLORS)]
+        if index >= len(CHANNEL_COLORS):
+            LOGGER.warning("Channel %d has no false colour of its own -- the palette repeats, so it "
+                           "shares one with channel %d", index, index % len(CHANNEL_COLORS))
+        plane = img[..., index]
+        for component, weight in enumerate(colour):
+            if weight:
+                np.maximum(out[..., component], plane, out=out[..., component])
+    return out
+
+
 
 def load_stylesheet(name: str) -> str:
     """
@@ -347,6 +412,14 @@ def create_thumbnail(image_path: str, size: Tuple = (75, 75),
         img = np.clip(img, 0.0, 1.0)
     # Scale image
     img = resize(img, new_shape)
+    # Down to three channels BEFORE writing. PNG was chosen here because "JPEG cannot store more
+    # than three channels, so a 4-channel fluorescence image failed here" -- but PNG does not solve
+    # that, it stops RAISING: its fourth channel is ALPHA, so a 4-channel image came back almost
+    # fully transparent (measured: 100 % of pixels below half opacity), and a 5-channel one loaded
+    # as a 5-pixel-wide sliver. The change from JPEG to PNG turned a loud failure into a quiet one.
+    #
+    # Reported from real use on 2026-08-22, on the 5-channel case, which is the visible half
+    img = composite_channels(img)
     # Save the image
     io.imsave(thumb_path, img_as_ubyte(img), check_contrast=False)
     return thumb_path

@@ -500,15 +500,21 @@ class Editor(QDialog):
         self.ui.btn_coords.toggled.connect(
             lambda: self.set_status(f"Coordinate Tracking: {self.ui.btn_coords.isChecked()}")
         )
-        # Filled from the channels the editor can actually SHOW, not from every ident in the
-        # handler. show_channel looks the chosen name up in EditorView.active_channels, which is
-        # built from the active_channels argument -- so a channel present in roi.idents but absent
-        # from it raised KeyError the moment the user picked it. The idents order is kept, so the
-        # combo still reads in channel order; only the unshowable entries are left out
-        showable = {name for _, name in self.active_channels}
-        for ident in self.roi.idents:
-            if ident in showable:
-                self.ui.cbx_channel.addItem(ident)
+        # EVERY channel the editor can show, in channel-index order -- not only the ones that
+        # already have roi.
+        #
+        # This used to iterate `self.roi.idents`, which holds only the channels something was
+        # DETECTED in. A channel with no detection never appeared, so it could not be selected, so
+        # nothing could be drawn on it -- and a channel with nothing on it is exactly the one a user
+        # needs to open in order to add the first item by hand. On a 4- or 5-channel image the combo
+        # typically offered the first three and Composite, and the extra channels were unreachable.
+        # Reported from real use, 2026-08-22.
+        #
+        # The KeyError this replaced is still guarded, and better: `show_channel` looks the chosen
+        # name up in `EditorView.active_channels`, which is built from this same argument, so every
+        # entry added here is showable by construction rather than by filtering.
+        for _, name in sorted(self.active_channels, key=lambda channel: channel[0]):
+            self.ui.cbx_channel.addItem(name)
         self.ui.cbx_channel.addItem("Composite")
         self.ui.cbx_channel.setCurrentText("Composite")
         self.ui.cbx_channel.currentIndexChanged.connect(
@@ -678,20 +684,60 @@ class Editor(QDialog):
         """
         Method to display the information of the selected item
 
+        Called when the SELECTION changes. A change to the geometry of an already selected item goes
+        to update_editing_values instead -- it is the half that has to run on every step of a drag,
+        and re-enabling widgets and rewriting the hash label sixty times a second is not free
+
         :param item: The item to retrieve the information from
         :return: None
         """
-        self.connect_spinboxes_to_change_function(False)
-        self.ui.spb_x.setValue(int(item.center[0]))
-        self.ui.spb_y.setValue(int(item.center[1]))
-        self.ui.spb_width.setValue(int(item.width))
-        self.ui.spb_height.setValue(int(item.height))
-        self.ui.spb_angle.setValue(item.angle)
-        self.connect_spinboxes_to_change_function()
+        self.update_editing_values(item)
         self.ui.btn_preview.setEnabled(False)
         self.ui.btn_accept.setEnabled(False)
         self.enable_editing_widgets(True)
         self.display_hash(str(item.roi_id))
+
+    def update_editing_values(self, item: ROIItem) -> None:
+        """
+        Method to write the given item's geometry into the five editing spin boxes
+
+        The spin boxes are disconnected while they are written and reconnected afterwards, because
+        setValue emits valueChanged -- without that, filling the boxes would drive preview_changes,
+        which reads the boxes and pushes the result straight back onto the item
+
+        :param item: The item to read the geometry from
+        :return: None
+        """
+        self.write_editing_values(item.center[0], item.center[1],
+                                  item.width, item.height, item.angle)
+
+    def write_editing_values(self, center_x: float, center_y: float,
+                             width: float, height: float, angle: float) -> None:
+        """
+        Method to write an explicit geometry into the five editing spin boxes
+
+        Takes values rather than an item, because a gesture in progress is a PREVIEW: the item's own
+        center/width/height are deliberately not written until the mouse is released, so reading
+        them during a drag would show the geometry the item had before the gesture started
+
+        :param center_x: The x coordinate of the ellipse center
+        :param center_y: The y coordinate of the ellipse center
+        :param width: The length of the major axis
+        :param height: The length of the minor axis
+        :param angle: The clockwise angle of the major axis
+        :return: None
+        """
+        self.connect_spinboxes_to_change_function(False)
+        # round, not int: int() truncates, so a centre of 147.996 was shown as 147. That was
+        # invisible while geometry could only be typed in, and constant once it can be dragged --
+        # and it is not only a display wart, because pressing Accept writes the SPIN BOX value back
+        # onto the item, so truncating drifted the item a pixel every time
+        self.ui.spb_x.setValue(round(center_x))
+        self.ui.spb_y.setValue(round(center_y))
+        self.ui.spb_width.setValue(round(width))
+        self.ui.spb_height.setValue(round(height))
+        self.ui.spb_angle.setValue(angle)
+        self.connect_spinboxes_to_change_function()
 
     def enable_editing_widgets(self, enable: bool = True) -> None:
         """

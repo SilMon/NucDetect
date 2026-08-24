@@ -237,6 +237,12 @@ class NucDetect(QMainWindow):
         self.cur_img = None
         # Contains the associated roi for the loaded image
         self.roi_cache = None
+        # WHICH image roi_cache belongs to. Not the same as cur_img: after an analysis the selection
+        # advances to the next image while the table and roi_cache deliberately stay with the one
+        # just analysed, so anything pairing pixels with roi has to ask this rather than the
+        # selection. Getting that wrong opened the editor on one image's pixels with another's
+        # nuclei, and saved edits against the wrong image -- reported from real use 2026-08-22
+        self._roi_cache_img: Optional[Dict] = None
         # A list of all loaded image files -> Used for reloading
         self.loaded_files = []
         # Dict to convert md5 image hashes to file names
@@ -298,7 +304,28 @@ class NucDetect(QMainWindow):
         elif type_ == "float":
             return float(value)
         elif type_ == "bool":
-            return str(value).strip().lower() in ("1", "true", "yes")
+            # ANY non-zero number is true, not just 1. A check box stores Qt.CheckState, and
+            # Qt.Checked is **2** -- so until 2026-08-22 ticking a box wrote 2 and this read it back
+            # as False, because 2 is not in ("1", "true", "yes"). Neither *Quality Check* nor
+            # *Logging* could be switched on from the settings dialog once it had been touched, and
+            # the dialog showed the box unchecked afterwards. Reported from real use, and confirmed
+            # in a live database holding `logging = 2`.
+            #
+            # The write now stores a bool (Widgets.SettingsCheckBox), but this half is what makes
+            # the values ALREADY stored behave -- fixing only the write would leave every such
+            # database reading its own settings wrongly for ever
+            text = str(value).strip().lower()
+            if text in ("true", "yes"):
+                return True
+            if text in ("false", "no", ""):
+                return False
+            try:
+                return float(text) != 0
+            except ValueError:
+                # Not a number and not a known word: the honest answer for an unusable value is
+                # "off", which is what the old membership test also did
+                LOGGER.warning("Setting value %r is not a usable bool -- read as False", value)
+                return False
         else:
             return value
 
@@ -884,6 +911,7 @@ class NucDetect(QMainWindow):
                              0, 100, "")
         # Load saved data from databank
         self.roi_cache = self.load_rois_from_database(self.cur_img["key"])
+        self._roi_cache_img = self.cur_img
         # Create the result table from loaded data
         self.create_result_table(experiment)
         # Re-enable buttons and list. Runs on this worker thread, so it has to go through the
@@ -1147,6 +1175,8 @@ class NucDetect(QMainWindow):
             save_log=bool(analysis_settings["analysis_settings"].get("logging", True)),
             progress=reporter)
         self.roi_cache = data["handler"]
+        # Captured BEFORE the advance at the end of this method moves the selection off this image
+        self._roi_cache_img = self.cur_img
         reporter.sub(*bounds[ELLIPSE])(0.0, "Calculating ellipse parameters")
         for roi in self.roi_cache:
             if roi.main:
@@ -1952,13 +1982,20 @@ class NucDetect(QMainWindow):
         if not self.cur_img:
             self.prg_signal.emit("No image selected -- nothing to modify", 0, 100, "")
             return
+        # THE IMAGE roi_cache BELONGS TO, not the selected one. After an analysis the selection has
+        # already advanced to the next image while roi_cache still holds the analysed one, so
+        # reading cur_img here opened the editor on the next image's pixels with the analysed
+        # image's nuclei -- and, because EditorView keys its writes off the handler's ident, saved
+        # anything drawn against the wrong image. Reported from real use 2026-08-22; the fall back
+        # to cur_img covers the paths that set roi_cache without going through either assignment
+        img = self._roi_cache_img or self.cur_img
         # Load channels for image from database
-        channels = [(x[1], x[2]) for x in self.requester.get_channels(self.cur_img["key"])]
-        editor = Editor(image=ImageLoader.load_image(self.cur_img["path"]),
+        channels = [(x[1], x[2]) for x in self.requester.get_channels(img["key"])]
+        editor = Editor(image=ImageLoader.load_image(img["path"]),
                         active_channels=channels,
                         roi=self.roi_cache, size_factor=self.settings["size_factor"],
-                        img_name=self.cur_img['file_name'],
-                        x_scale=self.cur_img["x_scale"], y_scale=self.cur_img["y_scale"])
+                        img_name=img['file_name'],
+                        x_scale=img["x_scale"], y_scale=img["y_scale"])
         editor.setWindowFlags(editor.windowFlags() |
                               QtCore.Qt.WindowSystemMenuHint |
                               QtCore.Qt.WindowMinMaxButtonsHint |

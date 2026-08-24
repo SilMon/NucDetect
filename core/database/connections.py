@@ -791,9 +791,19 @@ class Requester(DatabaseInteractor):
             # Create row for this nucleus. get_statistics_for_roi returns None for a nucleus
             # with no statistics row (an empty tuple until 2026-08-17), so every stats[] below
             # would raise and take the whole result table with it. The row is kept and the affected cells say so instead:
-            # the nucleus exists and its foci counts are still countable. This needs a partially
-            # committed analysis to occur at all -- statistics are written as part of every
-            # analysis -- so no recovery is attempted here
+            # the nucleus exists and its foci counts are still countable.
+            #
+            # The MISSING-ROW case is not the only one. A row can exist with NULL ellipse columns:
+            # calculate_ellipse_parameters runs only for roi marked main, and a focus that lies
+            # outside every nucleus is stored with `associated = NULL` -- which is how a nucleus is
+            # spelled, so get_nuclei_hashes_for_image hands it back here as one. `stats` is then
+            # truthy and float(None) raised, taking the result table down. Reported from real use on
+            # 2026-08-22, with the quality check switched off; with it on, delete_unassociated_foci
+            # removes exactly those foci, which is why it had never surfaced.
+            #
+            # Widening this guard stops the crash, and that is ALL it does. The real defect is that
+            # `associated IS NULL` means both "this is a nucleus" and "this focus belongs to
+            # nothing", and repairing that touches stored data.
             if stats:
                 # Center Y and Center X go through the same :.2f as every other numeric column.
                 # get_center returns round(...), which under @njit yields a float for some ROI, and
@@ -801,10 +811,14 @@ class Requester(DatabaseInteractor):
                 # and the rest as real -- so bare str() put "433" next to "435.9399961797561" in one
                 # column. Measured before the fix: 151 of 4418 nuclei across 39 images stored a real
                 # centre
-                measurements = [f"{float(stats[11]):.2f}", f"{float(stats[10]):.2f}",
-                                f"{stats[15]:.2f}",
-                                f"{float(stats[18]) * 100:.2f}", f"{float(stats[14]):.2f}",
-                                f"{float(stats[12]):.2f}", f"{float(stats[13]):.2f}"]
+                def _measure(value: Optional[float], factor: float = 1.0) -> str:
+                    """One cell: the number, or NO_STATISTICS when the column is NULL"""
+                    return NO_STATISTICS if value is None else f"{float(value) * factor:.2f}"
+
+                measurements = [_measure(stats[11]), _measure(stats[10]),
+                                _measure(stats[15]),
+                                _measure(stats[18], 100), _measure(stats[14]),
+                                _measure(stats[12]), _measure(stats[13])]
             else:
                 measurements = [NO_STATISTICS] * 7
             row = [name, str(image), str(nuc)] + measurements + [match]
