@@ -296,6 +296,14 @@ class EditorView(pg.GraphicsView):
         # they are covered by the same call rather than by three more
         if index == COMPOSITE_CHANNEL:
             return composite_channels(image)
+        # Defensive, and it says so rather than raising from inside a signal handler. Editor filters
+        # the channel list against the array before this can be reached, so an out-of-range index
+        # here means a new caller bypassed that -- worth a message naming both numbers instead of an
+        # IndexError from a lambda
+        if index >= image.shape[2]:
+            LOGGER.warning("Channel %d requested for an image with %d channels -- showing channel 0",
+                           index, image.shape[2])
+            index = 0
         return image[..., index]
 
     def calculate_hc_and_wb_images(self):
@@ -1091,7 +1099,9 @@ class EditorView(pg.GraphicsView):
         :param roihash: The hash of the item
         :return: None
         """
-        self.inserter.delete_roi_from_database(roihash)
+        # self.roi.ident, not just the hash: an identical focus in two images shares a hash, so a
+        # hash-only delete took the other image's roi with it
+        self.inserter.delete_roi_from_database(roihash, self.roi.ident)
 
     @staticmethod
     def create_associations(main: int, maps: Iterable[np.ndarray], unassociated: List[int],
@@ -1146,7 +1156,7 @@ class EditorView(pg.GraphicsView):
         # Remove roi from handler
         self.roi.remove_rois_by_hash(unassociated)
         for roi_hash in unassociated:
-            self.inserter.delete_roi_from_database(roi_hash)
+            self.inserter.delete_roi_from_database(roi_hash, self.roi.ident)
 
     @staticmethod
     def replace_placeholder(map_: np.ndarray, roihash: int, placeholder: int = -1) -> None:
@@ -1277,6 +1287,18 @@ class ROIDrawer:
         """
         items = []
         for roi in rois:
+            # A stored ROI with no points cannot be drawn -- calculate_dimensions raises for it, and
+            # this runs inside the lazy loader's timer, so ONE bad row took the whole editor down
+            # with `ValueError: ROI ... does not contain any points!` before the window appeared.
+            # 57 such rows exist in the live database across 33 images; the editor has to open on
+            # the rest of the image regardless of how they got there.
+            #
+            # Skipped rather than repaired, and logged rather than swallowed: what is wrong is the
+            # stored data, and drawing a placeholder would invent geometry that is not there
+            if not roi.is_valid():
+                LOGGER.warning("Skipping roi %s in channel %s: no points are stored for it",
+                               hash(roi), roi.ident)
+                continue
             ind = idents.index(roi.ident)
             if roi.main:
                 items.append(ROIDrawer.draw_nucleus(view, roi, ind, False))

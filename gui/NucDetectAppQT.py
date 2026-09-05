@@ -1392,7 +1392,10 @@ class NucDetect(QMainWindow):
                 exp_data = data["experiment details"]
                 ins.add_image_to_experiment(key, exp_data["name"], exp_data["details"],
                                             exp_data["notes"], "Standard")
-            # Update channel info
+            # Update channel info. Cleared first: the rows are keyed by (md5, index) and were only
+            # ever replaced, so re-registering an image with fewer channels than before left the
+            # surplus indices in place -- and the editor offers exactly what this table says
+            ins.remove_channels_for_image(key)
             for ind in range(len(data["names"])):
                 ins.add_channel(key, ind, data["names"][ind],
                                 data["active channels"][ind], data["main channel"] == ind)

@@ -28,6 +28,7 @@ from core.DataProcessing import euclidean_distance, perform_statistical_analysis
 from gui.Plots import PlotCanvas
 from gui.Util import create_image_item_list_from
 from core.database.connections import Inserter, Requester
+from core.logging_config import get_logger
 from gui.definitions.icons import Icon, Color
 from core.detector_modules import AreaAndROIExtractor
 from gui.dialogs.GraphicsItems import EditorView, ROIItem
@@ -41,6 +42,9 @@ from core.roi.ROIHandler import ROIHandler
 # Excel's own limit on a worksheet title. openpyxl only warns above it, but the workbook is then
 # unreadable for some applications, so the export truncates rather than relying on the warning
 MAX_SHEET_NAME_LENGTH = 31
+
+
+LOGGER = get_logger(__name__)
 
 
 class DataExportDialog(QDialog):
@@ -439,7 +443,18 @@ class Editor(QDialog):
         self.image = image
         self.img_name = img_name
         self.roi = roi
-        self.active_channels = active_channels
+        # Only the channels the loaded array actually HAS. This list comes from the channels table,
+        # which can disagree with the file: nothing ever deleted a channel row, so an image
+        # registered once with more channels than it has now kept the surplus indices, and picking
+        # one raised `IndexError: index 4 is out of bounds for axis 2 with size 4` from inside the
+        # combo box's lambda, where nothing could catch it. Filtering here serves both consumers --
+        # this dialog's combo box and the EditorView constructed below
+        available = self.image.shape[2] if self.image.ndim > 2 else 1
+        self.active_channels = [x for x in active_channels if x[0] < available]
+        dropped = [x[1] for x in active_channels if x[0] >= available]
+        if dropped:
+            LOGGER.warning("Image %s has %d channels but the database lists %d -- not offering %s",
+                           img_name, available, len(active_channels), dropped)
         self.size_factor = size_factor
         self.temp_items = []
         self.x_scale = x_scale

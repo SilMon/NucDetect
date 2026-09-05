@@ -1009,6 +1009,22 @@ class Inserter(DatabaseInteractor):
         """
         self.connector.update("images", ("modified", True), ("md5", Specifiers.EQUALS, image))
 
+    def remove_channels_for_image(self, image: str) -> None:
+        """
+        Method to remove every channel row of the given image
+
+        add_channel is an INSERT OR REPLACE keyed on (md5, index), and delete_existing_image_data
+        clears roi, points and statistics but never channels -- so registering an image with FEWER
+        channels than a previous run left the surplus rows behind for good. The editor builds its
+        channel list from this table and indexes the loaded array with it, so a stale row offered a
+        channel the image does not have and raised IndexError on selection. Measured on the live
+        database: one image declared 4 channels and carried 5 rows, the fifth named "Channel 5".
+
+        :param image: The md5 hash of the image
+        :return: None
+        """
+        self.connector.delete("channels", ("md5", Specifiers.EQUALS, image))
+
     def add_channel(self, image: str, index: int, name: str, active: bool, main: bool) -> None:
         """
         Method to add a new image channel to the database
@@ -1240,43 +1256,65 @@ class Inserter(DatabaseInteractor):
         for nucleus in nuclei:
             self.reset_nucleus_focus_association(nucleus)
 
-    def delete_roi_from_database(self, ident: int) -> None:
+    def delete_roi_from_database(self, ident: int, image: str) -> None:
         """
-        Method to remove the given roi from the database
+        Method to remove the given roi of the given image from the database
+
+        The image is REQUIRED, and that is the whole point: hash(roi) is md5(channel name + area)
+        and carries no image, so an identical small focus in the same channel of two different
+        images gets the same hash. Deleting by hash alone removed the other image's roi outright.
 
         :param ident: md5 hash of the roi
+        :param image: The md5 hash of the image the roi belongs to
         :return: None
         """
-        self.delete_roi_data(ident)
-        self.delete_roi_points(ident)
-        self.delete_roi_statistics(ident)
+        self.delete_roi_data(ident, image)
+        self.delete_roi_points(ident, image)
+        self.delete_roi_statistics(ident, image)
 
-    def delete_roi_data(self, ident: int) -> None:
+    def delete_roi_data(self, ident: int, image: str) -> None:
         """
-        Method to remove the given roi from the roi table
+        Method to remove the given roi of the given image from the roi table
 
         :param ident: The md5 hash of the roi
+        :param image: The md5 hash of the image the roi belongs to
         :return: None
         """
-        self.connector.delete("roi", ("hash", Specifiers.EQUALS, ident))
+        self.connector.delete("roi", (("hash", Specifiers.EQUALS, ident),
+                                      ("image", Specifiers.EQUALS, image)))
 
-    def delete_roi_points(self, ident: int) -> None:
+    def delete_roi_points(self, ident: int, image: str) -> None:
         """
         Method to delete the saved area data of the given roi
 
+        **Only when no other image's roi carries the same hash.** The points table keys on
+        (hash, row, column_) and has no image column, so identically-hashed roi on two images share
+        one set of rows; deleting them for one image left the other with a roi row and no area, and
+        the manual editor raised on it. The rows stay until the last holder of the hash goes.
+
         :param ident: The md5 hash of the roi
+        :param image: The md5 hash of the image the roi belongs to
         :return: None
         """
+        shared = self.connector.count_instances(
+            "hash", "roi", (("hash", Specifiers.EQUALS, ident),
+                            ("image", Specifiers.NOTEQUALS, image)))
+        if shared:
+            LOGGER.debug("Keeping the points of roi %s: %d other image(s) share its hash",
+                         ident, shared)
+            return
         self.connector.delete("points", ("hash", Specifiers.EQUALS, ident))
 
-    def delete_roi_statistics(self, ident: int) -> None:
+    def delete_roi_statistics(self, ident: int, image: str) -> None:
         """
         Method to delete the saved roi statistics
 
         :param ident: The md5 hash of the roi
+        :param image: The md5 hash of the image the roi belongs to
         :return: None
         """
-        self.connector.delete("statistics", ("hash", Specifiers.EQUALS, ident))
+        self.connector.delete("statistics", (("hash", Specifiers.EQUALS, ident),
+                                             ("image", Specifiers.EQUALS, image)))
 
     def reset_database(self) -> None:
         """
