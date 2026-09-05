@@ -1150,6 +1150,41 @@ class Inserter(DatabaseInteractor):
         """
         self.connector.update("images", ("experiment", Specifiers.NULL), ("experiment", Specifiers.EQUALS, experiment))
 
+    def remove_group_associations_for_experiment(self, experiment: str) -> None:
+        """
+        Method to remove every group association of the given experiment
+
+        The counterpart add_image_to_experiment_group had none, so nothing in the project could
+        take a row OUT of the groups table -- and that table is what
+        get_associated_images_for_experiment reads experiment membership from, falling back to
+        images.experiment only when it is empty. An image removed from an experiment or from a
+        group was therefore re-inserted by the next save and came back on the next load.
+
+        :param experiment: Name of the experiment whose group rows should be removed
+        :return: None
+        """
+        self.connector.delete("groups", ("experiment", Specifiers.EQUALS, experiment))
+
+    def rename_experiment(self, old_name: str, new_name: str) -> None:
+        """
+        Method to rename an experiment, carrying its associations with it
+
+        All three tables are updated together because the schema declares NO foreign keys: nothing
+        cascades, so a rename that touched only `experiments` would strand every group and image
+        under a name that no longer exists. Renaming was previously done by writing a row under the
+        new name and leaving the old one, which is why an experiment appeared twice.
+
+        :param old_name: The name the experiment currently has
+        :param new_name: The name it should have
+        :return: None
+        """
+        self.connector.update("experiments", ("name", new_name),
+                              ("name", Specifiers.EQUALS, old_name))
+        self.connector.update("groups", ("experiment", new_name),
+                              ("experiment", Specifiers.EQUALS, old_name))
+        self.connector.update("images", ("experiment", new_name),
+                              ("experiment", Specifiers.EQUALS, old_name))
+
     def update_setting(self, key: str, value: Union[str, int, float]) -> None:
         """
         Method to update the given setting in the database

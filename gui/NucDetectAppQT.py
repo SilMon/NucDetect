@@ -386,6 +386,12 @@ class NucDetect(QMainWindow):
         self.add_images_from_folder(gpaths.images_path)
         self.img_list_model = ImageListModel(self.ui.list_images, paths=self.loaded_files)
         self.ui.list_images.setModel(self.img_list_model)
+        # check_all_item_statuses is bounded by rowCount(), which on this model is the lazy-loading
+        # CURSOR -- so it marked the first page and every row fetchMore revealed afterwards stayed
+        # unhighlighted, however often the sweep was re-run. Marking on reveal keeps the cost
+        # proportional to what is on screen; iterating len(self._paths) instead would build an item
+        # and run a query for every image in the folder, which is the work the model exists to avoid
+        self.img_list_model.rowsInserted.connect(self.on_rows_revealed)
         self.ui.list_images.selectionModel().selectionChanged.connect(self.on_image_selection_change)
         # SingleSelection: the list was ExtendedSelection -- Qt's default for a QListView, set
         # nowhere deliberately -- so a shift-click range let on_image_selection_change assign
@@ -405,9 +411,7 @@ class NucDetect(QMainWindow):
         """
         self.res_table_model = QStandardItemModel(self.ui.table_results)
         # The md5 hashes of the image(s) the result table currently shows, and the flag that keeps a
-        # PROGRAMMATIC selection change from replacing it. Romano's rule, 2026-08-22: "Selecting a
-        # new image from the list manually should still change the result table, changing it
-        # automatically should retain the original result table."
+        # PROGRAMMATIC selection change from replacing it.
         self._displayed_keys: List[str] = []
         self._suppress_table_reload = False
         # Initialize the header
@@ -2048,18 +2052,43 @@ class NucDetect(QMainWindow):
             item = self.img_list_model.get_item_at_index((index.row()))
             item.setData(self.cur_img)
         if item:
-            if analysed:
-                if modified:
-                    item.setBackground(Color.ITEM_MODIFIED)
-                else:
-                    item.setBackground(Color.ITEM_ANALYSED)
-            else:
-                # Clear the role rather than painting a "default" colour: there is no colour that
-                # means "no highlight" -- any brush is drawn over the row. Without this branch a row
-                # whose analysis was just deleted kept its analysed/modified highlight, so its data
-                # and its colour disagreed until check_all_item_statuses next ran. That sibling has
-                # always had the reset branch, which is why the gap here survived: it looked correct
-                item.setData(None, Qt.BackgroundRole)
+            # The same painter as the sweep. This branch used to be a third copy of the same
+            # if/else, and the copy here was missing its reset arm -- a row whose analysis had just
+            # been deleted kept its highlight until check_all_item_statuses next ran
+            self.apply_status_background(item, analysed, modified)
+
+    @staticmethod
+    def apply_status_background(item: QStandardItem, analysed: bool, modified: bool) -> None:
+        """
+        Method to paint an image list item according to the state of its image
+
+        :param item: The list item to paint
+        :param analysed: Whether the image has been analysed
+        :param modified: Whether its result was edited by hand
+        :return: None
+        """
+        if analysed:
+            item.setBackground(Color.ITEM_MODIFIED if modified else Color.ITEM_ANALYSED)
+        else:
+            # Clear the role rather than painting a "default" colour: there is no colour that
+            # means "no highlight" -- any brush is drawn over the row. setData(None, ...)
+            # removes the role, which is how the view falls back to the palette
+            item.setData(None, Qt.BackgroundRole)
+
+    def on_rows_revealed(self, parent: QModelIndex, first: int, last: int) -> None:
+        """
+        Method to mark the rows the image list has just revealed
+
+        Connected to the model's rowsInserted, which it emits from fetchMore and from add_path.
+
+        :param parent: The parent index of the inserted rows. Always invalid for this flat model
+        :param first: The first inserted row
+        :param last: The last inserted row
+        :return: None
+        """
+        if parent.isValid():
+            return
+        self.check_item_statuses_in_range(first, last)
 
     def check_all_item_statuses(self) -> None:
         """
@@ -2067,25 +2096,33 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
+        # Guarded here as well as in the range form it delegates to. This is a public entry point
+        # called from three places, and the invariant verify_thread_affinity enforces is that every
+        # ui-mutating entry point carries the guard -- not that some caller further down does
         self._assert_main_thread("check_all_item_statuses")
+        self.check_item_statuses_in_range(0, self.ui.list_images.model().rowCount() - 1)
+
+    def check_item_statuses_in_range(self, first: int, last: int) -> None:
+        """
+        Method to re-derive and paint the status of the given range of image list rows
+
+        :param first: The first row to check
+        :param last: The last row to check, inclusive
+        :return: None
+        """
+        self._assert_main_thread("check_item_statuses_in_range")
         model = self.ui.list_images.model()
-        for index in range(model.rowCount()):
+        # Clamped rather than trusted: check_all_item_statuses passes rowCount() - 1, which is -1
+        # on an empty list, and a reveal can in principle be reported for rows a later reset has
+        # already dropped
+        for index in range(max(first, 0), min(last, model.rowCount() - 1) + 1):
             item = model.get_item_at_index(index)
             data = item.data()
             analysed, modified = Util.check_if_image_was_analysed_and_modified(data["key"])
             data["analysed"] = analysed
             data["modified"] = modified
             item.setData(data)
-            if analysed:
-                if modified:
-                    item.setBackground(Color.ITEM_MODIFIED)
-                else:
-                    item.setBackground(Color.ITEM_ANALYSED)
-            else:
-                # Clear the role rather than painting a "default" colour: there is no colour that
-                # means "no highlight" -- any brush is drawn over the row. setData(None, ...)
-                # removes the role, which is how the view falls back to the palette
-                item.setData(None, Qt.BackgroundRole)
+            self.apply_status_background(item, analysed, modified)
 
     def on_close(self) -> None:
         """

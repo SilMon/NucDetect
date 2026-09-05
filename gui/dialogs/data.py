@@ -1680,6 +1680,9 @@ class ExperimentDialog(QDialog):
             add_item.setText(text)
             add_item.setData(
                 {"name": name,
+                 # None, not the name: this experiment has no row in the database yet, so there is
+                 # nothing for save_changes to rename FROM
+                 "loaded_name": None,
                  "details": "",
                  "notes": "",
                  "groups": {},
@@ -1745,15 +1748,33 @@ class ExperimentDialog(QDialog):
         for ind in range(self.exp_model.rowCount()):
             item = self.exp_model.item(ind)
             data = item.data()
+            # The name this experiment was READ under, or None for one added in this dialog. A
+            # rename used to be indistinguishable from a new experiment: add_new_experiment is an
+            # INSERT OR REPLACE keyed on the name, so it wrote a second row and left the first
+            # standing with every group and image association still pointing at the old name
+            loaded_name = data.get("loaded_name")
+            if loaded_name is not None and loaded_name != data["name"]:
+                data = self.apply_pending_rename(item, data, loaded_name)
             # Only what changed. add_new_experiment is an INSERT OR REPLACE, so an untouched
             # experiment had its details and notes rewritten from this model on every OK, along
             # with a group row and an image association per image it holds. An experiment absent
-            # from loaded_state is new and always written
-            if self.get_experiment_fingerprint(data) == self.loaded_state.get(data["name"]):
+            # from loaded_state is new and always written.
+            # Looked up under the name it was LOADED under, not its current one -- otherwise a
+            # rename finds nothing in the snapshot and the comparison is meaningless. The
+            # fingerprint includes the name, so a renamed experiment differs from its snapshot and
+            # is written
+            if self.get_experiment_fingerprint(data) == self.loaded_state.get(loaded_name or data["name"]):
                 continue
             # Add experiment to database
             self.inserter.add_new_experiment(data["name"], data["details"], data["notes"])
-            # Update group data
+            # REPLACED, not merged. add_image_to_experiment_group is an INSERT OR REPLACE and
+            # nothing deleted from the groups table, so a removal made in this dialog or in the
+            # group dialog was undone by this very loop -- the stored row survived, and
+            # get_associated_images_for_experiment reads that table before images.experiment.
+            # Deleting the experiment's rows first makes what the model holds authoritative, which
+            # is also what preserves images that are not currently LOADED: they are still in
+            # data["groups"], so they are written straight back
+            self.inserter.remove_group_associations_for_experiment(data["name"])
             for group, values in data["groups"].items():
                 for img in values:
                     self.inserter.add_image_to_experiment_group(img, data["name"], group)
@@ -1804,6 +1825,12 @@ class ExperimentDialog(QDialog):
             # image is simply not associated any more
             if item_data["key"] in exp_data["keys"]:
                 exp_data["keys"].remove(item_data["key"])
+            # ...and out of the GROUPS too. Experiment membership is read from the groups table,
+            # not from images.experiment, so leaving the key here meant save_changes re-inserted
+            # the row this method had just NULLed and the image came back on the next load
+            for group in exp_data["groups"].values():
+                if item_data["key"] in group:
+                    group.remove(item_data["key"])
             self.inserter.remove_image_from_experiment(item_data["key"])
             exp.setData(exp_data)
             # Remove item from model
@@ -1819,6 +1846,9 @@ class ExperimentDialog(QDialog):
         exp = self.exp_model.itemFromIndex(self.ui.lv_experiments.selectionModel().selectedIndexes()[0])
         exp_data = exp.data()
         exp_data["keys"] = []
+        # Emptied for the same reason as in remove_images_from_experiment: the groups table decides
+        # membership, so an experiment cleared here came back full on the next load
+        exp_data["groups"] = {}
         exp.setData(exp_data)
         self.inserter.remove_all_images_from_experiment(exp_data["name"])
         # Clear image model
@@ -1889,6 +1919,9 @@ class ExperimentDialog(QDialog):
             add_item.setData(
                 {
                     "name": name,
+                    # The name as stored. save_changes compares it against "name" to tell a rename
+                    # from an edit, and looks the experiment up in loaded_state by it
+                    "loaded_name": name,
                     "details": details,
                     "notes": notes,
                     "groups": groups,
@@ -1899,6 +1932,35 @@ class ExperimentDialog(QDialog):
             add_item.setIcon(Icon.get_icon("CLIPBOARD"))
             self.loaded_state[name] = self.get_experiment_fingerprint(add_item.data())
             self.exp_model.appendRow(add_item)
+
+    def apply_pending_rename(self, item: QStandardItem, data: Dict, loaded_name: str) -> Dict:
+        """
+        Method to carry out a pending rename of the given experiment
+
+        Refuses a name that is empty or already taken and reverts to the loaded one. Inserter.
+        rename_experiment updates rows BY NAME, so renaming onto an existing experiment would
+        merge the two -- strictly worse than the duplicate this fix removes. add_experiment has
+        always refused both for a NEW experiment; the line edit that renames never did, and it
+        could not matter while a rename merely created a second row.
+
+        :param item: The list item holding the experiment
+        :param data: The item's data dictionary, with the new name already written into it
+        :param loaded_name: The name the experiment was read from the database under
+        :return: The data dictionary, with the name reverted if the rename was refused
+        """
+        taken = any(self.exp_model.item(row).data()["name"] == data["name"]
+                    for row in range(self.exp_model.rowCount())
+                    if self.exp_model.item(row) is not item)
+        if not data["name"] or taken:
+            QMessageBox.information(
+                self, "Rename experiment...",
+                "Please enter a name." if not data["name"]
+                else f"An experiment named '{data['name']}' already exists.")
+            data["name"] = loaded_name
+            item.setData(data)
+            return data
+        self.inserter.rename_experiment(loaded_name, data["name"])
+        return data
 
     @staticmethod
     def get_experiment_fingerprint(data: Dict) -> Tuple:

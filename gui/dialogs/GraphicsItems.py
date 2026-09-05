@@ -699,19 +699,79 @@ class EditorView(pg.GraphicsView):
         # out of temp_items, and process_changed_items then dropped the move on OK
         self.commit_item_geometry(item, rect, item.angle)
 
+    @staticmethod
+    def marker_covers(item: "ROIItem", scene_pos: QPointF,
+                      pixel: Tuple[float, float]) -> bool:
+        """
+        Method to test whether the marker DRAWN for an item covers the given position
+
+        `QGraphicsScene.items()` cannot answer this. It hit-tests against
+        `QGraphicsEllipseItem.shape()`, which is the ellipse united with its pen stroke -- and Qt
+        strokes that outline with `pen.widthF()` in ITEM units, while every marker pen here is
+        **cosmetic** (`pg.mkPen` sets it), so it is DRAWN 3 device pixels wide at any zoom. The two
+        therefore agree only at 1:1: zoomed in, the hit area keeps its 1.5 image-pixel margin while
+        the drawn ring shrinks to a hairline, so the cursor lands well outside a focus and the focus
+        still lights up. Reported from real use, 2026-08-24.
+
+        The margin below is the drawn one: half the pen width, in device pixels, converted into item
+        units through the current view scale. It follows the zoom, which is what makes the highlight
+        agree with what is on screen -- and it keeps a small item aimable when zoomed out, because
+        the marker is never drawn thinner than its pen.
+
+        :param item: The item to test
+        :param scene_pos: The position to test, in scene coordinates
+        :param pixel: The size of one device pixel in item units, as (x, y)
+        :return: True if the drawn marker covers the position
+        """
+        rect = item.rect()
+        if rect.width() <= 0 or rect.height() <= 0:
+            return False
+        # mapFromScene, not arithmetic on the scene position: an item carries a rotation and a
+        # transform origin, and the ellipse is axis-aligned only in its OWN frame
+        local = item.mapFromScene(scene_pos)
+        pen = item.pen()
+        half = max(pen.widthF(), 1.0) / 2
+        rx = rect.width() / 2 + half * pixel[0]
+        ry = rect.height() / 2 + half * pixel[1]
+        dx = (local.x() - rect.center().x()) / rx
+        dy = (local.y() - rect.center().y()) / ry
+        return dx * dx + dy * dy <= 1.0
+
+    def roi_item_at(self, scene_pos: QPointF) -> Optional["ROIItem"]:
+        """
+        Method to find the topmost item on the active channel whose marker covers a position
+
+        **The one lookup for both hovering and selecting.** They must not diverge: the hover
+        highlight exists to show what the next click will hit, and it can only do that if the two
+        ask the same question.
+
+        :param scene_pos: The position to test, in scene coordinates
+        :return: The item, or None
+        """
+        active_index = self.active_channels[self.active_channel]
+        pixel = self.plot_vb.viewPixelSize()
+        # scene().items() returns items in DESCENDING stacking order, so the first match is the
+        # topmost one -- the one the user can see. Both call sites took items[-1] until 2026-08-24,
+        # which is the item furthest BACK: where two markers overlapped, the one picked was the one
+        # hidden behind the other. Its inflated hit area is still a useful cheap prefilter
+        for item in self.scene().items(scene_pos):
+            if not isinstance(item, ROIItem) or item.channel_index != active_index:
+                continue
+            if self.marker_covers(item, scene_pos, pixel):
+                return item
+        return None
+
     def select_item_at_mouse_position(self, event: QMouseEvent) -> None:
         """
         Method to select the clicked item at the mouse position
 
         :return: None
         """
-        items = [x for x in self.scene().items(self.mapToScene(event.pos()))
-                 if isinstance(x, NucleusItem) or isinstance(x, FocusItem)]
-        items = [x for x in items if x.channel_index == self.active_channels[self.active_channel]]
-        if items:
+        item = self.roi_item_at(self.mapToScene(event.pos()))
+        if item is not None:
             if self.selected_item:
                 self.selected_item.enable_editing(False)
-            self.selected_item = items[-1]
+            self.selected_item = item
             self.selected_item.enable_editing(True)
             self._dialog.setup_editing(self.selected_item)
 
@@ -793,12 +853,9 @@ class EditorView(pg.GraphicsView):
         # being edited are setEnabled(False), and a disabled QGraphicsItem is sent no hover events
         candidate = None
         if self.mode == 1 and self.active_channel != "Composite":
-            active_index = self.active_channels[self.active_channel]
-            under_cursor = [x for x in self.scene().items(scene_pos)
-                            if isinstance(x, ROIItem) and x.channel_index == active_index]
-            if under_cursor:
-                # [-1] to match select_item_at_mouse_position, which picks the same one
-                candidate = under_cursor[-1]
+            # roi_item_at is the same lookup select_item_at_mouse_position uses, so the highlight
+            # shows exactly what the next click will hit -- the property this feature exists for
+            candidate = self.roi_item_at(scene_pos)
         self.update_cursor(scene_pos, candidate)
         if candidate is self.hovered_item:
             return
