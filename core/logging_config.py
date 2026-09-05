@@ -84,21 +84,29 @@ def get_logger(name: Optional[str] = None) -> logging.Logger:
 
 
 def log_messages(lines: Iterable[str], level: int = logging.INFO,
-                 logger: Optional[logging.Logger] = None) -> None:
+                 logger: Optional[logging.Logger] = None,
+                 console: bool = True) -> None:
     """
     Function to log a block of already formatted lines
 
     Used to replay the analysis messages a Detector buffered -- possibly in a worker process -- as
     individual records, so every line carries its own timestamp and is written atomically.
 
+    ``console=False`` marks the records file-only. A batch analysis replays roughly thirty lines per
+    image, which buried its own eight progress lines in ~2400 replayed ones; a single-image analysis
+    wants exactly the same records on screen. The same records, wanted in one case and not the
+    other, is why this is a routing flag rather than a level -- no logger or handler level can
+    express it.
+
     :param lines: The formatted lines to log
     :param level: The level to log the lines at
     :param logger: The logger to write to. Defaults to the analysis logger
+    :param console: If false, the records are written to the log file but not to the console
     :return: None
     """
     target = logger if logger is not None else get_logger("analysis")
     for line in lines:
-        target.log(level, line)
+        target.log(level, line, extra={"to_console": console})
 
 
 def _create_file_handler(log_path: str, level: int) -> logging.Handler:
@@ -134,6 +142,9 @@ def _create_console_handler(level: int) -> Optional[logging.Handler]:
     if stream is None or not hasattr(stream, "write"):
         return None
     handler = logging.StreamHandler(stream)
+    # Records may opt out of the console while still reaching the log file -- see log_messages.
+    # getattr with a default, because every record that does not set it is a normal one
+    handler.addFilter(lambda record: getattr(record, "to_console", True))
     handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT))
     handler.setLevel(level)
     return handler

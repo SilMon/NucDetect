@@ -2101,8 +2101,14 @@ class ExperimentDialog(QDialog):
             # Get item data and append key
             keys.append(img_item.data()["key"])
             img_paths.append(img_item.data()["path"])
-        groups = item.data()["groups"]
-        item.setData(
+        # UPDATED, not rebuilt. This used to assign a fresh six-key dictionary, which silently
+        # dropped "loaded_name" -- the name the experiment was read under, added 2026-09-01 so that
+        # save_changes can tell a rename from a new experiment. The method runs on every
+        # DESELECTION, so renaming an experiment and then clicking a different one restored the
+        # duplicate the rename fix had removed. A literal cannot carry a key added after it
+        data = item.data()
+        groups = data["groups"]
+        data.update(
             {
                 "name": name,
                 "details": details,
@@ -2112,6 +2118,7 @@ class ExperimentDialog(QDialog):
                 "image_paths": img_paths
             }
         )
+        item.setData(data)
         item.setText(self.create_experiment_label(name, details, groups))
 
     def clear_experiment_screen(self) -> None:
@@ -2240,6 +2247,11 @@ class StatisticsDialog(QDialog):
         self.setStyleSheet(Util.load_stylesheet("main.css"))
         self._initialize_plot_widgets()
         self.ui.tv_group_data.setModel(DataFrameModel(self.data))
+        # Sorting was never switched on, on either view -- a QTableView does not sort on a header
+        # click unless it is told to, so the header was inert. Safe because DataFrameModel.set_df
+        # stores df.copy(): sorting the view cannot reorder StatisticsDialog.data, and with it every
+        # statistic and every export derived from it
+        self.ui.tv_group_data.setSortingEnabled(True)
         self.ui.tv_group_data.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.ui.tv_group_data.verticalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.ui.btn_statistics.clicked.connect(self.calculate_and_display_statistics)
@@ -2272,6 +2284,8 @@ class StatisticsDialog(QDialog):
         """
         if not isinstance(self.ui.tv_group_statistics.model(), DataFrameModel):
             self.ui.tv_group_statistics.setModel(DataFrameModel(self.statistics))
+            # See tv_group_data above -- both views take their sorting from the same model class
+            self.ui.tv_group_statistics.setSortingEnabled(True)
         else:
             # Reset the view and add the newly calculated data
             self.ui.tv_group_statistics.model().setDataFrame(self.statistics)

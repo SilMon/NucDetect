@@ -475,7 +475,12 @@ class Requester(DatabaseInteractor):
                                                                      ("md5", Specifiers.EQUALS, imgs[0]))]
         # Get the main channel
         main = self.get_main_channel(imgs[0])
-        if not include_main:
+        # `main in channels`, not a bare remove. get_main_channel answers None rather than raising
+        # for an image with no nominated channel row, and CHANNEL ROWS ARE WRITTEN BY THE ANALYSIS
+        # -- so an experiment holding an image nobody has analysed yet reached `[].remove(None)` and
+        # took the statistics dialog down before it opened. An experiment being set up is exactly
+        # where that state lives, and the empty-experiment guard above exists for the same reason
+        if not include_main and main in channels:
             channels.remove(main)
         return channels
 

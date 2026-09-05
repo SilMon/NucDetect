@@ -607,8 +607,13 @@ class NucDetect(QMainWindow):
             self.ui.table_results.sortByColumn(-1, Qt.AscendingOrder)
         self.res_table_model.setRowCount(0)
         self.create_table_rows(rows)
-        if rows:
-            self.res_table_model.setColumnCount(len(rows[0]))
+        # From the HEADER, and unconditionally. It used to be taken from the first row and only when
+        # there was one -- so a fill with no rows kept the previous fill's width, and
+        # setHorizontalHeaderLabels labels only as many columns as it is given and leaves any
+        # surplus in place. The experiment view is one column wider than the single-image view, so
+        # switching back to a rowless single-image fill left an unlabelled empty column behind.
+        # setRowCount(0) does not reset the column count, and nothing else does
+        self.res_table_model.setColumnCount(len(header))
         # Set header of table
         self.res_table_model.setHorizontalHeaderLabels(header)
         # Size the columns to what they now hold. Done here rather than by a ResizeToContents
@@ -1311,7 +1316,10 @@ class NucDetect(QMainWindow):
                     # analysis logging. The messages are discarded rather than buffered when off --
                     # they have already been produced, and holding them would only defer the cost
                     if log_analysis:
-                        log_messages(r.get("log", ()))
+                        # console=False: the per-image block is ~30 lines, and a batch of eighty put
+                        # ~2400 of them around this run's eight progress lines. The file still gets
+                        # everything, in image order, which is the point of the replay
+                        log_messages(r.get("log", ()), console=False)
                     self.save_rois_to_database(r, all_=True)
                     # Get the image hash and file name
                     name = self.requester.get_image_filename(r["handler"].ident)
