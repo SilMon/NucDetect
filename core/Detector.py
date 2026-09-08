@@ -55,24 +55,6 @@ class Detector:
         self.fcnmapper = None
         self.qualitytester = QualityTester()
 
-    def analyse_images(self, images: List[str], settings: Dict[str, Union[List, bool]]) -> \
-            List[Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]]:
-        """
-        Method to analyse a list of images
-
-        :param images: List of paths for the images
-        :param settings: Dictionary containing the necessary information for analysis
-        :return: The results as list of dictionaries
-        """
-        results = []
-        start = time.time()
-        for path in images:
-            results.append(self.analyse_image(path, settings))
-            LOGGER.info("Analysed image %s", os.path.basename(path))
-        self.add_log_message(f"Analysed batch with size {len(images)} in {time.time() - start} seconds")
-        self.flush_log_messages()
-        return results
-
     def analyse_image(self, path: str,
                       settings: Dict[str, Union[List, bool]], save_log: bool = True,
                       progress: ProgressReporter = NO_PROGRESS) -> \

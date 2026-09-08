@@ -497,8 +497,6 @@ class Editor(QDialog):
         self.ui.btn_auto.setVisible(False)
         self.ui.btn_show.setIcon(Icon.get_icon("CIRCLE"))
         self.ui.btn_coords.setIcon(Icon.get_icon("MOUSE"))
-        self.ui.btn_preview.setIcon(Icon.get_icon("EYE"))
-        self.ui.btn_accept.setIcon(Icon.get_icon("CHECK"))
         # Explicit ids, so the mapping to EditorView's modes stops depending on the order the
         # buttons happen to appear in the .ui file. Qt numbers them -2, -3, -4 in that order, and
         # change_mode below used to recover the mode with `abs(id_) - 3` -- correct only by
@@ -567,8 +565,6 @@ class Editor(QDialog):
         self.ui.spb_height.setMinimum(0)
         self.ui.spb_height.setMaximum(sy)
         self.ui.spb_opacity.valueChanged.connect(self.change_opacity)
-        self.ui.btn_preview.clicked.connect(self.set_changes)
-        self.ui.btn_accept.clicked.connect(self.set_changes)
 
     def enable_white_balance_mode(self) -> None:
         """
@@ -659,24 +655,24 @@ class Editor(QDialog):
         self.size_factor = new_value
         self.editor.size_factor = new_value
 
-    def set_changes(self, override: bool = False) -> None:
+    def set_changes(self) -> None:
         """
-        Method to make changes to existing item
+        Method to apply the values in the editing spin boxes to the selected item
 
-        :param override: Forces method to apply the made changes
+        Reached from the **A** hotkey. The Preview and Accept buttons this also served were removed
+        on 2026-09-08 (RW: *"Both can be removed"*) -- they were `enabled=false` in the .ui and
+        nothing ever enabled them, so they had never been clickable. With them went the
+        `sender() == btn_preview` test, which was the only thing that ever decided preview from
+        commit, and the `override` parameter that existed to bypass it.
+
         :return: None
         """
-        if not override:
-            # Get the info if this should be a preview or permanent
-            preview = self.sender() == self.ui.btn_preview
-        else:
-            preview = False
         # Define QRect to adjust position of item
         x, y = self.ui.spb_x.value(), self.ui.spb_y.value(),
         width, height = self.ui.spb_width.value(), self.ui.spb_height.value()
         rect = QRectF(x - width / 2, y - height / 2, width, height)
         angle = self.ui.spb_angle.value()
-        self.editor.set_changes(rect, angle, preview)
+        self.editor.set_changes(rect, angle)
 
     def preview_changes(self) -> None:
         """
@@ -707,8 +703,6 @@ class Editor(QDialog):
         :return: None
         """
         self.update_editing_values(item)
-        self.ui.btn_preview.setEnabled(False)
-        self.ui.btn_accept.setEnabled(False)
         self.enable_editing_widgets(True)
         self.display_hash(str(item.roi_id))
 
@@ -767,8 +761,6 @@ class Editor(QDialog):
         self.ui.spb_height.setEnabled(enable)
         self.ui.spb_angle.setEnabled(enable)
         if not enable:
-            self.ui.btn_preview.setEnabled(enable)
-            self.ui.btn_accept.setEnabled(enable)
             self.ui.spb_x.setValue(0)
             self.ui.spb_y.setValue(0)
             self.ui.spb_width.setValue(0)
@@ -795,7 +787,7 @@ class Editor(QDialog):
         elif event.key() == Qt.Key_P:
             self.preview_changes()
         elif event.key() == Qt.Key_A:
-            self.set_changes(override=True)
+            self.set_changes()
         elif event.key() == Qt.Key_Shift:
             self.editor.shift_down = True
 

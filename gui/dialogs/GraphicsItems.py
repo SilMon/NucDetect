@@ -187,25 +187,26 @@ class EditorView(pg.GraphicsView):
         self._dialog.enable_white_balance_mode()
         self._dialog.enable_high_contrast_mode()
 
-    def set_changes(self, rect: QRectF, angle: float, preview: bool = False) -> None:
+    def set_changes(self, rect: QRectF, angle: float) -> None:
         """
         Method to apply the changes made by editing
 
+        **This always commits.** It used to take a `preview` flag whose only True source was the
+        Preview button, and that button was `enabled=false` in the .ui with nothing ever enabling
+        it -- so the preview branch was unreachable for as long as it existed. Both buttons were
+        removed on 2026-09-08 and the branch went with them.
+
+        Previewing itself is not gone: every step of a DRAG is a preview, through
+        `update_data(keep_original=True)` in `drag_to`, and `end_drag(commit=False)` on Escape puts
+        the item back. That path is live and is the one the bounding-rect fix is exercised through.
+
         :param rect: The new bounding box of the currently active item
         :param angle: The angle of the currently active item
-        :param preview: When true, the item will save its original orientation and size
-
         :return: None
         """
         if self.selected_item is None:
             return
-        if preview:
-            # Visual only. keep_original=True leaves width/height/center/angle and `changed`
-            # untouched, so a preview that is never accepted writes nothing -- which is also why a
-            # preview must NOT reach commit_item_geometry
-            self.selected_item.update_data(rect, angle, True)
-        else:
-            self.commit_item_geometry(self.selected_item, rect, angle)
+        self.commit_item_geometry(self.selected_item, rect, angle)
 
     def commit_item_geometry(self, item: "ROIItem", rect: QRectF, angle: float) -> None:
         """

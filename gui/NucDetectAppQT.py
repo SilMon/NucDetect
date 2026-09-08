@@ -1296,6 +1296,8 @@ class NucDetect(QMainWindow):
             # below: reusing one variable for both is what made the ETA undercount by one and go
             # negative on the final batch of every run
             done = 0
+            # Empty until a batch has finished -- see where it is assigned
+            eta_text = ""
             # A plain slice loop. The previous start/stop/step arithmetic made the first batch
             # batch_size + 1 images long, and executed once even when there was nothing to analyse
             for batch_start in range(0, maxi, batch_size):
@@ -1310,8 +1312,15 @@ class NucDetect(QMainWindow):
                 # worker process instead of being pickled with every task
                 res = e.map(_analyse_in_worker, zip(tpaths, t_setts, t_savelog))
                 for r in res:
-                    self.prg_signal.emit(f"Analysed images: {done + 1}/{maxi}",
-                                         done + 1, maxi, "")
+                    # The bar counts BATCHES (RW, 2026-09-08), so its value does not move inside a
+                    # batch -- but the label does, because a batch is ~75 s and a caption frozen for
+                    # that long reads as a hang. Value and text are deliberately on different
+                    # granularities: the bar tracks what the ETA is measured over, the text tracks
+                    # what is happening
+                    self.prg_signal.emit(
+                        f"Batch {batch_start // batch_size + 1}/{total_batches}"
+                        f" -- analysed {done + 1}/{maxi} images{eta_text}",
+                        batch_start // batch_size, total_batches, "")
                     # Replay the log of the worker that analysed this image, if the user asked for
                     # analysis logging. The messages are discarded rather than buffered when off --
                     # they have already been produced, and holding them would only defer the cost
@@ -1339,12 +1348,20 @@ class NucDetect(QMainWindow):
                 h = eta // 3600
                 m = eta % 3600 // 60
                 s = eta % 3600 % 60
+                # Kept for the NEXT batch's label. The ETA was computed here and written only to the
+                # log file, so the one number that answers "how much longer?" never reached the
+                # window. The first batch has none, which is honest -- there is nothing to
+                # extrapolate from until one batch has finished
+                eta_text = f" -- ETA {h:02d}h:{m:02d}m:{s:02d}s"
                 cur_batch = batch_start // batch_size + 1
                 msg = f"Analysed batch {cur_batch: 02d}/{total_batches: 02d} in {time.time() - s2: 09.3f} secs\t\t"\
                       f"Total: {time.time() - start_time: 09.3f} secs\t\t"\
                       f"ETA: {h:02d}h:{m:02d}m:{s:02d}s"
                 LOGGER.info(msg)
             self.enable_signal.emit(True)
+            # 100 / 100, not total_batches / total_batches: the loop emits the batch it is ABOUT to
+            # run, so the last emit inside it reads total_batches - 1 and the bar would otherwise
+            # stop one batch short of full
             self.prg_signal.emit("Analysis finished -- Program ready",
                                  100,
                                  100, "")
