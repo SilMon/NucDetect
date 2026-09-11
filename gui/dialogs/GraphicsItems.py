@@ -133,6 +133,7 @@ class EditorView(pg.GraphicsView):
         # List of existing items
         self.loading_timer: Optional[ROIDrawerTimer] = None
         self.roi_items = []
+        self.discard_unusable_roi()
         self.draw_roi()
         # List for newly created items
         self.temp_items = []
@@ -301,11 +302,15 @@ class EditorView(pg.GraphicsView):
         # the channel list against the array before this can be reached, so an out-of-range index
         # here means a new caller bypassed that -- worth a message naming both numbers instead of an
         # IndexError from a lambda
-        if index >= image.shape[2]:
-            LOGGER.warning("Channel %d requested for an image with %d channels -- showing channel 0",
-                           index, image.shape[2])
+        # shape[-1] behind an ndim test, not shape[2]: a 2-D array has no third axis and the
+        # bare subscript raised IndexError -- a guard written to prevent an IndexError producing
+        # one. Same expression Editor.__init__ filters the channel list with
+        available = image.shape[2] if image.ndim > 2 else 1
+        if index >= available:
+            LOGGER.warning("Channel %d requested for an image with %d channel(s) -- showing "
+                           "channel 0", index, available)
             index = 0
-        return image[..., index]
+        return image[..., index] if image.ndim > 2 else image
 
     def calculate_hc_and_wb_images(self):
         """
@@ -433,6 +438,44 @@ class EditorView(pg.GraphicsView):
         self.mark_as_changed([x.roi_id for x in self.temp_items])
         self.show_channel("Composite")
 
+    def discard_unusable_roi(self) -> None:
+        """
+        Method to drop stored roi with no area from the handler, before anything reads it
+
+        **Once, here, rather than wherever they are met.** A roi with no points cannot be drawn,
+        measured or written: `calculate_dimensions` raises for it, `create_hash_association_maps`
+        hands numba an untyped list, and both run on the way to saving. Skipping them at DRAW time
+        only -- which is what this class did between 2026-09-05 and 2026-09-08 -- let the editor
+        open and then fail on OK, and made the lazy loader's item count disagree with the roi count
+        it was measured against.
+
+        **Rebuilt rather than removed through `ROIHandler.remove_rois`**: `hash(roi)` is
+        `md5(channel + area)`, so every area-less roi in one channel hashes alike and compares
+        equal, and `list.remove` would be removing by an identity they all share. A comprehension
+        says what is meant.
+
+        `main` and `idents` are deliberately left alone -- neither is derived from the roi that go,
+        because a nucleus with no area could not have been the main nomination in the first place.
+
+        :return: None
+        """
+        unusable = [roi for roi in self.roi if not roi.is_valid()]
+        if not unusable:
+            return
+        # TEMPORARY (2026-09-08, at RW's instruction): identified by channel and count, NOT by
+        # hash. Every area-less roi in a channel produces the SAME hash -- md5 of the channel name
+        # and an empty area -- so a per-row hash names nothing and repeats. Naming the row properly
+        # needs the identity split filed on `reviews/2026-07-26-core-review.md`; until then a
+        # channel and a count is all that can be said honestly.
+        per_channel = {}
+        for roi in unusable:
+            per_channel[roi.ident] = per_channel.get(roi.ident, 0) + 1
+        LOGGER.warning("Image %s: discarding %d stored roi with no area (%s). They cannot be "
+                       "drawn or saved; the rest of the image is unaffected",
+                       self.roi.ident, len(unusable),
+                       ", ".join(f"{n} in {channel}" for channel, n in sorted(per_channel.items())))
+        self.roi.rois = [roi for roi in self.roi.rois if roi.is_valid()]
+
     def draw_roi(self) -> None:
         """
         Method to draw the roi
@@ -455,7 +498,13 @@ class EditorView(pg.GraphicsView):
         """
         self._dialog.ui.prg_loading.setValue(int(self.loading_timer.percentage * 100))
         self.roi_items.extend(items)
-        if round(self.loading_timer.percentage * 100) >= 99:
+        # `finished`, NOT the percentage. The percentage is items_loaded / len(items), and
+        # items_loaded counts what the PROCESSING returned -- so any batch that drops an item holds
+        # the percentage below 100 for the rest of the run and the >= 99 test never fires. Nothing
+        # would then be made visible: the editor opened completely empty, with no error, which
+        # reads as "nothing was detected". `finished` is computed from what each batch CONSUMED and
+        # is correct however many items the processing drops
+        if finished:
             for item in self.roi_items:
                 item.setVisible(True)
 
@@ -1296,9 +1345,16 @@ class ROIDrawer:
             #
             # Skipped rather than repaired, and logged rather than swallowed: what is wrong is the
             # stored data, and drawing a placeholder would invent geometry that is not there
+            # A backstop only: `EditorView.discard_unusable_roi` removes these before the loader
+            # ever runs. It stays because this is a static method any caller can reach, and because
+            # `calculate_dimensions` raising inside the loader's timer takes the window down.
+            #
+            # TEMPORARY message (2026-09-08, at RW's instruction): the channel, not the hash. Every
+            # area-less roi in a channel hashes to the same value, so the hash named nothing --
+            # naming the row needs the identity split filed on `reviews/2026-07-26-core-review.md`
             if not roi.is_valid():
-                LOGGER.warning("Skipping roi %s in channel %s: no points are stored for it",
-                               hash(roi), roi.ident)
+                LOGGER.warning("Skipping a roi in channel %s: no points are stored for it. This "
+                               "should have been discarded before drawing", roi.ident)
                 continue
             ind = idents.index(roi.ident)
             if roi.main:
