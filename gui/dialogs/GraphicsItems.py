@@ -5,7 +5,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt5 import QtCore
 from PyQt5.QtCore import QRectF, Qt, QPointF, pyqtSignal
-from PyQt5.QtGui import QColor, QKeyEvent, QMouseEvent
+from PyQt5.QtGui import QColor, QCursor, QKeyEvent, QMouseEvent
 from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem
 from pyqtgraph import ColorBarItem
 from skimage.draw import ellipse
@@ -16,7 +16,9 @@ from core.logging_config import get_logger
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 from core.database.connections import Requester, Inserter
-from gui.Util import assert_main_thread
+from gui.Util import assert_main_thread, composite_channels
+from gui.dialogs.geometry import (HANDLE_SIGNS, angle_from_vector, resize_about_anchor,
+                                  to_local)
 from gui.loader import ROIDrawerTimer
 
 LOGGER = get_logger(__name__)
@@ -27,6 +29,29 @@ LOGGER = get_logger(__name__)
 # two only agreed for a 3-channel image. With four or five channels every ROI failed the
 # channel test and the composite view of a 5-channel image drew no foci at all
 COMPOSITE_CHANNEL = -1
+
+
+class DragState:
+    """
+    The gesture currently in progress in the editor
+
+    A plain class, so __slots__ actually works -- unlike on the QGraphicsItem subclasses below,
+    where a sip type supplies a __dict__ the declaration cannot remove
+    """
+
+    __slots__ = ("role", "item", "start_rect", "start_angle", "grab_x", "grab_y", "start_vector")
+
+    def __init__(self, role: str, item: "ROIItem", grab_x: float = 0.0, grab_y: float = 0.0,
+                 start_vector: float = 0.0):
+        self.role = role
+        self.item = item
+        # The geometry BEFORE the gesture, so Escape can put it back and so a gesture that ends
+        # where it started can decline to mark the item changed
+        self.start_rect = QRectF(item.item_rect)
+        self.start_angle = item.angle
+        self.grab_x = grab_x
+        self.grab_y = grab_y
+        self.start_vector = start_vector
 
 
 class EditorView(pg.GraphicsView):
@@ -108,6 +133,7 @@ class EditorView(pg.GraphicsView):
         # List of existing items
         self.loading_timer: Optional[ROIDrawerTimer] = None
         self.roi_items = []
+        self.discard_unusable_roi()
         self.draw_roi()
         # List for newly created items
         self.temp_items = []
@@ -118,6 +144,10 @@ class EditorView(pg.GraphicsView):
         # rather than by the items themselves -- see ROIItem.set_hovered for why
         self.hovered_item: Optional["ROIItem"] = None
         self.shift_down = False
+        # The gesture in progress, or None. Held here rather than on the items because every item is
+        # setEnabled(False) and therefore receives no mouse events of its own -- the same reason the
+        # hover highlight is driven from mouse_moved
+        self.drag: Optional[DragState] = None
         # Add a color bar widget
         self.color_bar = ColorBarItem(values=(np.amin(image[...,0]), np.amax(image[..., 0])))
         # Link the bar to the image
@@ -158,20 +188,51 @@ class EditorView(pg.GraphicsView):
         self._dialog.enable_white_balance_mode()
         self._dialog.enable_high_contrast_mode()
 
-    def set_changes(self, rect: QRectF, angle: float, preview: bool = False) -> None:
+    def set_changes(self, rect: QRectF, angle: float) -> None:
         """
         Method to apply the changes made by editing
 
+        **This always commits.** It used to take a `preview` flag whose only True source was the
+        Preview button, and that button was `enabled=false` in the .ui with nothing ever enabling
+        it -- so the preview branch was unreachable for as long as it existed. Both buttons were
+        removed on 2026-09-08 and the branch went with them.
+
+        Previewing itself is not gone: every step of a DRAG is a preview, through
+        `update_data(keep_original=True)` in `drag_to`, and `end_drag(commit=False)` on Escape puts
+        the item back. That path is live and is the one the bounding-rect fix is exercised through.
+
         :param rect: The new bounding box of the currently active item
         :param angle: The angle of the currently active item
-        :param preview: When true, the item will save its original orientation and size
-
         :return: None
         """
-        if self.selected_item:
-            if not preview:
-                self.temp_items.append(self.selected_item)
-            self.selected_item.update_data(rect, angle, preview)
+        if self.selected_item is None:
+            return
+        self.commit_item_geometry(self.selected_item, rect, angle)
+
+    def commit_item_geometry(self, item: "ROIItem", rect: QRectF, angle: float) -> None:
+        """
+        Method to apply a geometry change to an item and mark it to be written to the database
+
+        THE commit path -- every gesture that changes an item's geometry for real goes through here,
+        so that "the item is in temp_items" and "the item will be written" cannot come apart.
+
+        They had come apart: process_changed_items skips any item that is not in temp_items, and
+        temp_items was appended in only two places, the Accept button and the creation of a new item.
+        move_selected_item_to_position set `changed = True` without appending, so the middle-click
+        "move here" was SILENTLY DISCARDED on OK for every pre-existing roi -- a newly drawn one
+        survived only because creating it had put it in the list for another reason.
+
+        :param item: The item to apply the change to
+        :param rect: The new, unrotated bounding box
+        :param angle: The new angle, applied about the box's center
+        :return: None
+        """
+        item.update_data(rect, angle, keep_original=False)
+        # Guarded rather than appended blindly: Accept used to add the same item again on every
+        # press, so a repeatedly adjusted nucleus appeared in the list several times
+        if item not in self.temp_items:
+            self.temp_items.append(item)
+        self._dialog.update_editing_values(item)
 
     def draw_additional_items(self, state: bool = True) -> None:
         """
@@ -224,7 +285,32 @@ class EditorView(pg.GraphicsView):
                 image = self.hcimg_adj
         elif self.adjust_whitebalance and self.image_adj is not None:
             image = self.image_adj
-        return image if index == COMPOSITE_CHANNEL else image[..., index]
+        # The composite goes through composite_channels, which is a no-op at three channels or
+        # fewer and folds a bigger stack onto RGB with false colour above that.
+        #
+        # Without it the raw array reached ImageItem, and pyqtgraph renders at most four planes --
+        # `TypeError: data.shape[2] must be <= 4` on a 5-channel image, reported from real use on
+        # 2026-08-22, and a SILENT failure at four, where the fourth plane is read as alpha and a
+        # dark fluorescence channel makes the whole picture transparent.
+        #
+        # The single-channel branch needs nothing: image[..., index] is 2-D at any channel count.
+        # This return also serves the high-contrast and white-balance variants chosen above, so
+        # they are covered by the same call rather than by three more
+        if index == COMPOSITE_CHANNEL:
+            return composite_channels(image)
+        # Defensive, and it says so rather than raising from inside a signal handler. Editor filters
+        # the channel list against the array before this can be reached, so an out-of-range index
+        # here means a new caller bypassed that -- worth a message naming both numbers instead of an
+        # IndexError from a lambda
+        # shape[-1] behind an ndim test, not shape[2]: a 2-D array has no third axis and the
+        # bare subscript raised IndexError -- a guard written to prevent an IndexError producing
+        # one. Same expression Editor.__init__ filters the channel list with
+        available = image.shape[2] if image.ndim > 2 else 1
+        if index >= available:
+            LOGGER.warning("Channel %d requested for an image with %d channel(s) -- showing "
+                           "channel 0", index, available)
+            index = 0
+        return image[..., index] if image.ndim > 2 else image
 
     def calculate_hc_and_wb_images(self):
         """
@@ -352,6 +438,44 @@ class EditorView(pg.GraphicsView):
         self.mark_as_changed([x.roi_id for x in self.temp_items])
         self.show_channel("Composite")
 
+    def discard_unusable_roi(self) -> None:
+        """
+        Method to drop stored roi with no area from the handler, before anything reads it
+
+        **Once, here, rather than wherever they are met.** A roi with no points cannot be drawn,
+        measured or written: `calculate_dimensions` raises for it, `create_hash_association_maps`
+        hands numba an untyped list, and both run on the way to saving. Skipping them at DRAW time
+        only -- which is what this class did between 2026-09-05 and 2026-09-08 -- let the editor
+        open and then fail on OK, and made the lazy loader's item count disagree with the roi count
+        it was measured against.
+
+        **Rebuilt rather than removed through `ROIHandler.remove_rois`**: `hash(roi)` is
+        `md5(channel + area)`, so every area-less roi in one channel hashes alike and compares
+        equal, and `list.remove` would be removing by an identity they all share. A comprehension
+        says what is meant.
+
+        `main` and `idents` are deliberately left alone -- neither is derived from the roi that go,
+        because a nucleus with no area could not have been the main nomination in the first place.
+
+        :return: None
+        """
+        unusable = [roi for roi in self.roi if not roi.is_valid()]
+        if not unusable:
+            return
+        # TEMPORARY (2026-09-08, at RW's instruction): identified by channel and count, NOT by
+        # hash. Every area-less roi in a channel produces the SAME hash -- md5 of the channel name
+        # and an empty area -- so a per-row hash names nothing and repeats. Naming the row properly
+        # needs the identity split filed on `reviews/2026-07-26-core-review.md`; until then a
+        # channel and a count is all that can be said honestly.
+        per_channel = {}
+        for roi in unusable:
+            per_channel[roi.ident] = per_channel.get(roi.ident, 0) + 1
+        LOGGER.warning("Image %s: discarding %d stored roi with no area (%s). They cannot be "
+                       "drawn or saved; the rest of the image is unaffected",
+                       self.roi.ident, len(unusable),
+                       ", ".join(f"{n} in {channel}" for channel, n in sorted(per_channel.items())))
+        self.roi.rois = [roi for roi in self.roi.rois if roi.is_valid()]
+
     def draw_roi(self) -> None:
         """
         Method to draw the roi
@@ -374,7 +498,13 @@ class EditorView(pg.GraphicsView):
         """
         self._dialog.ui.prg_loading.setValue(int(self.loading_timer.percentage * 100))
         self.roi_items.extend(items)
-        if round(self.loading_timer.percentage * 100) >= 99:
+        # `finished`, NOT the percentage. The percentage is items_loaded / len(items), and
+        # items_loaded counts what the PROCESSING returned -- so any batch that drops an item holds
+        # the percentage below 100 for the rest of the run and the >= 99 test never fires. Nothing
+        # would then be made visible: the editor opened completely empty, with no error, which
+        # reads as "nothing was detected". `finished` is computed from what each batch CONSUMED and
+        # is correct however many items the processing drops
+        if finished:
             for item in self.roi_items:
                 item.setVisible(True)
 
@@ -391,6 +521,11 @@ class EditorView(pg.GraphicsView):
         super().keyPressEvent(event)
         if event.key() == Qt.Key_Shift:
             self.shift_down = True
+        if event.key() == Qt.Key_Escape and self.drag is not None:
+            # Gives ROIItem.reset_item its first caller. It had none, which is why the bounding-rect
+            # defect it carried went unnoticed until 2026-08-15
+            self.end_drag(commit=False)
+            return
         if event.key() == Qt.Key_Delete:
             if self.selected_item:
                 item = self.selected_item
@@ -433,7 +568,178 @@ class EditorView(pg.GraphicsView):
                 # Set the center position of the item to the mouse position
                 self.move_selected_item_to_position()
         if self.mode == 1 and self.active_channel != "Composite" and event.button() == Qt.LeftButton:
-            self.select_item_at_mouse_position(event)
+            # A grab point of the ALREADY selected item wins over selecting something else. The
+            # points sit on the bounding box, so they can lie outside the ellipse and over a
+            # neighbouring roi -- testing them first is what makes a corner of a rotated nucleus
+            # grabbable at all
+            if not self.start_handle_drag(event):
+                self.select_item_at_mouse_position(event)
+                self.start_move_drag(event)
+
+    def image_position(self, event: QMouseEvent) -> QPointF:
+        """
+        Method to translate a widget position into image coordinates
+
+        :param event: The mouse event to read the position from
+        :return: The position in image coordinates
+        """
+        return self.plot_vb.mapSceneToView(self.mapToScene(event.pos()))
+
+    def handle_at(self, widget_pos: QPointF, tolerance: int = 10) -> Optional["HandleItem"]:
+        """
+        Method to find the grab point of the selected item under the given position
+
+        Hit-tested in DEVICE pixels rather than through scene().items(): a handle carries
+        ItemIgnoresTransformations, so its size in image coordinates depends on the zoom level and a
+        scene-space query would demand pixel accuracy of the user when zoomed out. A fixed pixel
+        radius is what the user is actually aiming at
+
+        :param widget_pos: The position to test, in widget coordinates
+        :param tolerance: The grab radius in device pixels
+        :return: The handle under the position, or None
+        """
+        if self.selected_item is None or self.selected_item.edit_rect is None:
+            return None
+        nearest, best = None, float("inf")
+        for handle in self.selected_item.edit_rect.handles.values():
+            if not handle.isVisible():
+                continue
+            centre = self.mapFromScene(handle.scenePos())
+            distance = ((centre.x() - widget_pos.x()) ** 2
+                        + (centre.y() - widget_pos.y()) ** 2) ** 0.5
+            if distance <= tolerance and distance < best:
+                nearest, best = handle, distance
+        return nearest
+
+    def begin_drag(self, state: DragState) -> None:
+        """
+        Method to enter a gesture
+
+        :param state: The gesture to enter
+        :return: None
+        """
+        self.drag = state
+        # Otherwise the ViewBox pans the image at the same time as the item moves. Its drag handler
+        # re-reads this flag on every event, so disabling it after the press still takes effect
+        self.view.setMouseEnabled(x=False, y=False)
+
+    def end_drag(self, commit: bool = True) -> None:
+        """
+        Method to leave the current gesture
+
+        :param commit: When false the item is put back the way it was, for a cancelled gesture
+        :return: None
+        """
+        state, self.drag = self.drag, None
+        self.view.setMouseEnabled(x=True, y=True)
+        if state is None:
+            return
+        item = state.item
+        # item.rect() and item.rotation(), NOT item.item_rect and item.angle: every step of a
+        # gesture is a preview, and a preview deliberately leaves the item's STORED geometry alone.
+        # Reading the stored angle here made every rotation look like a gesture that had not moved,
+        # so end_drag discarded it -- a resize survived only because setRect does change item.rect()
+        rect = QRectF(item.rect())
+        angle = item.rotation()
+        # A gesture that ends where it began must not mark the item changed: that would send it
+        # through the delete-and-reinsert path in process_changed_items for no reason, and every
+        # trip through that path is a chance to strand a focus on a hash that no longer exists
+        unchanged = rect == state.start_rect and abs(angle - state.start_angle) < 1e-9
+        if not commit or unchanged:
+            # reset_item restores item_rect and angle, which the gesture never wrote -- every step
+            # of a drag is a PREVIEW, and only this method commits
+            item.reset_item()
+            self._dialog.update_editing_values(item)
+            return
+        self.commit_item_geometry(item, rect, angle)
+
+    def start_move_drag(self, event: QMouseEvent) -> bool:
+        """
+        Method to start dragging the selected item by its body
+
+        :param event: The mouse event that started the gesture
+        :return: True if a gesture was started
+        """
+        item = self.selected_item
+        if item is None:
+            return False
+        # The same shape test that decided the selection, so anything selectable is draggable
+        if not item.shape().contains(item.mapFromScene(self.mapToScene(event.pos()))):
+            return False
+        position = self.image_position(event)
+        self.begin_drag(DragState("move", item,
+                                  grab_x=position.x() - item.center[0],
+                                  grab_y=position.y() - item.center[1]))
+        return True
+
+    def start_handle_drag(self, event: QMouseEvent) -> bool:
+        """
+        Method to start a resize or rotation gesture on a grab point
+
+        :param event: The mouse event that started the gesture
+        :return: True if a gesture was started
+        """
+        handle = self.handle_at(QPointF(event.pos()))
+        if handle is None:
+            return False
+        position = self.image_position(event)
+        offset = 0.0
+        if handle.role == "rotate":
+            # How far the grip lies from the item's current angle. Subtracting it on every step
+            # means the gesture turns the item BY the amount the mouse turns, rather than snapping
+            # the item's axis onto the cursor the instant the grip is touched
+            centre = self.selected_item.item_rect.center()
+            offset = angle_from_vector(centre.x(), centre.y(),
+                                       position.x(), position.y()) - self.selected_item.angle
+        # The grab point, not the item's centre: a resize follows the DELTA from where the grip was
+        # taken hold of, so the box does not jump when the press lands a few pixels off the grip
+        self.begin_drag(DragState(handle.role, self.selected_item,
+                                  grab_x=position.x(), grab_y=position.y(),
+                                  start_vector=offset))
+        return True
+
+    def drag_to(self, position: QPointF) -> None:
+        """
+        Method to advance the gesture in progress to the given image position
+
+        Every step is a PREVIEW: update_data is called with keep_original=True, so the item's stored
+        geometry and its `changed` flag are left alone until end_drag commits. That is what lets
+        Escape put the item back, and what keeps a plain click from marking a nucleus as edited
+
+        :param position: The cursor position in image coordinates
+        :return: None
+        """
+        state = self.drag
+        if state is None or state.item is None:
+            return
+        item = state.item
+        angle = state.start_angle
+        if state.role == "move":
+            rect = QRectF(position.x() - state.grab_x - state.start_rect.width() / 2,
+                          position.y() - state.grab_y - state.start_rect.height() / 2,
+                          state.start_rect.width(), state.start_rect.height())
+        elif state.role == "rotate":
+            # Only the angle moves; the box is untouched, so a rotation cannot change the size
+            rect = QRectF(state.start_rect)
+            centre = state.start_rect.center()
+            angle = angle_from_vector(centre.x(), centre.y(), position.x(), position.y(),
+                                      state.start_vector,
+                                      snap=15.0 if self.shift_down else 0.0)
+        elif state.role in HANDLE_SIGNS:
+            # The delta is rotated into the item's OWN frame before the box is resized, because the
+            # box is stored unrotated. Dragging the corner of a nucleus turned 40 degrees otherwise
+            # stretches it along the image axes rather than along its own
+            local_dx, local_dy = to_local(position.x() - state.grab_x,
+                                          position.y() - state.grab_y, angle)
+            rect = QRectF(*resize_about_anchor(
+                (state.start_rect.x(), state.start_rect.y(),
+                 state.start_rect.width(), state.start_rect.height()),
+                state.role, local_dx, local_dy, angle, lock_aspect=self.shift_down))
+        else:
+            return
+        item.update_data(rect, angle, True)
+        self._dialog.write_editing_values(rect.center().x(), rect.center().y(),
+                                          rect.width(), rect.height(), angle)
 
     def move_selected_item_to_position(self) -> None:
         """
@@ -441,18 +747,77 @@ class EditorView(pg.GraphicsView):
 
         :return: None
         """
-        x = self.mpos.x()
-        y = self.mpos.y()
-        width = self.selected_item.width
-        height = self.selected_item.height
-        angle = self.selected_item.angle
-        rect = QRectF(x - width/2,
-                      y - height/2,
-                      width, height)
-        self.selected_item.update_data(
-            rect, angle, False
-        )
-        self._dialog.setup_editing(self.selected_item)
+        item = self.selected_item
+        if item is None or self.mpos is None:
+            return
+        rect = QRectF(self.mpos.x() - item.width / 2,
+                      self.mpos.y() - item.height / 2,
+                      item.width, item.height)
+        # commit_item_geometry, not update_data + setup_editing: the direct call left the moved item
+        # out of temp_items, and process_changed_items then dropped the move on OK
+        self.commit_item_geometry(item, rect, item.angle)
+
+    @staticmethod
+    def marker_covers(item: "ROIItem", scene_pos: QPointF,
+                      pixel: Tuple[float, float]) -> bool:
+        """
+        Method to test whether the marker DRAWN for an item covers the given position
+
+        `QGraphicsScene.items()` cannot answer this. It hit-tests against
+        `QGraphicsEllipseItem.shape()`, which is the ellipse united with its pen stroke -- and Qt
+        strokes that outline with `pen.widthF()` in ITEM units, while every marker pen here is
+        **cosmetic** (`pg.mkPen` sets it), so it is DRAWN 3 device pixels wide at any zoom. The two
+        therefore agree only at 1:1: zoomed in, the hit area keeps its 1.5 image-pixel margin while
+        the drawn ring shrinks to a hairline, so the cursor lands well outside a focus and the focus
+        still lights up. Reported from real use, 2026-08-24.
+
+        The margin below is the drawn one: half the pen width, in device pixels, converted into item
+        units through the current view scale. It follows the zoom, which is what makes the highlight
+        agree with what is on screen -- and it keeps a small item aimable when zoomed out, because
+        the marker is never drawn thinner than its pen.
+
+        :param item: The item to test
+        :param scene_pos: The position to test, in scene coordinates
+        :param pixel: The size of one device pixel in item units, as (x, y)
+        :return: True if the drawn marker covers the position
+        """
+        rect = item.rect()
+        if rect.width() <= 0 or rect.height() <= 0:
+            return False
+        # mapFromScene, not arithmetic on the scene position: an item carries a rotation and a
+        # transform origin, and the ellipse is axis-aligned only in its OWN frame
+        local = item.mapFromScene(scene_pos)
+        pen = item.pen()
+        half = max(pen.widthF(), 1.0) / 2
+        rx = rect.width() / 2 + half * pixel[0]
+        ry = rect.height() / 2 + half * pixel[1]
+        dx = (local.x() - rect.center().x()) / rx
+        dy = (local.y() - rect.center().y()) / ry
+        return dx * dx + dy * dy <= 1.0
+
+    def roi_item_at(self, scene_pos: QPointF) -> Optional["ROIItem"]:
+        """
+        Method to find the topmost item on the active channel whose marker covers a position
+
+        **The one lookup for both hovering and selecting.** They must not diverge: the hover
+        highlight exists to show what the next click will hit, and it can only do that if the two
+        ask the same question.
+
+        :param scene_pos: The position to test, in scene coordinates
+        :return: The item, or None
+        """
+        active_index = self.active_channels[self.active_channel]
+        pixel = self.plot_vb.viewPixelSize()
+        # scene().items() returns items in DESCENDING stacking order, so the first match is the
+        # topmost one -- the one the user can see. Both call sites took items[-1] until 2026-08-24,
+        # which is the item furthest BACK: where two markers overlapped, the one picked was the one
+        # hidden behind the other. Its inflated hit area is still a useful cheap prefilter
+        for item in self.scene().items(scene_pos):
+            if not isinstance(item, ROIItem) or item.channel_index != active_index:
+                continue
+            if self.marker_covers(item, scene_pos, pixel):
+                return item
+        return None
 
     def select_item_at_mouse_position(self, event: QMouseEvent) -> None:
         """
@@ -460,13 +825,11 @@ class EditorView(pg.GraphicsView):
 
         :return: None
         """
-        items = [x for x in self.scene().items(self.mapToScene(event.pos()))
-                 if isinstance(x, NucleusItem) or isinstance(x, FocusItem)]
-        items = [x for x in items if x.channel_index == self.active_channels[self.active_channel]]
-        if items:
+        item = self.roi_item_at(self.mapToScene(event.pos()))
+        if item is not None:
             if self.selected_item:
                 self.selected_item.enable_editing(False)
-            self.selected_item = items[-1]
+            self.selected_item = item
             self.selected_item.enable_editing(True)
             self._dialog.setup_editing(self.selected_item)
 
@@ -513,6 +876,19 @@ class EditorView(pg.GraphicsView):
             item.enable_editing(True)
             self._dialog.setup_editing(item)
 
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        # An override, where the view previously had none: the cursor position was tracked only
+        # through a 45 Hz SignalProxy on the scene, which is fine for a status line and too coarse
+        # and too indirect to steer a gesture
+        super().mouseMoveEvent(event)
+        if self.drag is not None:
+            self.drag_to(self.image_position(event))
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        super().mouseReleaseEvent(event)
+        if self.drag is not None and event.button() == Qt.LeftButton:
+            self.end_drag(commit=True)
+
     def mouse_moved(self, event: QMouseEvent) -> None:
         pos = event[0]
         if self.plot_item.sceneBoundingRect().contains(pos):
@@ -535,12 +911,10 @@ class EditorView(pg.GraphicsView):
         # being edited are setEnabled(False), and a disabled QGraphicsItem is sent no hover events
         candidate = None
         if self.mode == 1 and self.active_channel != "Composite":
-            active_index = self.active_channels[self.active_channel]
-            under_cursor = [x for x in self.scene().items(scene_pos)
-                            if isinstance(x, ROIItem) and x.channel_index == active_index]
-            if under_cursor:
-                # [-1] to match select_item_at_mouse_position, which picks the same one
-                candidate = under_cursor[-1]
+            # roi_item_at is the same lookup select_item_at_mouse_position uses, so the highlight
+            # shows exactly what the next click will hit -- the property this feature exists for
+            candidate = self.roi_item_at(scene_pos)
+        self.update_cursor(scene_pos, candidate)
         if candidate is self.hovered_item:
             return
         if self.hovered_item is not None:
@@ -548,6 +922,36 @@ class EditorView(pg.GraphicsView):
         self.hovered_item = candidate
         if candidate is not None:
             candidate.set_hovered(True)
+
+    # role -> the cursor that says what dragging it will do. Compass names are in the item's own
+    # unrotated frame, so the arrows are only exactly right for an unrotated item; turning a nucleus
+    # far enough makes a "vertical" cursor sit on what is now a horizontal edge. Rotating the cursor
+    # with the item would need eight more bitmaps to buy very little
+    CURSORS = {
+        "n": Qt.SizeVerCursor, "s": Qt.SizeVerCursor,
+        "e": Qt.SizeHorCursor, "w": Qt.SizeHorCursor,
+        "nw": Qt.SizeFDiagCursor, "se": Qt.SizeFDiagCursor,
+        "ne": Qt.SizeBDiagCursor, "sw": Qt.SizeBDiagCursor,
+        "rotate": Qt.CrossCursor,
+    }
+
+    def update_cursor(self, scene_pos: QPointF, hovered: Optional["ROIItem"]) -> None:
+        """
+        Method to show what the next press would do
+
+        :param scene_pos: The cursor position, in scene coordinates
+        :param hovered: The item under the cursor, if any
+        :return: None
+        """
+        if self.drag is not None:
+            return
+        handle = self.handle_at(QPointF(self.mapFromScene(scene_pos)))
+        if handle is not None:
+            self.setCursor(EditorView.CURSORS.get(handle.role, Qt.ArrowCursor))
+        elif hovered is not None and hovered is self.selected_item:
+            self.setCursor(Qt.SizeAllCursor)
+        else:
+            self.unsetCursor()
 
     def set_item_opacity(self, opacity: float) -> None:
         """
@@ -716,9 +1120,14 @@ class EditorView(pg.GraphicsView):
         if not roi.is_valid():
             return
         # Calculate statistics
+        # item.width/height, NOT item.edit_rect.width/height. The editing rectangle's attributes
+        # were assigned once at construction and never refreshed (set_geometry does that now), so
+        # roi.width/roi.height held the size the item was CREATED at while the statistics row below
+        # stored the edited size from item.width/2 -- the two tables disagreed for every item that
+        # was ever resized. Both now read the same source
         roidat = (hash(roi), image_id, False, roi.ident,
-                  item.center[0], item.center[1], item.edit_rect.width,
-                  item.edit_rect.height, None, "manual", -1, roi.colocalized)
+                  item.center[0], item.center[1], item.width,
+                  item.height, None, "manual", -1, roi.colocalized)
         stats = roi.calculate_statistics(image[..., item.channel_index])
         # TODO replace for FOCI
         ellp = roi.calculate_ellipse_parameters()
@@ -740,7 +1149,9 @@ class EditorView(pg.GraphicsView):
         :param roihash: The hash of the item
         :return: None
         """
-        self.inserter.delete_roi_from_database(roihash)
+        # self.roi.ident, not just the hash: an identical focus in two images shares a hash, so a
+        # hash-only delete took the other image's roi with it
+        self.inserter.delete_roi_from_database(roihash, self.roi.ident)
 
     @staticmethod
     def create_associations(main: int, maps: Iterable[np.ndarray], unassociated: List[int],
@@ -795,7 +1206,7 @@ class EditorView(pg.GraphicsView):
         # Remove roi from handler
         self.roi.remove_rois_by_hash(unassociated)
         for roi_hash in unassociated:
-            self.inserter.delete_roi_from_database(roi_hash)
+            self.inserter.delete_roi_from_database(roi_hash, self.roi.ident)
 
     @staticmethod
     def replace_placeholder(map_: np.ndarray, roihash: int, placeholder: int = -1) -> None:
@@ -810,32 +1221,54 @@ class EditorView(pg.GraphicsView):
         map_[map_ == placeholder] = roihash
 
     @staticmethod
-    def encode_new_roi(rr: List[int], cc: List[int],
-                       map_: np.ndarray) -> List[Tuple[int, int, int]]:
+    def encode_new_roi(rr: List[int], cc: List[int], map_: np.ndarray,
+                       placeholder: int = -1) -> List[Tuple[int, int, int]]:
         """
         Method to run length encode newly created roi
+
+        Rasterise, then scan -- the same (row, first column, pixel count) convention
+        AreaAndROIExtractor.encode_areas produces, so an area written here decodes exactly like one
+        written by the detector. The previous implementation got all three parts of that wrong:
+
+        * it seeded `rl = 1` before counting, so EVERY stored run was one pixel too long;
+        * it appended a row even when the map had claimed all of that row's pixels, emitting
+          `(row, -1, 1)` -- a run starting at column -1 reached the database;
+        * it assumed each row is one contiguous span, recording a split row as a single run from its
+          first free column to the far side of the gap.
+
+        The run list is what ROI.__hash__ is derived from, so this changes the identity of manual roi
+        written from now on. It re-encodes nothing already stored: this encoder runs only on the
+        editor's write path.
 
         :param rr: The row indices
         :param cc: The corresponding column indices
         :param map_: The corresponding map for this roi
+        :param placeholder: Stamped into the map for every pixel claimed here, to be swapped for the
+        real hash by replace_placeholder once the ROI exists and can be hashed
         :return: The run length encoded area of the given roi
         """
-        # Get encoded area for item
-        rle = []
-        # Get unique rows
-        rows = np.unique(rr)
-        # Iterate over unique rows
-        for row in rows:
-            rl = 1
-            col = -1
-            for index in range(len(rr)):
-                if rr[index] == row and map_[rr[index]][cc[index]] == 0:
-                    map_[rr[index]][cc[index]] = -1
-                    rl += 1
-                    if col == -1:
-                        col = int(cc[index])
-            rle.append((int(row), col, rl))
-        return rle
+        rr = np.asarray(rr, dtype=np.int64)
+        cc = np.asarray(cc, dtype=np.int64)
+        if rr.size == 0:
+            return []
+        # Only the pixels no roi on this channel has claimed yet. The filter and the claim below are
+        # not incidental to encoding -- the editor drives overlap handling off this map
+        free = map_[rr, cc] == 0
+        rr, cc = rr[free], cc[free]
+        if rr.size == 0:
+            return []
+        map_[rr, cc] = placeholder
+        # Row-major order, then cut a run wherever the row changes or a column is not the previous
+        # one plus one. skimage's ellipse() yields each pixel once, so no de-duplication is needed
+        order = np.lexsort((cc, rr))
+        rr, cc = rr[order], cc[order]
+        starts = np.empty(rr.size, dtype=bool)
+        starts[0] = True
+        starts[1:] = (rr[1:] != rr[:-1]) | (cc[1:] != cc[:-1] + 1)
+        start_indices = np.flatnonzero(starts)
+        lengths = np.diff(np.append(start_indices, rr.size))
+        return [(int(rr[start]), int(cc[start]), int(length))
+                for start, length in zip(start_indices, lengths)]
 
 
 class ROIDrawer:
@@ -843,6 +1276,7 @@ class ROIDrawer:
     __slots__ = ()
     MARKERS = {
         "invisible": pg.mkPen(color=(0, 0, 0, 0)),
+        "handle": pg.mkPen(color="#202020", width=1),
         "image processing": pg.mkPen(color="r", width=3),
         "machine learning": pg.mkPen(color="g", width=3),
         "merged": pg.mkPen(color="m", width=3),
@@ -903,6 +1337,25 @@ class ROIDrawer:
         """
         items = []
         for roi in rois:
+            # A stored ROI with no points cannot be drawn -- calculate_dimensions raises for it, and
+            # this runs inside the lazy loader's timer, so ONE bad row took the whole editor down
+            # with `ValueError: ROI ... does not contain any points!` before the window appeared.
+            # 57 such rows exist in the live database across 33 images; the editor has to open on
+            # the rest of the image regardless of how they got there.
+            #
+            # Skipped rather than repaired, and logged rather than swallowed: what is wrong is the
+            # stored data, and drawing a placeholder would invent geometry that is not there
+            # A backstop only: `EditorView.discard_unusable_roi` removes these before the loader
+            # ever runs. It stays because this is a static method any caller can reach, and because
+            # `calculate_dimensions` raising inside the loader's timer takes the window down.
+            #
+            # TEMPORARY message (2026-09-08, at RW's instruction): the channel, not the hash. Every
+            # area-less roi in a channel hashes to the same value, so the hash named nothing --
+            # naming the row needs the identity split filed on `reviews/2026-07-26-core-review.md`
+            if not roi.is_valid():
+                LOGGER.warning("Skipping a roi in channel %s: no points are stored for it. This "
+                               "should have been discarded before drawing", roi.ident)
+                continue
             ind = idents.index(roi.ident)
             if roi.main:
                 items.append(ROIDrawer.draw_nucleus(view, roi, ind, False))
@@ -978,6 +1431,44 @@ class ROIDrawer:
             item.update_indicators(draw_additional)
 
 
+class HandleItem(QGraphicsRectItem):
+    """
+    A grab point drawn on the corners and edge midpoints of an EditingRectangle
+
+    Purely a marker. Like every other item in the editor it is setEnabled(False) and receives no
+    mouse events; EditorView hit-tests the handles in DEVICE pixels, because a handle that ignores
+    the view transform has no meaningful size in image coordinates
+    """
+
+    # The eight resize roles as a fraction of the bounding box, plus the rotate grip. Compass names
+    # are used in the UNROTATED frame of the item -- "n" is the top edge of the item's own rect, not
+    # whatever is uppermost on screen once the item is turned
+    POSITIONS = {
+        "nw": (0.0, 0.0), "n": (0.5, 0.0), "ne": (1.0, 0.0),
+        "w": (0.0, 0.5), "e": (1.0, 0.5),
+        "sw": (0.0, 1.0), "s": (0.5, 1.0), "se": (1.0, 1.0),
+    }
+    # Roles that change only one dimension, and the pair of box fractions each one holds fixed
+    EDGE_ROLES = ("n", "e", "s", "w")
+    SIZE = 9
+    # How far above the top edge the rotate grip sits, in IMAGE pixels. It cannot be a device
+    # offset: a child item's position is expressed in its parent's coordinates, and only the
+    # handle's SHAPE ignores the view transform
+    ROTATE_DISTANCE = 18
+
+    def __init__(self, role: str):
+        half = HandleItem.SIZE / 2
+        super().__init__(-half, -half, HandleItem.SIZE, HandleItem.SIZE)
+        self.role = role
+        # The grab point must stay the same size on screen at every zoom level. Without this a
+        # handle is a few thousandths of a pixel across when the image is zoomed out, and a slab
+        # covering the nucleus when it is zoomed in
+        self.setFlag(QGraphicsItem.ItemIgnoresTransformations, True)
+        self.setPen(ROIDrawer.MARKERS["handle"])
+        self.setBrush(QColor("#bdff00") if role != "rotate" else QColor("#00d5ff"))
+        self.setEnabled(False)
+
+
 class EditingRectangle(QGraphicsRectItem):
 
     # No __slots__ here or on ROIItem, deliberately. A sip type provides __dict__ from the C++
@@ -1000,6 +1491,8 @@ class EditingRectangle(QGraphicsRectItem):
         self.inactive_pen = None
         self.active_pen = None
         self.color = None
+        # Created by create_handles, which is called once the owner knows whether it may be rotated
+        self.handles: Dict[str, HandleItem] = {}
         self.initialize()
 
     def initialize(self):
@@ -1012,6 +1505,65 @@ class EditingRectangle(QGraphicsRectItem):
         self.inactive_pen = ROIDrawer.MARKERS["invisible"]
         self.setPen(self.active_pen)
 
+    def create_handles(self, rotatable: bool = False) -> None:
+        """
+        Method to create the grab points for this rectangle
+
+        :param rotatable: Whether a rotation grip should be created as well. Only nuclei carry one --
+        a focus is small and round enough that turning it changes nothing a user can see
+        :return: None
+        """
+        if self.handles:
+            return
+        roles = list(HandleItem.POSITIONS)
+        if rotatable:
+            roles.append("rotate")
+        for role in roles:
+            handle = HandleItem(role)
+            handle.setParentItem(self)
+            self.handles[role] = handle
+        self.layout_handles()
+
+    def layout_handles(self) -> None:
+        """
+        Method to place the grab points on the current bounding box
+
+        :return: None
+        """
+        if not self.handles:
+            return
+        rect = self.rect()
+        for role, handle in self.handles.items():
+            if role == "rotate":
+                handle.setPos(rect.center().x(), rect.top() - HandleItem.ROTATE_DISTANCE)
+                continue
+            fx, fy = HandleItem.POSITIONS[role]
+            handle.setPos(rect.left() + rect.width() * fx, rect.top() + rect.height() * fy)
+
+    def set_geometry(self, rect: QRectF, angle: float) -> None:
+        """
+        Method to move this rectangle onto the given bounding box
+
+        The four positional attributes are refreshed here rather than only in the constructor. They
+        used to be written once and never again while setRect moved the drawn rectangle underneath
+        them, so they reported the size this item was CREATED at for the rest of its life --
+        EditorView.write_item_to_database read them into the roi table's width/height columns
+
+        :param rect: The new, unrotated bounding box
+        :param angle: The angle to apply about the box's center
+        :return: None
+        """
+        self.setRotation(0)
+        self.setRect(rect)
+        self.setTransformOriginPoint(rect.center())
+        self.setRotation(angle)
+        self.pos_x = rect.x()
+        self.pos_y = rect.y()
+        self.width = rect.width()
+        self.height = rect.height()
+        self.center = rect.center().x(), rect.center().y()
+        self.layout_handles()
+
     def activate(self, enable: bool = True) -> None:
         """
         Method to activate this item
@@ -1023,6 +1575,10 @@ class EditingRectangle(QGraphicsRectItem):
             self.setPen(self.active_pen)
         else:
             self.setPen(self.inactive_pen)
+        # The grab points belong to the selection, not to the item -- an unselected roi must not
+        # show anything to grab. setVisible rather than a pen swap, because a handle is filled
+        for handle in self.handles.values():
+            handle.setVisible(enable)
 
 
 class ROIItem(QGraphicsEllipseItem):
@@ -1087,10 +1643,7 @@ class ROIItem(QGraphicsEllipseItem):
         self.setRect(rect)
         self.setTransformOriginPoint(rect.center())
         self.setRotation(angle)
-        self.edit_rect.setRotation(0)
-        self.edit_rect.setRect(rect)
-        self.edit_rect.setTransformOriginPoint(rect.center())
-        self.edit_rect.setRotation(angle)
+        self.edit_rect.set_geometry(rect, angle)
 
     def reset_item(self) -> None:
         """
@@ -1184,6 +1737,9 @@ class ROIItem(QGraphicsEllipseItem):
         view.addItem(self)
         rect = EditingRectangle(self.pos_x, self.pos_y, self.center[0], self.center[1],
                                 self.width, self.height)
+        # Before activate(False), which is what hides them again -- a grab point created afterwards
+        # would stay visible on an unselected item
+        rect.create_handles(isinstance(self, NucleusItem))
         rect.activate(False)
         self.edit_rect = rect
 
@@ -1305,6 +1861,7 @@ class NucleusItem(ROIItem):
         minor_axis.setRotation(90)
         rect = EditingRectangle(self.pos_x, self.pos_y, self.center[0], self.center[1],
                                 self.width, self.height)
+        rect.create_handles(rotatable=True)
         rect.setTransformOriginPoint(rect.sceneBoundingRect().center())
         rect.setRotation(self.angle)
         self.indicators.extend([

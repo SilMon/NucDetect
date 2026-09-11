@@ -2,7 +2,7 @@ import os
 import sqlite3
 import time
 from enum import Enum
-from typing import Tuple, Dict, List, Union, Iterable, Any
+from typing import Tuple, Dict, List, Optional, Union, Iterable, Any
 
 from core.detector_modules.ImageLoader import ImageLoader
 from core.logging_config import get_logger
@@ -475,7 +475,12 @@ class Requester(DatabaseInteractor):
                                                                      ("md5", Specifiers.EQUALS, imgs[0]))]
         # Get the main channel
         main = self.get_main_channel(imgs[0])
-        if not include_main:
+        # `main in channels`, not a bare remove. get_main_channel answers None rather than raising
+        # for an image with no nominated channel row, and CHANNEL ROWS ARE WRITTEN BY THE ANALYSIS
+        # -- so an experiment holding an image nobody has analysed yet reached `[].remove(None)` and
+        # took the statistics dialog down before it opened. An experiment being set up is exactly
+        # where that state lives, and the empty-experiment guard above exists for the same reason
+        if not include_main and main in channels:
             channels.remove(main)
         return channels
 
@@ -791,9 +796,19 @@ class Requester(DatabaseInteractor):
             # Create row for this nucleus. get_statistics_for_roi returns None for a nucleus
             # with no statistics row (an empty tuple until 2026-08-17), so every stats[] below
             # would raise and take the whole result table with it. The row is kept and the affected cells say so instead:
-            # the nucleus exists and its foci counts are still countable. This needs a partially
-            # committed analysis to occur at all -- statistics are written as part of every
-            # analysis -- so no recovery is attempted here
+            # the nucleus exists and its foci counts are still countable.
+            #
+            # The MISSING-ROW case is not the only one. A row can exist with NULL ellipse columns:
+            # calculate_ellipse_parameters runs only for roi marked main, and a focus that lies
+            # outside every nucleus is stored with `associated = NULL` -- which is how a nucleus is
+            # spelled, so get_nuclei_hashes_for_image hands it back here as one. `stats` is then
+            # truthy and float(None) raised, taking the result table down. Reported from real use on
+            # 2026-08-22, with the quality check switched off; with it on, delete_unassociated_foci
+            # removes exactly those foci, which is why it had never surfaced.
+            #
+            # Widening this guard stops the crash, and that is ALL it does. The real defect is that
+            # `associated IS NULL` means both "this is a nucleus" and "this focus belongs to
+            # nothing", and repairing that touches stored data.
             if stats:
                 # Center Y and Center X go through the same :.2f as every other numeric column.
                 # get_center returns round(...), which under @njit yields a float for some ROI, and
@@ -801,10 +816,14 @@ class Requester(DatabaseInteractor):
                 # and the rest as real -- so bare str() put "433" next to "435.9399961797561" in one
                 # column. Measured before the fix: 151 of 4418 nuclei across 39 images stored a real
                 # centre
-                measurements = [f"{float(stats[11]):.2f}", f"{float(stats[10]):.2f}",
-                                f"{stats[15]:.2f}",
-                                f"{float(stats[18]) * 100:.2f}", f"{float(stats[14]):.2f}",
-                                f"{float(stats[12]):.2f}", f"{float(stats[13]):.2f}"]
+                def _measure(value: Optional[float], factor: float = 1.0) -> str:
+                    """One cell: the number, or NO_STATISTICS when the column is NULL"""
+                    return NO_STATISTICS if value is None else f"{float(value) * factor:.2f}"
+
+                measurements = [_measure(stats[11]), _measure(stats[10]),
+                                _measure(stats[15]),
+                                _measure(stats[18], 100), _measure(stats[14]),
+                                _measure(stats[12]), _measure(stats[13])]
             else:
                 measurements = [NO_STATISTICS] * 7
             row = [name, str(image), str(nuc)] + measurements + [match]
@@ -862,8 +881,8 @@ class Inserter(DatabaseInteractor):
     """
 
     def add_new_image(self, md5: str, year: int, month: int, day: int, hour: int, minute: int,
-                      channels: int, width: int, height: int, xres: float, yres: float,
-                      res_unit: str) -> None:
+                      channels: int, width: int, height: int, xres: Optional[float],
+                      yres: Optional[float], res_unit: str) -> None:
         """
         Method to add a new image to the database
 
@@ -871,6 +890,11 @@ class Inserter(DatabaseInteractor):
         produces year..minute as int (from datetime.timetuple()) and x_res/y_res as float (from
         _rational_to_scale), and create_tables.sql declares the five date columns INTEGER. The
         annotations said str until 2026-08-15, which nothing caught because SQLite accepts either.
+
+        **xres/yres are Optional since 2026-08-21.** An image that declares no usable resolution
+        yields None, which is stored as SQL NULL rather than as an in-band numeric sentinel -- the
+        x_res/y_res columns are nullable and have always been. Readers must treat NULL as "unknown"
+        and not as a scale.
 
         :param md5: The md5 hash of the image
         :param year: The year the image was created
@@ -881,8 +905,8 @@ class Inserter(DatabaseInteractor):
         :param channels: Number of image channels
         :param width: The width of the image
         :param height: The height of the image
-        :param xres: The x resolution of the image
-        :param yres: The y resolution of the image
+        :param xres: The x resolution of the image, or None if it declares none
+        :param yres: The y resolution of the image, or None if it declares none
         :param res_unit: The resolution unit of the image
         :return: None
         """
@@ -985,6 +1009,22 @@ class Inserter(DatabaseInteractor):
         """
         self.connector.update("images", ("modified", True), ("md5", Specifiers.EQUALS, image))
 
+    def remove_channels_for_image(self, image: str) -> None:
+        """
+        Method to remove every channel row of the given image
+
+        add_channel is an INSERT OR REPLACE keyed on (md5, index), and delete_existing_image_data
+        clears roi, points and statistics but never channels -- so registering an image with FEWER
+        channels than a previous run left the surplus rows behind for good. The editor builds its
+        channel list from this table and indexes the loaded array with it, so a stale row offered a
+        channel the image does not have and raised IndexError on selection. Measured on the live
+        database: one image declared 4 channels and carried 5 rows, the fifth named "Channel 5".
+
+        :param image: The md5 hash of the image
+        :return: None
+        """
+        self.connector.delete("channels", ("md5", Specifiers.EQUALS, image))
+
     def add_channel(self, image: str, index: int, name: str, active: bool, main: bool) -> None:
         """
         Method to add a new image channel to the database
@@ -1029,6 +1069,24 @@ class Inserter(DatabaseInteractor):
         """
         self.save_roi_to_database(roi_data, line_data, stat_data)
         self.connector.update("images", ("analysed", True), ("md5", Specifiers.EQUALS, image))
+
+    def set_image_analysed(self, image: str, analysed: bool = True) -> None:
+        """
+        Method to mark an image as analysed, independently of whether anything was found
+
+        **This exists because "analysed" means "an analysis ran", not "an analysis found
+        something", and the code used to conflate the two.** The flag was set only as a side effect
+        of `save_roi_data_for_image`, which the caller skips when there is no ROI data -- so an
+        image whose nuclei the detector could not find was never marked, and the manual editor,
+        which is gated on the flag, could not be opened to add them by hand. That is precisely the
+        image a user most needs the editor for.
+
+        :param image: The md5 hash of the image
+        :param analysed: The value to set
+        :return: None
+        """
+        self.connector.update("images", ("analysed", analysed),
+                              ("md5", Specifiers.EQUALS, image))
 
     def save_general_roi_data(self, roi_data: List) -> None:
         """
@@ -1113,6 +1171,41 @@ class Inserter(DatabaseInteractor):
         """
         self.connector.update("images", ("experiment", Specifiers.NULL), ("experiment", Specifiers.EQUALS, experiment))
 
+    def remove_group_associations_for_experiment(self, experiment: str) -> None:
+        """
+        Method to remove every group association of the given experiment
+
+        The counterpart add_image_to_experiment_group had none, so nothing in the project could
+        take a row OUT of the groups table -- and that table is what
+        get_associated_images_for_experiment reads experiment membership from, falling back to
+        images.experiment only when it is empty. An image removed from an experiment or from a
+        group was therefore re-inserted by the next save and came back on the next load.
+
+        :param experiment: Name of the experiment whose group rows should be removed
+        :return: None
+        """
+        self.connector.delete("groups", ("experiment", Specifiers.EQUALS, experiment))
+
+    def rename_experiment(self, old_name: str, new_name: str) -> None:
+        """
+        Method to rename an experiment, carrying its associations with it
+
+        All three tables are updated together because the schema declares NO foreign keys: nothing
+        cascades, so a rename that touched only `experiments` would strand every group and image
+        under a name that no longer exists. Renaming was previously done by writing a row under the
+        new name and leaving the old one, which is why an experiment appeared twice.
+
+        :param old_name: The name the experiment currently has
+        :param new_name: The name it should have
+        :return: None
+        """
+        self.connector.update("experiments", ("name", new_name),
+                              ("name", Specifiers.EQUALS, old_name))
+        self.connector.update("groups", ("experiment", new_name),
+                              ("experiment", Specifiers.EQUALS, old_name))
+        self.connector.update("images", ("experiment", new_name),
+                              ("experiment", Specifiers.EQUALS, old_name))
+
     def update_setting(self, key: str, value: Union[str, int, float]) -> None:
         """
         Method to update the given setting in the database
@@ -1163,43 +1256,65 @@ class Inserter(DatabaseInteractor):
         for nucleus in nuclei:
             self.reset_nucleus_focus_association(nucleus)
 
-    def delete_roi_from_database(self, ident: int) -> None:
+    def delete_roi_from_database(self, ident: int, image: str) -> None:
         """
-        Method to remove the given roi from the database
+        Method to remove the given roi of the given image from the database
+
+        The image is REQUIRED, and that is the whole point: hash(roi) is md5(channel name + area)
+        and carries no image, so an identical small focus in the same channel of two different
+        images gets the same hash. Deleting by hash alone removed the other image's roi outright.
 
         :param ident: md5 hash of the roi
+        :param image: The md5 hash of the image the roi belongs to
         :return: None
         """
-        self.delete_roi_data(ident)
-        self.delete_roi_points(ident)
-        self.delete_roi_statistics(ident)
+        self.delete_roi_data(ident, image)
+        self.delete_roi_points(ident, image)
+        self.delete_roi_statistics(ident, image)
 
-    def delete_roi_data(self, ident: int) -> None:
+    def delete_roi_data(self, ident: int, image: str) -> None:
         """
-        Method to remove the given roi from the roi table
+        Method to remove the given roi of the given image from the roi table
 
         :param ident: The md5 hash of the roi
+        :param image: The md5 hash of the image the roi belongs to
         :return: None
         """
-        self.connector.delete("roi", ("hash", Specifiers.EQUALS, ident))
+        self.connector.delete("roi", (("hash", Specifiers.EQUALS, ident),
+                                      ("image", Specifiers.EQUALS, image)))
 
-    def delete_roi_points(self, ident: int) -> None:
+    def delete_roi_points(self, ident: int, image: str) -> None:
         """
         Method to delete the saved area data of the given roi
 
+        **Only when no other image's roi carries the same hash.** The points table keys on
+        (hash, row, column_) and has no image column, so identically-hashed roi on two images share
+        one set of rows; deleting them for one image left the other with a roi row and no area, and
+        the manual editor raised on it. The rows stay until the last holder of the hash goes.
+
         :param ident: The md5 hash of the roi
+        :param image: The md5 hash of the image the roi belongs to
         :return: None
         """
+        shared = self.connector.count_instances(
+            "hash", "roi", (("hash", Specifiers.EQUALS, ident),
+                            ("image", Specifiers.NOTEQUALS, image)))
+        if shared:
+            LOGGER.debug("Keeping the points of roi %s: %d other image(s) share its hash",
+                         ident, shared)
+            return
         self.connector.delete("points", ("hash", Specifiers.EQUALS, ident))
 
-    def delete_roi_statistics(self, ident: int) -> None:
+    def delete_roi_statistics(self, ident: int, image: str) -> None:
         """
         Method to delete the saved roi statistics
 
         :param ident: The md5 hash of the roi
+        :param image: The md5 hash of the image the roi belongs to
         :return: None
         """
-        self.connector.delete("statistics", ("hash", Specifiers.EQUALS, ident))
+        self.connector.delete("statistics", (("hash", Specifiers.EQUALS, ident),
+                                             ("image", Specifiers.EQUALS, image)))
 
     def reset_database(self) -> None:
         """

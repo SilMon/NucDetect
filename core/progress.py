@@ -18,7 +18,25 @@ to re-normalise by hand. :func:`stage_bounds` normalises them.
 
 The numbers were obtained by wrapping every stage boundary in a separate process, so no
 instrumentation could leak into the application: once at stage level and once inside the two stages
-that dominate, both on a 1024x1024 image yielding 5 nuclei and 51 foci.
+that dominate, both on a 1024x1024 image.
+
+**RE-MEASURED 2026-08-22, and the previous set is superseded.** Replacing the rank filter in
+``NucleusMapper.get_iterative_max_map`` with an equivalent dilation cut that method from 5.590 s to
+0.527 s, which moved nucleus extraction from the largest stage of an image-processing run to a
+third of the size of foci detection. Weights derived from the old measurement would have raced the
+bar through nucleus extraction and then stalled it, so re-measuring was part of that change rather
+than a follow-up.
+
+**Read the absolute seconds as a ratio, not as a clock.** The whole 2026-08-22 set is roughly twice
+as fast as the 2026-07-31 set, and only part of that is the code: ``blob_log`` alone went 3.967 s to
+1.914 s without being touched. Wall-clock on this machine is not comparable across process
+invocations -- the same code measured 6.9 s and 13.1 s hours apart on 2026-08-21 -- which is
+precisely why every stage here is re-measured in ONE session whenever any of them changes. Mixing
+figures from two sessions would produce weights that describe no run that ever happened.
+
+The reference image yields 5 nuclei and 58 foci today, against 5 and 51 on 2026-07-31. That drift is
+not from the progress work: detection output was deliberately changed twice in between (the
+Butterworth fix and the 2026-08-17 focus-association rule).
 
 **These are warm-run weights, by decision.** The first analysis in a process additionally pays
 ~8 s of numba JIT compilation, which lands almost entirely in ellipse parameter calculation -- 24 %
@@ -54,40 +72,40 @@ STAGE_ORDER = (LOAD, NUCLEUS, FOCI_IP, FOCI_ML, MERGE, QUALITY, ELLIPSE, DATABAS
 # method is 0.0 and collapses to a point on the bar, which is exactly right.
 STAGE_SECONDS: Dict[str, Dict[str, float]] = {
     "image processing": {
-        LOAD: 0.025, NUCLEUS: 7.377, FOCI_IP: 4.668, FOCI_ML: 0.0, MERGE: 0.0,
-        QUALITY: 0.048, ELLIPSE: 0.005, DATABASE: 0.067, TABLE: 0.021,
+        LOAD: 0.012, NUCLEUS: 0.941, FOCI_IP: 2.164, FOCI_ML: 0.0, MERGE: 0.0,
+        QUALITY: 0.013, ELLIPSE: 0.002, DATABASE: 0.034, TABLE: 0.006,
     },
     "u-net": {
-        LOAD: 0.024, NUCLEUS: 7.583, FOCI_IP: 0.0, FOCI_ML: 21.221, MERGE: 0.0,
-        QUALITY: 0.033, ELLIPSE: 0.005, DATABASE: 0.060, TABLE: 0.022,
+        LOAD: 0.011, NUCLEUS: 0.937, FOCI_IP: 0.0, FOCI_ML: 6.760, MERGE: 0.0,
+        QUALITY: 0.010, ELLIPSE: 0.002, DATABASE: 0.034, TABLE: 0.006,
     },
     "combined": {
-        # MERGE covers merge_overlapping_foci (0.379) plus get_match_for_nuclei (0.069)
-        LOAD: 0.024, NUCLEUS: 7.550, FOCI_IP: 4.749, FOCI_ML: 20.105, MERGE: 0.448,
-        QUALITY: 0.044, ELLIPSE: 0.005, DATABASE: 0.080, TABLE: 0.022,
+        # MERGE covers merge_overlapping_foci (0.088) plus get_match_for_nuclei (0.017)
+        LOAD: 0.013, NUCLEUS: 1.032, FOCI_IP: 2.271, FOCI_ML: 7.334, MERGE: 0.104,
+        QUALITY: 0.013, ELLIPSE: 0.002, DATABASE: 0.036, TABLE: 0.007,
     },
 }
 
 # Sub-stage weights inside nucleus extraction, as measured seconds. Sum matches
 # STAGE_SECONDS[*][NUCLEUS]; the mapper normalises them the same way stage_bounds does.
 NUCLEUS_SECONDS = {
-    "threshold": 0.057,
-    "edm": 0.164,
-    "itermax": 5.590,
-    "centers": 0.779,
-    "watershed": 0.193,
-    "extract": 0.593,
+    "threshold": 0.026,
+    "edm": 0.078,
+    "itermax": 0.527,
+    "centers": 0.336,
+    "watershed": 0.083,
+    "extract": 0.250,
 }
 
 # ...and inside get_iterative_max_map, which alone is 76 % of nucleus extraction. "loop" is the
 # whole `while` loop regardless of the configured iteration count -- each iteration costs the same,
 # so the reporter divides this span evenly by however many iterations the settings ask for.
 ITERMAX_SECONDS = {
-    "seed": 0.469,
-    "loop": 4.447,
-    "threshold_local": 0.133,
-    "fill": 0.050,
-    "opening": 0.490,
+    "seed": 0.021,
+    "loop": 0.207,
+    "threshold_local": 0.060,
+    "fill": 0.025,
+    "opening": 0.214,
 }
 
 # Inside image-processing foci detection, per channel. preprocess is ~0 with the default settings
@@ -95,8 +113,8 @@ ITERMAX_SECONDS = {
 # nominal share rather than none at all.
 FOCI_IP_SECONDS = {
     "preprocess": 0.05,
-    "blob_log": 3.967,
-    "extract": 0.701,
+    "blob_log": 1.914,
+    "extract": 0.327,
 }
 
 

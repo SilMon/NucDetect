@@ -265,7 +265,15 @@ class SettingsCheckBox(SettingsWidget):
         self.ui.check.stateChanged.connect(self._on_value_changed)
 
     def _on_value_changed(self):
-        self.value = self.ui.check.checkState()
+        # A BOOL, not the raw Qt.CheckState. The state is an enum whose Checked member is 2, and the
+        # settings column this ends up in is typed "bool" -- so emitting the enum stored a 2 that
+        # every later read turned back into False. Ticking a box switched its setting OFF, which is
+        # how it was reported from real use on 2026-08-22.
+        #
+        # Two-state is the whole truth here: every check menu point declares "tristate": 0, which
+        # Romano ruled on 2026-08-13. Should a tristate box ever be wanted, this is the line that
+        # has to grow a third value -- and the settings column would need a type that can hold it
+        self.value = self.ui.check.checkState() == Qt.Checked
         super(SettingsCheckBox, self)._change_emit()
 
 

@@ -55,24 +55,6 @@ class Detector:
         self.fcnmapper = None
         self.qualitytester = QualityTester()
 
-    def analyse_images(self, images: List[str], settings: Dict[str, Union[List, bool]]) -> \
-            List[Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]]:
-        """
-        Method to analyse a list of images
-
-        :param images: List of paths for the images
-        :param settings: Dictionary containing the necessary information for analysis
-        :return: The results as list of dictionaries
-        """
-        results = []
-        start = time.time()
-        for path in images:
-            results.append(self.analyse_image(path, settings))
-            LOGGER.info("Analysed image %s", os.path.basename(path))
-        self.add_log_message(f"Analysed batch with size {len(images)} in {time.time() - start} seconds")
-        self.flush_log_messages()
-        return results
-
     def analyse_image(self, path: str,
                       settings: Dict[str, Union[List, bool]], save_log: bool = True,
                       progress: ProgressReporter = NO_PROGRESS) -> \
@@ -236,7 +218,15 @@ class Detector:
                                                   analysis_settings, rois)
                 self.add_log_message(f"QR: Removed foci: {len(rois) - len(qroi)}")
             else:
-                qroi = []
+                # `rois`, NOT an empty list. This read `qroi = []`, so **switching the quality check
+                # off discarded every detected ROI** and the analysis produced nothing at all --
+                # silently, with a full progress bar and no error. The setting is a user-facing
+                # checkbox ("Analysis - Quality Check"), so anyone who turned it off to save time
+                # got an empty result and no indication why.
+                #
+                # Found 2026-08-22 while investigating the empty-nuclei report. The branch also
+                # covers `not rois`, where rois is already empty and this is a no-op.
+                qroi = rois
             handler.add_rois(qroi)
         imgdat["x_scale"] = analysis_settings["dots_per_micron"]
         imgdat["y_scale"] = analysis_settings["dots_per_micron"]
@@ -455,8 +445,17 @@ class Detector:
         self.qualitytester.set_channels(())
         self.qualitytester.set_channel_names(())
         self.qualitytester.set_roi([])
-        # Holds a loaded Keras model, which is the bulk of the u-net figure above. It is rebuilt on
-        # every ml_roi_extraction call regardless, so dropping it here costs nothing extra
+        # Holds a reference to the Keras model, which is the bulk of the u-net figure above.
+        #
+        # The reason this is free CHANGED on 2026-08-21 and the old one no longer holds. It used to
+        # be "it is rebuilt on every ml_roi_extraction call regardless" -- true then, and the reason
+        # rebuilding was so expensive. FCNMapper now caches the model at module level, so dropping
+        # the mapper no longer forces a reload: the next ml_roi_extraction builds a mapper that
+        # picks the cached model straight back up.
+        #
+        # Dropping it here is therefore still free AND still necessary. Necessary because the model
+        # must not be reachable from this object when a ProcessPoolExecutor pickles it once per
+        # image -- a module-level cache is not pickled, but `self.fcnmapper.model` would be.
         self.fcnmapper = None
 
     def add_log_message(self, msg: str) -> None:

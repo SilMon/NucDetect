@@ -237,6 +237,12 @@ class NucDetect(QMainWindow):
         self.cur_img = None
         # Contains the associated roi for the loaded image
         self.roi_cache = None
+        # WHICH image roi_cache belongs to. Not the same as cur_img: after an analysis the selection
+        # advances to the next image while the table and roi_cache deliberately stay with the one
+        # just analysed, so anything pairing pixels with roi has to ask this rather than the
+        # selection. Getting that wrong opened the editor on one image's pixels with another's
+        # nuclei, and saved edits against the wrong image -- reported from real use 2026-08-22
+        self._roi_cache_img: Optional[Dict] = None
         # A list of all loaded image files -> Used for reloading
         self.loaded_files = []
         # Dict to convert md5 image hashes to file names
@@ -298,7 +304,28 @@ class NucDetect(QMainWindow):
         elif type_ == "float":
             return float(value)
         elif type_ == "bool":
-            return str(value).strip().lower() in ("1", "true", "yes")
+            # ANY non-zero number is true, not just 1. A check box stores Qt.CheckState, and
+            # Qt.Checked is **2** -- so until 2026-08-22 ticking a box wrote 2 and this read it back
+            # as False, because 2 is not in ("1", "true", "yes"). Neither *Quality Check* nor
+            # *Logging* could be switched on from the settings dialog once it had been touched, and
+            # the dialog showed the box unchecked afterwards. Reported from real use, and confirmed
+            # in a live database holding `logging = 2`.
+            #
+            # The write now stores a bool (Widgets.SettingsCheckBox), but this half is what makes
+            # the values ALREADY stored behave -- fixing only the write would leave every such
+            # database reading its own settings wrongly for ever
+            text = str(value).strip().lower()
+            if text in ("true", "yes"):
+                return True
+            if text in ("false", "no", ""):
+                return False
+            try:
+                return float(text) != 0
+            except ValueError:
+                # Not a number and not a known word: the honest answer for an unusable value is
+                # "off", which is what the old membership test also did
+                LOGGER.warning("Setting value %r is not a usable bool -- read as False", value)
+                return False
         else:
             return value
 
@@ -344,8 +371,7 @@ class NucDetect(QMainWindow):
         # loadUi's source and infers "Unknown | None" from its baseinstance parameter. Every
         # self.ui.<widget> access is then reported as an error on a possibly-None object
         self.ui: Any = uic.loadUi(gpaths.ui_main, self)
-        with open(os.path.join(gpaths.css_dir, "main.css"), "r", encoding="utf-8") as f:
-            self.ui.setStyleSheet(f.read())
+        self.ui.setStyleSheet(Util.load_stylesheet("main.css"))
         # General Window Initialization
         self.setWindowTitle("NucDetect - Focus Analysis Software")
         self.setWindowIcon(Icon.get_icon("LOGO"))
@@ -360,6 +386,12 @@ class NucDetect(QMainWindow):
         self.add_images_from_folder(gpaths.images_path)
         self.img_list_model = ImageListModel(self.ui.list_images, paths=self.loaded_files)
         self.ui.list_images.setModel(self.img_list_model)
+        # check_all_item_statuses is bounded by rowCount(), which on this model is the lazy-loading
+        # CURSOR -- so it marked the first page and every row fetchMore revealed afterwards stayed
+        # unhighlighted, however often the sweep was re-run. Marking on reveal keeps the cost
+        # proportional to what is on screen; iterating len(self._paths) instead would build an item
+        # and run a query for every image in the folder, which is the work the model exists to avoid
+        self.img_list_model.rowsInserted.connect(self.on_rows_revealed)
         self.ui.list_images.selectionModel().selectionChanged.connect(self.on_image_selection_change)
         # SingleSelection: the list was ExtendedSelection -- Qt's default for a QListView, set
         # nowhere deliberately -- so a shift-click range let on_image_selection_change assign
@@ -378,6 +410,10 @@ class NucDetect(QMainWindow):
         :return: None
         """
         self.res_table_model = QStandardItemModel(self.ui.table_results)
+        # The md5 hashes of the image(s) the result table currently shows, and the flag that keeps a
+        # PROGRAMMATIC selection change from replacing it.
+        self._displayed_keys: List[str] = []
+        self._suppress_table_reload = False
         # Initialize the header
         self.res_table_model.setHorizontalHeaderLabels(NucDetect.STANDARD_TABLE_HEADER)
         # Enable sorting
@@ -472,6 +508,9 @@ class NucDetect(QMainWindow):
         self.table_signal.connect(self._apply_result_table)
         self.row_signal.connect(self._append_result_row)
         self.status_signal.connect(self._apply_item_status)
+        # The image list is lazy: rows revealed after the table was filled would carry no marker, so
+        # it is re-applied whenever a page arrives. Cheap -- it walks only the revealed rows
+        self.img_list_model.rowsInserted.connect(lambda *_: self._mark_displayed_images())
         # Connected exactly once, here. The parameters the slot needs live on the instance, so
         # save_results() does not have to (re-)connect a partial on every export
         self.check_timer.timeout.connect(self.check_for_running_threads)
@@ -568,16 +607,37 @@ class NucDetect(QMainWindow):
             self.ui.table_results.sortByColumn(-1, Qt.AscendingOrder)
         self.res_table_model.setRowCount(0)
         self.create_table_rows(rows)
-        if rows:
-            self.res_table_model.setColumnCount(len(rows[0]))
+        # From the HEADER, and unconditionally. It used to be taken from the first row and only when
+        # there was one -- so a fill with no rows kept the previous fill's width, and
+        # setHorizontalHeaderLabels labels only as many columns as it is given and leaves any
+        # surplus in place. The experiment view is one column wider than the single-image view, so
+        # switching back to a rowless single-image fill left an unlabelled empty column behind.
+        # setRowCount(0) does not reset the column count, and nothing else does
+        self.res_table_model.setColumnCount(len(header))
         # Set header of table
         self.res_table_model.setHorizontalHeaderLabels(header)
         # Size the columns to what they now hold. Done here rather than by a ResizeToContents
         # resize mode so the cost is paid once per fill instead of on every data change, and so
         # the widths stay draggable afterwards
         self.ui.table_results.resizeColumnsToContents()
+        # ...and then re-assert the stretch, because the call above just undid it.
+        # resizeColumnsToContents assigns an explicit width to EVERY column, the last one included,
+        # and Qt only recomputes the stretched section when a resize event arrives. So the table sat
+        # narrower than its viewport until the window was resized -- reported from real use on
+        # 2026-08-22, with minimise-and-restore as the workaround, which is precisely the resize
+        # event it was waiting for. Measured on a 2600px window: 76px of unused width, 0 after this.
+        #
+        # The toggle is not redundant: the flag is already True, so setting it to True again is a
+        # no-op. Turning it off and on is what forces the recomputation here rather than later
+        result_header = self.ui.table_results.horizontalHeader()
+        result_header.setStretchLastSection(False)
+        result_header.setStretchLastSection(True)
         # setRowCount(0) above drops every span, so they are rebuilt for the rows just added
         self._update_result_table_spans()
+        # Marked here rather than where _displayed_keys is set, because that runs on a worker
+        # thread for the database-backed loads, and touching list items off the GUI thread is
+        # not allowed
+        self._mark_displayed_images()
 
     def _update_result_table_spans(self, *_) -> None:
         """
@@ -748,7 +808,18 @@ class NucDetect(QMainWindow):
         # offered an enabled Analyse button with nothing loaded, and clicking it opened the settings
         # dialog before failing on cur_img
         self.ui.btn_analyse.setEnabled(self.cur_img is not None)
-        if self.cur_img:
+        if self.cur_img and self._suppress_table_reload:
+            # A PROGRAMMATIC selection change -- the advance after an analysis, or the return to the
+            # first image after a batch. cur_img and the buttons follow the new selection, because
+            # the next Analyse must act on it, but the RESULT TABLE STAYS as it is: it still shows
+            # the analysis that just finished, which is the thing the user actually wants to read.
+            # Which image it belongs to is stated in lbl_exp_details and marked in the list, so the
+            # table and the selection disagreeing is visible rather than silent.
+            #
+            # Before 2026-08-22 this branch did not exist, and the advance cleared the table through
+            # the `else` below on every single-image analysis.
+            self.enable_buttons(True, ana_buttons=True)
+        elif self.cur_img:
             ana = self.cur_img["analysed"]
             if ana:
                 # Get information for this image
@@ -759,6 +830,13 @@ class NucDetect(QMainWindow):
             else:
                 self.ui.lbl_status.setText("Program ready")
                 self.res_table_model.setRowCount(0)
+                # The table is now empty, so nothing is on display -- the marker and the label have
+                # to go with it. Without this the previously shown image stayed bold in the list and
+                # its name stayed above an empty table, which is the exact inconsistency the marker
+                # exists to prevent
+                self._displayed_keys = []
+                self._mark_displayed_images()
+                self.set_experiment_status_label_text("")
                 self.enable_buttons(False, ana_buttons=False)
         else:
             self.ui.btn_analyse.setEnabled(False)
@@ -798,8 +876,7 @@ class NucDetect(QMainWindow):
         :return: The exit code of the dialog
         """
         msg = QMessageBox()
-        with open(os.path.join(gpaths.css_dir, "messagebox.css"), "r", encoding="utf-8") as f:
-            msg.setStyleSheet(f.read())
+        msg.setStyleSheet(Util.load_stylesheet("messagebox.css"))
         msg.setWindowIcon(Icon.get_icon("LOGO"))
         msg.setIcon(QMessageBox.Information)
         msg.setWindowTitle(title)
@@ -843,6 +920,7 @@ class NucDetect(QMainWindow):
                              0, 100, "")
         # Load saved data from databank
         self.roi_cache = self.load_rois_from_database(self.cur_img["key"])
+        self._roi_cache_img = self.cur_img
         # Create the result table from loaded data
         self.create_result_table(experiment)
         # Re-enable buttons and list. Runs on this worker thread, so it has to go through the
@@ -891,16 +969,34 @@ class NucDetect(QMainWindow):
         """
         paths = []
         loaded_set = set(self.loaded_files)
-        for t in os.walk(url):
-            tpaths = [os.path.join(t[0], x) for x in t[2]]
-            paths.extend([x for x in tpaths if x not in loaded_set])
+
+        def images_in(folder: str) -> List[str]:
+            """
+            Every not-yet-loaded IMAGE file under `folder`
+
+            Filtered by extension, because everything collected here is handed to
+            add_images_to_database, which reads each file to get its metadata. A folder holding
+            anything that is not an image -- and a user's image folder routinely does -- otherwise
+            took the whole load down on the first non-image file it met.
+
+            :param folder: The folder to walk
+            :return: The image paths found, excluding those already loaded
+            """
+            found = []
+            for walked_root, _dirs, walked_files in os.walk(folder):
+                for name in walked_files:
+                    full = os.path.join(walked_root, name)
+                    if full in loaded_set:
+                        continue
+                    if os.path.splitext(name)[1].lower() in Util.IMAGE_FORMATS:
+                        found.append(full)
+            return found
+
+        paths.extend(images_in(url))
         # If no images where found, open a file dialog to add images
         if not paths:
             files = str(QFileDialog.getExistingDirectory(self, "Select Directory to load images from"))
-            # Walk the folder to find all files inside it
-            for t in os.walk(files):
-                tpaths = [os.path.join(t[0], x) for x in t[2]]
-                paths.extend([x for x in tpaths if x not in loaded_set])
+            paths.extend(images_in(files))
         self.loaded_files.extend(sorted(paths, key=lambda x: os.path.basename(x)))
         # Add new paths to database
         self.add_images_to_database(self.loaded_files)
@@ -1044,6 +1140,11 @@ class NucDetect(QMainWindow):
             # If the dialog was rejected, abort analysis
             return
         self.res_table_model.setRowCount(0)
+        # The table is being emptied for a new run, so nothing is on display any more. Without this
+        # the previous image would keep its marker and its name would stay above an empty table
+        self._displayed_keys = []
+        self._mark_displayed_images()
+        self.set_experiment_status_label_text("")
         self.prg_signal.emit(f"Analysing {self.cur_img['file_name']}",
                              0, 100, "")
         thread = Thread(target=self._run_guarded,
@@ -1083,6 +1184,8 @@ class NucDetect(QMainWindow):
             save_log=bool(analysis_settings["analysis_settings"].get("logging", True)),
             progress=reporter)
         self.roi_cache = data["handler"]
+        # Captured BEFORE the advance at the end of this method moves the selection off this image
+        self._roi_cache_img = self.cur_img
         reporter.sub(*bounds[ELLIPSE])(0.0, "Calculating ellipse parameters")
         for roi in self.roi_cache:
             if roi.main:
@@ -1098,12 +1201,22 @@ class NucDetect(QMainWindow):
                              percent, maxi, "")
         self.enable_signal.emit(True)
         self.status_signal.emit(False)
-        # Advance to the next image, which is what makes _select_next_image live in production for
-        # the first time -- until 2026-08-15 both emits passed first=True, so a method named
-        # "select next image" only ever selected the first one. Working through a folder image by
-        # image is the normal use, and it should not need a click between each one. Stops at the
-        # last image rather than wrapping; the batch path below still emits True, because after a
-        # whole run the first image is the sensible place to be
+        # Advance to the next image. Restored 2026-08-22 after the table was decoupled from the
+        # selection -- see on_image_selection_change and _select_next_image.
+        #
+        # This emit was added 2026-08-15 and removed earlier on 2026-08-22, because advancing fired
+        # on_image_selection_change, which cleared the result table this method had just built. The
+        # analysis result was discarded on every single run and Romano reported it from real use.
+        #
+        # It works now because a PROGRAMMATIC selection change no longer replaces the table:
+        # _select_next_image raises _suppress_table_reload while it moves the selection, so the
+        # table keeps showing the analysis that just finished while the selection moves on to the
+        # next image, ready for the next Analyse. Which image the table belongs to is stated in
+        # lbl_exp_details and marked in the image list, so the two disagreeing is visible.
+        #
+        # Manual selection is untouched and still reloads -- that is Romano's rule, 2026-08-22:
+        # "Selecting a new image from the list manually should still change the result table,
+        # changing it automatically should retain the original result table."
         self.selec_signal.emit(False)
 
     def _report_analysis_progress(self, fraction: float, message: str) -> None:
@@ -1183,6 +1296,8 @@ class NucDetect(QMainWindow):
             # below: reusing one variable for both is what made the ETA undercount by one and go
             # negative on the final batch of every run
             done = 0
+            # Empty until a batch has finished -- see where it is assigned
+            eta_text = ""
             # A plain slice loop. The previous start/stop/step arithmetic made the first batch
             # batch_size + 1 images long, and executed once even when there was nothing to analyse
             for batch_start in range(0, maxi, batch_size):
@@ -1197,13 +1312,23 @@ class NucDetect(QMainWindow):
                 # worker process instead of being pickled with every task
                 res = e.map(_analyse_in_worker, zip(tpaths, t_setts, t_savelog))
                 for r in res:
-                    self.prg_signal.emit(f"Analysed images: {done + 1}/{maxi}",
-                                         done + 1, maxi, "")
+                    # The bar counts BATCHES (RW, 2026-09-08), so its value does not move inside a
+                    # batch -- but the label does, because a batch is ~75 s and a caption frozen for
+                    # that long reads as a hang. Value and text are deliberately on different
+                    # granularities: the bar tracks what the ETA is measured over, the text tracks
+                    # what is happening
+                    self.prg_signal.emit(
+                        f"Batch {batch_start // batch_size + 1}/{total_batches}"
+                        f" -- analysed {done + 1}/{maxi} images{eta_text}",
+                        batch_start // batch_size, total_batches, "")
                     # Replay the log of the worker that analysed this image, if the user asked for
                     # analysis logging. The messages are discarded rather than buffered when off --
                     # they have already been produced, and holding them would only defer the cost
                     if log_analysis:
-                        log_messages(r.get("log", ()))
+                        # console=False: the per-image block is ~30 lines, and a batch of eighty put
+                        # ~2400 of them around this run's eight progress lines. The file still gets
+                        # everything, in image order, which is the point of the replay
+                        log_messages(r.get("log", ()), console=False)
                     self.save_rois_to_database(r, all_=True)
                     # Get the image hash and file name
                     name = self.requester.get_image_filename(r["handler"].ident)
@@ -1223,12 +1348,20 @@ class NucDetect(QMainWindow):
                 h = eta // 3600
                 m = eta % 3600 // 60
                 s = eta % 3600 % 60
+                # Kept for the NEXT batch's label. The ETA was computed here and written only to the
+                # log file, so the one number that answers "how much longer?" never reached the
+                # window. The first batch has none, which is honest -- there is nothing to
+                # extrapolate from until one batch has finished
+                eta_text = f" -- ETA {h:02d}h:{m:02d}m:{s:02d}s"
                 cur_batch = batch_start // batch_size + 1
                 msg = f"Analysed batch {cur_batch: 02d}/{total_batches: 02d} in {time.time() - s2: 09.3f} secs\t\t"\
                       f"Total: {time.time() - start_time: 09.3f} secs\t\t"\
                       f"ETA: {h:02d}h:{m:02d}m:{s:02d}s"
                 LOGGER.info(msg)
             self.enable_signal.emit(True)
+            # 100 / 100, not total_batches / total_batches: the loop emits the batch it is ABOUT to
+            # run, so the last emit inside it reads total_batches - 1 and the bar would otherwise
+            # stop one batch short of full
             self.prg_signal.emit("Analysis finished -- Program ready",
                                  100,
                                  100, "")
@@ -1276,7 +1409,10 @@ class NucDetect(QMainWindow):
                 exp_data = data["experiment details"]
                 ins.add_image_to_experiment(key, exp_data["name"], exp_data["details"],
                                             exp_data["notes"], "Standard")
-            # Update channel info
+            # Update channel info. Cleared first: the rows are keyed by (md5, index) and were only
+            # ever replaced, so re-registering an image with fewer channels than before left the
+            # surplus indices in place -- and the editor offers exactly what this table says
+            ins.remove_channels_for_image(key)
             for ind in range(len(data["names"])):
                 ins.add_channel(key, ind, data["names"][ind],
                                 data["active channels"][ind], data["main channel"] == ind)
@@ -1287,8 +1423,19 @@ class NucDetect(QMainWindow):
             roidat, pdat, elldat = NucDetect.prepare_roihandler_for_database(data["handler"], data["channels"])
             # Check if there is any data to save
             if roidat:
-                # Save data to database
+                # Save data to database. This ALSO sets `analysed` as a side effect, which is what
+                # the editor's own save path relies on; the explicit call below is what covers the
+                # case where this branch is skipped
                 ins.save_roi_data_for_image(key, roidat, pdat, elldat)
+            # Mark the image analysed WHETHER OR NOT anything was found.
+            #
+            # The flag used to be set only inside save_roi_data_for_image, above, so an analysis
+            # that detected no nuclei left the image unmarked. The consequences were not obvious:
+            # the result table would not reload on re-selection, and -- reported from real use on
+            # 2026-08-22 -- **the manual editor could not be opened**, because it is gated on the
+            # flag. So the one image a user most needs to correct by hand was the one they could
+            # not open. "Analysed" means an analysis ran, not that it found something.
+            ins.set_image_analysed(key)
             # Only commit once all writes succeeded, so a failed save doesn't persist a partial state
             ins.commit()
             req.commit()
@@ -1463,6 +1610,10 @@ class NucDetect(QMainWindow):
         :param experiment: Name of the experiment to show. None if only the current image should be shown
         :return: The prepared rows
         """
+        # The label and the list marker both answer "what am I looking at?", which stopped being
+        # obvious on 2026-08-22: an automatic advance moves the SELECTION without changing the
+        # table, so the two can legitimately disagree. Naming the source here is what makes that
+        # visible instead of silent -- Romano asked for the names, not just the counts
         if experiment:
             # Get all assigned images
             num_imgs = self.requester.get_number_of_associated_images_for_experiment(experiment)
@@ -1471,14 +1622,18 @@ class NucDetect(QMainWindow):
             # Sort rows according to group
             rows = sorted(rows, key=lambda x: x[1])
             self.set_experiment_status_label_text(
-                f"Experiment: {experiment}\nImages: {num_imgs}"
+                f"Showing experiment: {experiment}\nImages: {num_imgs}"
             )
             self.cur_exp = experiment
+            # Every image of the experiment is on screen, so every one of them is marked
+            self._displayed_keys = list(
+                self.requester.get_associated_images_for_experiment(experiment))
         else:
             rows = self.get_table_data_for_image(self.cur_img["key"])
             self.set_experiment_status_label_text(
-                f"Experiment: None\nImages: 1"
+                f"Showing image: {self.cur_img['file_name']}\nExperiment: None"
             )
+            self._displayed_keys = [self.cur_img["key"]]
         return rows
 
     def create_table_rows(self, rows: List[List[str]], append: bool = True) -> Union[None, List[List[QStandardItem]]]:
@@ -1567,6 +1722,40 @@ class NucDetect(QMainWindow):
         """
         self.ui.lbl_exp_details.setText(status)
 
+    def _mark_displayed_images(self) -> None:
+        """
+        Method to mark, in the image list, the image(s) the result table currently shows
+
+        **Necessary because the table and the selection can now disagree.** An automatic advance
+        moves the selection without changing the table, so without a marker the user would have no
+        way to tell which image the numbers on screen belong to. Romano asked for this together with
+        the label above the table, and the two answer the same question in two places.
+
+        **Bold plus a foreground colour, not a background one.** The background already carries the
+        analysed/modified state (`Color.ITEM_ANALYSED` / `ITEM_MODIFIED`), and those are orthogonal
+        to "is being shown" -- an image can be any combination of the three. Reusing the background
+        would have made one state hide another.
+
+        Only REVEALED rows can be marked, because the model is lazy and unrevealed rows have no
+        item yet. That is why this is also connected to the model's rowsInserted.
+
+        :return: None
+        """
+        self._assert_main_thread("_mark_displayed_images")
+        shown = set(self._displayed_keys)
+        for row in range(self.img_list_model.rowCount()):
+            item = self.img_list_model.get_item_at_index(row)
+            if item is None:
+                continue
+            data = item.data()
+            font = item.font()
+            is_shown = bool(data) and data.get("key") in shown
+            font.setBold(is_shown)
+            item.setFont(font)
+            # QStandardItem has no "clear the foreground" call, so the unmarked state is an explicit
+            # default brush rather than an omission
+            item.setForeground(Color.ITEM_DISPLAYED if is_shown else Color.ITEM_DEFAULT_TEXT)
+
     def enable_buttons(self, state: bool = True, ana_buttons: bool = True) -> None:
         """
         Method to disable or enable the GUI buttons
@@ -1630,8 +1819,20 @@ class NucDetect(QMainWindow):
                 return
             row = cur_ind.row() + 1
         nex = model.index(row, 0)
-        self.ui.list_images.selectionModel().select(nex, QItemSelectionModel.Select)
-        self.ui.list_images.setCurrentIndex(nex)
+        # EVERY selection change made from here is programmatic, so none of them may replace the
+        # result table -- that is the whole difference between "the user picked an image" and "the
+        # program moved on". The flag is read by on_image_selection_change, which Qt delivers
+        # synchronously for a same-thread selection change, so the try/finally covers it exactly.
+        #
+        # This also protects the BATCH summary table: the emit at the end of a batch run selects the
+        # first image, which used to reload that image's data over the summary the run had just
+        # produced. Same defect as the single-image one, one layer along.
+        self._suppress_table_reload = True
+        try:
+            self.ui.list_images.selectionModel().select(nex, QItemSelectionModel.Select)
+            self.ui.list_images.setCurrentIndex(nex)
+        finally:
+            self._suppress_table_reload = False
 
     def _set_progress(self, text: str, progress: Union[int, float], maxi: Union[int, float], symbol: str) -> None:
         """
@@ -1765,8 +1966,7 @@ class NucDetect(QMainWindow):
             msg = QMessageBox()
             msg.setWindowIcon(Icon.get_icon("LOGO"))
             msg.setIcon(QMessageBox.Information)
-            with open(os.path.join(gpaths.css_dir, "messagebox.css"), "r", encoding="utf-8") as f:
-                msg.setStyleSheet(f.read())
+            msg.setStyleSheet(Util.load_stylesheet("messagebox.css"))
             msg.setWindowTitle("Warning")
             msg.setText("No experiments were defined")
             msg.setInformativeText("Statistics can only be displayed, if images are assigned to an experiment")
@@ -1790,7 +1990,11 @@ class NucDetect(QMainWindow):
         :return: None
         """
         sett = SettingsDialog(self.inserter)
-        sett.initialize_from_file(os.path.join(gpaths.settings_path, "settings.json"))
+        # self.settings, so the dialog shows what an analysis actually uses. It is the database's
+        # settings table, loaded by load_settings; the JSON supplies only the widgets. The two used
+        # to disagree on nine keys -- `percent_hmax` read 0.45 in the file and 0.05 in the database
+        # -- so the dialog displayed values no analysis had ever run with
+        sett.initialize_from_file(os.path.join(gpaths.settings_path, "settings.json"), self.settings)
         # SettingsDialog.accept() performs the database update, the commit and the JSON save
         # itself; this block used to repeat all three. It was unreachable until accept() started
         # returning Accepted, so the repetition was never visible
@@ -1810,13 +2014,20 @@ class NucDetect(QMainWindow):
         if not self.cur_img:
             self.prg_signal.emit("No image selected -- nothing to modify", 0, 100, "")
             return
+        # THE IMAGE roi_cache BELONGS TO, not the selected one. After an analysis the selection has
+        # already advanced to the next image while roi_cache still holds the analysed one, so
+        # reading cur_img here opened the editor on the next image's pixels with the analysed
+        # image's nuclei -- and, because EditorView keys its writes off the handler's ident, saved
+        # anything drawn against the wrong image. Reported from real use 2026-08-22; the fall back
+        # to cur_img covers the paths that set roi_cache without going through either assignment
+        img = self._roi_cache_img or self.cur_img
         # Load channels for image from database
-        channels = [(x[1], x[2]) for x in self.requester.get_channels(self.cur_img["key"])]
-        editor = Editor(image=ImageLoader.load_image(self.cur_img["path"]),
+        channels = [(x[1], x[2]) for x in self.requester.get_channels(img["key"])]
+        editor = Editor(image=ImageLoader.load_image(img["path"]),
                         active_channels=channels,
                         roi=self.roi_cache, size_factor=self.settings["size_factor"],
-                        img_name=self.cur_img['file_name'],
-                        x_scale=self.cur_img["x_scale"], y_scale=self.cur_img["y_scale"])
+                        img_name=img['file_name'],
+                        x_scale=img["x_scale"], y_scale=img["y_scale"])
         editor.setWindowFlags(editor.windowFlags() |
                               QtCore.Qt.WindowSystemMenuHint |
                               QtCore.Qt.WindowMinMaxButtonsHint |
@@ -1841,8 +2052,7 @@ class NucDetect(QMainWindow):
             msg.setTextFormat(Qt.RichText)
             msg.setText(f.read())
             msg.setWindowTitle("About NucDetect")
-            with open(os.path.join(gpaths.css_dir, "main.css"), "r", encoding="utf-8") as cf:
-                msg.setStyleSheet(cf.read())
+            msg.setStyleSheet(Util.load_stylesheet("main.css"))
             msg.exec()
 
     def reflect_item_status_changes(self) -> None:
@@ -1870,18 +2080,43 @@ class NucDetect(QMainWindow):
             item = self.img_list_model.get_item_at_index((index.row()))
             item.setData(self.cur_img)
         if item:
-            if analysed:
-                if modified:
-                    item.setBackground(Color.ITEM_MODIFIED)
-                else:
-                    item.setBackground(Color.ITEM_ANALYSED)
-            else:
-                # Clear the role rather than painting a "default" colour: there is no colour that
-                # means "no highlight" -- any brush is drawn over the row. Without this branch a row
-                # whose analysis was just deleted kept its analysed/modified highlight, so its data
-                # and its colour disagreed until check_all_item_statuses next ran. That sibling has
-                # always had the reset branch, which is why the gap here survived: it looked correct
-                item.setData(None, Qt.BackgroundRole)
+            # The same painter as the sweep. This branch used to be a third copy of the same
+            # if/else, and the copy here was missing its reset arm -- a row whose analysis had just
+            # been deleted kept its highlight until check_all_item_statuses next ran
+            self.apply_status_background(item, analysed, modified)
+
+    @staticmethod
+    def apply_status_background(item: QStandardItem, analysed: bool, modified: bool) -> None:
+        """
+        Method to paint an image list item according to the state of its image
+
+        :param item: The list item to paint
+        :param analysed: Whether the image has been analysed
+        :param modified: Whether its result was edited by hand
+        :return: None
+        """
+        if analysed:
+            item.setBackground(Color.ITEM_MODIFIED if modified else Color.ITEM_ANALYSED)
+        else:
+            # Clear the role rather than painting a "default" colour: there is no colour that
+            # means "no highlight" -- any brush is drawn over the row. setData(None, ...)
+            # removes the role, which is how the view falls back to the palette
+            item.setData(None, Qt.BackgroundRole)
+
+    def on_rows_revealed(self, parent: QModelIndex, first: int, last: int) -> None:
+        """
+        Method to mark the rows the image list has just revealed
+
+        Connected to the model's rowsInserted, which it emits from fetchMore and from add_path.
+
+        :param parent: The parent index of the inserted rows. Always invalid for this flat model
+        :param first: The first inserted row
+        :param last: The last inserted row
+        :return: None
+        """
+        if parent.isValid():
+            return
+        self.check_item_statuses_in_range(first, last)
 
     def check_all_item_statuses(self) -> None:
         """
@@ -1889,25 +2124,33 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
+        # Guarded here as well as in the range form it delegates to. This is a public entry point
+        # called from three places, and the invariant verify_thread_affinity enforces is that every
+        # ui-mutating entry point carries the guard -- not that some caller further down does
         self._assert_main_thread("check_all_item_statuses")
+        self.check_item_statuses_in_range(0, self.ui.list_images.model().rowCount() - 1)
+
+    def check_item_statuses_in_range(self, first: int, last: int) -> None:
+        """
+        Method to re-derive and paint the status of the given range of image list rows
+
+        :param first: The first row to check
+        :param last: The last row to check, inclusive
+        :return: None
+        """
+        self._assert_main_thread("check_item_statuses_in_range")
         model = self.ui.list_images.model()
-        for index in range(model.rowCount()):
+        # Clamped rather than trusted: check_all_item_statuses passes rowCount() - 1, which is -1
+        # on an empty list, and a reveal can in principle be reported for rows a later reset has
+        # already dropped
+        for index in range(max(first, 0), min(last, model.rowCount() - 1) + 1):
             item = model.get_item_at_index(index)
             data = item.data()
             analysed, modified = Util.check_if_image_was_analysed_and_modified(data["key"])
             data["analysed"] = analysed
             data["modified"] = modified
             item.setData(data)
-            if analysed:
-                if modified:
-                    item.setBackground(Color.ITEM_MODIFIED)
-                else:
-                    item.setBackground(Color.ITEM_ANALYSED)
-            else:
-                # Clear the role rather than painting a "default" colour: there is no colour that
-                # means "no highlight" -- any brush is drawn over the row. setData(None, ...)
-                # removes the role, which is how the view falls back to the palette
-                item.setData(None, Qt.BackgroundRole)
+            self.apply_status_background(item, analysed, modified)
 
     def on_close(self) -> None:
         """
@@ -2180,8 +2423,7 @@ def show_error_message(title: str, info: str, text: str) -> None:
     msg = QMessageBox()
     msg.setIcon(QMessageBox.Critical)
     msg.setWindowIcon(Icon.get_icon("LOGO"))
-    with open(os.path.join(gpaths.css_dir, "messagebox.css"), "r", encoding="utf-8") as f:
-        msg.setStyleSheet(f.read())
+    msg.setStyleSheet(Util.load_stylesheet("messagebox.css"))
     msg.setText(text)
     msg.setInformativeText(info)
     msg.setWindowTitle(title)
@@ -2225,6 +2467,48 @@ def thread_exception_hook(args) -> None:
         _MAIN_WINDOW.err_signal.emit(thread_name, text)
 
 
+def prewarm_analysis_jit() -> None:
+    """
+    Compile the numba-jitted ellipse path, so the first analysis does not have to
+
+    **Why this exists.** ~27 `@njit` functions compile on their first call, and the cost lands
+    almost entirely in ellipse parameter calculation: measured 2.239 s for the first real pass in a
+    cold process against 0.001 s once warm. That is a stall the user sees at ~98.7 % of the progress
+    bar, on the first analysis after every launch, and the progress weights deliberately model warm
+    runs only -- so the bar sits still there rather than misreporting.
+
+    **A synthetic ROI, driven through the real method.** Calling `calculate_ellipse_parameters` on a
+    throwaway ROI compiles exactly the signatures the real call needs, because numba compiles per
+    type signature and the area is a plain list of `(row, first_col, length)` int tuples either way.
+    Reaching into the jitted functions directly would compile whatever signature this function
+    happened to spell, which could drift from the real one without anything failing -- the warm-up
+    would simply stop working.
+
+    **NOT numba's `cache=True`**, which was used here once and removed: it keys on a function's own
+    bytecode and does not reliably invalidate on the jitted helpers it calls, so editing one can
+    leave a stale compiled caller silently running the old logic.
+
+    **Batch analysis is deliberately not covered.** Its workers are separate processes that do not
+    inherit anything compiled here, and each pays its own compilation on its first image --
+    concurrently, which is what warming them in the pool initializer would also do. There is no
+    saving there to collect.
+
+    :return: None
+    """
+    try:
+        start = time.time()
+        warm = ROI(main=True, channel="Blue", auto=True)
+        # A small filled block. The values are irrelevant; only their TYPES reach the compiler
+        warm.set_area([(row, 5, 12) for row in range(5, 17)])
+        warm.calculate_ellipse_parameters()
+        LOGGER.info("Analysis routines compiled in %.2f secs", time.time() - start)
+    except Exception:
+        # An optimisation must never take down the application it is speeding up. A failure here
+        # costs the first analysis a stall, which is exactly the shipped behaviour without it
+        LOGGER.exception("Pre-compiling the analysis routines failed -- the first analysis will "
+                         "pay the compilation instead")
+
+
 def main() -> None:
     """
     Function to start the program
@@ -2246,19 +2530,29 @@ def main() -> None:
         splash.showMessage("Checking for thumbnails...")
         LOGGER.info("Check files for thumbnails...")
         # Count number of available images
-        total = 0
+        # ONLY image files, and this filter is the whole of the fix for a startup crash.
+        #
+        # This walk used to thumbnail EVERY file it found. A single non-image file in
+        # ~/NucDetect/images -- a .txt, a spreadsheet, a stray note -- reached io.imread and
+        # killed the application during the splash screen with "Could not find a backend to open
+        # ... with iomode 'r'". Reported from real use on 2026-08-22, with .txt files there.
+        #
+        # The folder is the user's own and nothing stops them keeping other files in it, so
+        # filtering is the correct behaviour rather than a guard against the impossible.
+        images = []
         for root, dirs, files in os.walk(gpaths.images_path):
-            total += len(files)
+            images.extend(os.path.join(root, f) for f in files
+                          if os.path.splitext(f)[1].lower() in Util.IMAGE_FORMATS)
+        total = len(images)
         file_index = 1
-        for root, dirs, files in os.walk(gpaths.images_path):
-            for file in files:
-                msg = f"{file_index: 04d}:{total: 04d} checked..."
-                # Deliberately not logged: this is a transient progress indicator that overwrites
-                # itself on one console line, not a diagnostic worth a line in the log file
-                print(msg, end="\r", flush=True)
-                splash.showMessage(msg)
-                Util.create_thumbnail(os.path.join(root, file))
-                file_index += 1
+        for image in images:
+            msg = f"{file_index: 04d}:{total: 04d} checked..."
+            # Deliberately not logged: this is a transient progress indicator that overwrites
+            # itself on one console line, not a diagnostic worth a line in the log file
+            print(msg, end="\r", flush=True)
+            splash.showMessage(msg)
+            Util.create_thumbnail(image)
+            file_index += 1
         # Close the in-place progress line before anything else writes to the console
         print()
         LOGGER.info("All files checked for thumbnails, starting...")
@@ -2266,6 +2560,14 @@ def main() -> None:
         _MAIN_WINDOW = main_win
         splash.finish(main_win)
         main_win.show()
+        # AFTER show(), on a background thread, and deliberately not during the splash screen: the
+        # compilation costs a few seconds and would lengthen EVERY launch, including the ones where
+        # nobody analyses anything. Started here the window is already usable, and by the time an
+        # image has been loaded and Analyse pressed it has long finished. Romano's call, 2026-08-22.
+        #
+        # A daemon thread, so it cannot hold the application open if someone quits immediately; it
+        # touches no Qt object and no database, only numba
+        threading.Thread(target=prewarm_analysis_jit, name="jit-prewarm", daemon=True).start()
         sys.exit(app.exec_())
 
 

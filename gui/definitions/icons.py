@@ -22,6 +22,15 @@ DEFAULT_ICON_SIZE = QSize(75, 75)
 class Color:
     ITEM_ANALYSED = QColor("#5A597387")
     ITEM_MODIFIED = QColor("#5A8c9ea3")
+    #: Text colour for the image(s) whose results the table is currently showing. A FOREGROUND
+    #: colour on purpose: the two above are backgrounds carrying the analysed/modified state, and
+    #: "is being shown" is orthogonal to both -- an image can be any combination of the three, so
+    #: reusing the background would let one state hide another. Paired with a bold font in
+    #: NucDetect._mark_displayed_images
+    ITEM_DISPLAYED = QColor("#ffd479")
+    #: The unmarked text colour. QStandardItem has no "clear the foreground" call, so the default
+    #: has to be stated rather than omitted. White, matching the stylesheet's QWidget colour
+    ITEM_DEFAULT_TEXT = QColor("#ffffff")
     BRIGHT_RED = QColor(222, 23, 56)
     LIGHT_BLUE = QColor(47, 167, 212)
     INVISIBLE = QColor(0, 0, 0, 0)

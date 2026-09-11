@@ -28,6 +28,7 @@ from core.DataProcessing import euclidean_distance, perform_statistical_analysis
 from gui.Plots import PlotCanvas
 from gui.Util import create_image_item_list_from
 from core.database.connections import Inserter, Requester
+from core.logging_config import get_logger
 from gui.definitions.icons import Icon, Color
 from core.detector_modules import AreaAndROIExtractor
 from gui.dialogs.GraphicsItems import EditorView, ROIItem
@@ -41,6 +42,9 @@ from core.roi.ROIHandler import ROIHandler
 # Excel's own limit on a worksheet title. openpyxl only warns above it, but the workbook is then
 # unreadable for some applications, so the export truncates rather than relying on the warning
 MAX_SHEET_NAME_LENGTH = 31
+
+
+LOGGER = get_logger(__name__)
 
 
 class DataExportDialog(QDialog):
@@ -439,7 +443,18 @@ class Editor(QDialog):
         self.image = image
         self.img_name = img_name
         self.roi = roi
-        self.active_channels = active_channels
+        # Only the channels the loaded array actually HAS. This list comes from the channels table,
+        # which can disagree with the file: nothing ever deleted a channel row, so an image
+        # registered once with more channels than it has now kept the surplus indices, and picking
+        # one raised `IndexError: index 4 is out of bounds for axis 2 with size 4` from inside the
+        # combo box's lambda, where nothing could catch it. Filtering here serves both consumers --
+        # this dialog's combo box and the EditorView constructed below
+        available = self.image.shape[2] if self.image.ndim > 2 else 1
+        self.active_channels = [x for x in active_channels if x[0] < available]
+        dropped = [x[1] for x in active_channels if x[0] >= available]
+        if dropped:
+            LOGGER.warning("Image %s has %d channels but the database lists %d -- not offering %s",
+                           img_name, available, len(active_channels), dropped)
         self.size_factor = size_factor
         self.temp_items = []
         self.x_scale = x_scale
@@ -482,8 +497,6 @@ class Editor(QDialog):
         self.ui.btn_auto.setVisible(False)
         self.ui.btn_show.setIcon(Icon.get_icon("CIRCLE"))
         self.ui.btn_coords.setIcon(Icon.get_icon("MOUSE"))
-        self.ui.btn_preview.setIcon(Icon.get_icon("EYE"))
-        self.ui.btn_accept.setIcon(Icon.get_icon("CHECK"))
         # Explicit ids, so the mapping to EditorView's modes stops depending on the order the
         # buttons happen to appear in the .ui file. Qt numbers them -2, -3, -4 in that order, and
         # change_mode below used to recover the mode with `abs(id_) - 3` -- correct only by
@@ -500,15 +513,21 @@ class Editor(QDialog):
         self.ui.btn_coords.toggled.connect(
             lambda: self.set_status(f"Coordinate Tracking: {self.ui.btn_coords.isChecked()}")
         )
-        # Filled from the channels the editor can actually SHOW, not from every ident in the
-        # handler. show_channel looks the chosen name up in EditorView.active_channels, which is
-        # built from the active_channels argument -- so a channel present in roi.idents but absent
-        # from it raised KeyError the moment the user picked it. The idents order is kept, so the
-        # combo still reads in channel order; only the unshowable entries are left out
-        showable = {name for _, name in self.active_channels}
-        for ident in self.roi.idents:
-            if ident in showable:
-                self.ui.cbx_channel.addItem(ident)
+        # EVERY channel the editor can show, in channel-index order -- not only the ones that
+        # already have roi.
+        #
+        # This used to iterate `self.roi.idents`, which holds only the channels something was
+        # DETECTED in. A channel with no detection never appeared, so it could not be selected, so
+        # nothing could be drawn on it -- and a channel with nothing on it is exactly the one a user
+        # needs to open in order to add the first item by hand. On a 4- or 5-channel image the combo
+        # typically offered the first three and Composite, and the extra channels were unreachable.
+        # Reported from real use, 2026-08-22.
+        #
+        # The KeyError this replaced is still guarded, and better: `show_channel` looks the chosen
+        # name up in `EditorView.active_channels`, which is built from this same argument, so every
+        # entry added here is showable by construction rather than by filtering.
+        for _, name in sorted(self.active_channels, key=lambda channel: channel[0]):
+            self.ui.cbx_channel.addItem(name)
         self.ui.cbx_channel.addItem("Composite")
         self.ui.cbx_channel.setCurrentText("Composite")
         self.ui.cbx_channel.currentIndexChanged.connect(
@@ -546,8 +565,6 @@ class Editor(QDialog):
         self.ui.spb_height.setMinimum(0)
         self.ui.spb_height.setMaximum(sy)
         self.ui.spb_opacity.valueChanged.connect(self.change_opacity)
-        self.ui.btn_preview.clicked.connect(self.set_changes)
-        self.ui.btn_accept.clicked.connect(self.set_changes)
 
     def enable_white_balance_mode(self) -> None:
         """
@@ -638,24 +655,24 @@ class Editor(QDialog):
         self.size_factor = new_value
         self.editor.size_factor = new_value
 
-    def set_changes(self, override: bool = False) -> None:
+    def set_changes(self) -> None:
         """
-        Method to make changes to existing item
+        Method to apply the values in the editing spin boxes to the selected item
 
-        :param override: Forces method to apply the made changes
+        Reached from the **A** hotkey. The Preview and Accept buttons this also served were removed
+        on 2026-09-08 (RW: *"Both can be removed"*) -- they were `enabled=false` in the .ui and
+        nothing ever enabled them, so they had never been clickable. With them went the
+        `sender() == btn_preview` test, which was the only thing that ever decided preview from
+        commit, and the `override` parameter that existed to bypass it.
+
         :return: None
         """
-        if not override:
-            # Get the info if this should be a preview or permanent
-            preview = self.sender() == self.ui.btn_preview
-        else:
-            preview = False
         # Define QRect to adjust position of item
         x, y = self.ui.spb_x.value(), self.ui.spb_y.value(),
         width, height = self.ui.spb_width.value(), self.ui.spb_height.value()
         rect = QRectF(x - width / 2, y - height / 2, width, height)
         angle = self.ui.spb_angle.value()
-        self.editor.set_changes(rect, angle, preview)
+        self.editor.set_changes(rect, angle)
 
     def preview_changes(self) -> None:
         """
@@ -678,20 +695,58 @@ class Editor(QDialog):
         """
         Method to display the information of the selected item
 
+        Called when the SELECTION changes. A change to the geometry of an already selected item goes
+        to update_editing_values instead -- it is the half that has to run on every step of a drag,
+        and re-enabling widgets and rewriting the hash label sixty times a second is not free
+
         :param item: The item to retrieve the information from
         :return: None
         """
-        self.connect_spinboxes_to_change_function(False)
-        self.ui.spb_x.setValue(int(item.center[0]))
-        self.ui.spb_y.setValue(int(item.center[1]))
-        self.ui.spb_width.setValue(int(item.width))
-        self.ui.spb_height.setValue(int(item.height))
-        self.ui.spb_angle.setValue(item.angle)
-        self.connect_spinboxes_to_change_function()
-        self.ui.btn_preview.setEnabled(False)
-        self.ui.btn_accept.setEnabled(False)
+        self.update_editing_values(item)
         self.enable_editing_widgets(True)
         self.display_hash(str(item.roi_id))
+
+    def update_editing_values(self, item: ROIItem) -> None:
+        """
+        Method to write the given item's geometry into the five editing spin boxes
+
+        The spin boxes are disconnected while they are written and reconnected afterwards, because
+        setValue emits valueChanged -- without that, filling the boxes would drive preview_changes,
+        which reads the boxes and pushes the result straight back onto the item
+
+        :param item: The item to read the geometry from
+        :return: None
+        """
+        self.write_editing_values(item.center[0], item.center[1],
+                                  item.width, item.height, item.angle)
+
+    def write_editing_values(self, center_x: float, center_y: float,
+                             width: float, height: float, angle: float) -> None:
+        """
+        Method to write an explicit geometry into the five editing spin boxes
+
+        Takes values rather than an item, because a gesture in progress is a PREVIEW: the item's own
+        center/width/height are deliberately not written until the mouse is released, so reading
+        them during a drag would show the geometry the item had before the gesture started
+
+        :param center_x: The x coordinate of the ellipse center
+        :param center_y: The y coordinate of the ellipse center
+        :param width: The length of the major axis
+        :param height: The length of the minor axis
+        :param angle: The clockwise angle of the major axis
+        :return: None
+        """
+        self.connect_spinboxes_to_change_function(False)
+        # round, not int: int() truncates, so a centre of 147.996 was shown as 147. That was
+        # invisible while geometry could only be typed in, and constant once it can be dragged --
+        # and it is not only a display wart, because pressing Accept writes the SPIN BOX value back
+        # onto the item, so truncating drifted the item a pixel every time
+        self.ui.spb_x.setValue(round(center_x))
+        self.ui.spb_y.setValue(round(center_y))
+        self.ui.spb_width.setValue(round(width))
+        self.ui.spb_height.setValue(round(height))
+        self.ui.spb_angle.setValue(angle)
+        self.connect_spinboxes_to_change_function()
 
     def enable_editing_widgets(self, enable: bool = True) -> None:
         """
@@ -706,8 +761,6 @@ class Editor(QDialog):
         self.ui.spb_height.setEnabled(enable)
         self.ui.spb_angle.setEnabled(enable)
         if not enable:
-            self.ui.btn_preview.setEnabled(enable)
-            self.ui.btn_accept.setEnabled(enable)
             self.ui.spb_x.setValue(0)
             self.ui.spb_y.setValue(0)
             self.ui.spb_width.setValue(0)
@@ -734,7 +787,7 @@ class Editor(QDialog):
         elif event.key() == Qt.Key_P:
             self.preview_changes()
         elif event.key() == Qt.Key_A:
-            self.set_changes(override=True)
+            self.set_changes()
         elif event.key() == Qt.Key_Shift:
             self.editor.shift_down = True
 
@@ -1634,6 +1687,9 @@ class ExperimentDialog(QDialog):
             add_item.setText(text)
             add_item.setData(
                 {"name": name,
+                 # None, not the name: this experiment has no row in the database yet, so there is
+                 # nothing for save_changes to rename FROM
+                 "loaded_name": None,
                  "details": "",
                  "notes": "",
                  "groups": {},
@@ -1699,15 +1755,33 @@ class ExperimentDialog(QDialog):
         for ind in range(self.exp_model.rowCount()):
             item = self.exp_model.item(ind)
             data = item.data()
+            # The name this experiment was READ under, or None for one added in this dialog. A
+            # rename used to be indistinguishable from a new experiment: add_new_experiment is an
+            # INSERT OR REPLACE keyed on the name, so it wrote a second row and left the first
+            # standing with every group and image association still pointing at the old name
+            loaded_name = data.get("loaded_name")
+            if loaded_name is not None and loaded_name != data["name"]:
+                data = self.apply_pending_rename(item, data, loaded_name)
             # Only what changed. add_new_experiment is an INSERT OR REPLACE, so an untouched
             # experiment had its details and notes rewritten from this model on every OK, along
             # with a group row and an image association per image it holds. An experiment absent
-            # from loaded_state is new and always written
-            if self.get_experiment_fingerprint(data) == self.loaded_state.get(data["name"]):
+            # from loaded_state is new and always written.
+            # Looked up under the name it was LOADED under, not its current one -- otherwise a
+            # rename finds nothing in the snapshot and the comparison is meaningless. The
+            # fingerprint includes the name, so a renamed experiment differs from its snapshot and
+            # is written
+            if self.get_experiment_fingerprint(data) == self.loaded_state.get(loaded_name or data["name"]):
                 continue
             # Add experiment to database
             self.inserter.add_new_experiment(data["name"], data["details"], data["notes"])
-            # Update group data
+            # REPLACED, not merged. add_image_to_experiment_group is an INSERT OR REPLACE and
+            # nothing deleted from the groups table, so a removal made in this dialog or in the
+            # group dialog was undone by this very loop -- the stored row survived, and
+            # get_associated_images_for_experiment reads that table before images.experiment.
+            # Deleting the experiment's rows first makes what the model holds authoritative, which
+            # is also what preserves images that are not currently LOADED: they are still in
+            # data["groups"], so they are written straight back
+            self.inserter.remove_group_associations_for_experiment(data["name"])
             for group, values in data["groups"].items():
                 for img in values:
                     self.inserter.add_image_to_experiment_group(img, data["name"], group)
@@ -1758,6 +1832,12 @@ class ExperimentDialog(QDialog):
             # image is simply not associated any more
             if item_data["key"] in exp_data["keys"]:
                 exp_data["keys"].remove(item_data["key"])
+            # ...and out of the GROUPS too. Experiment membership is read from the groups table,
+            # not from images.experiment, so leaving the key here meant save_changes re-inserted
+            # the row this method had just NULLed and the image came back on the next load
+            for group in exp_data["groups"].values():
+                if item_data["key"] in group:
+                    group.remove(item_data["key"])
             self.inserter.remove_image_from_experiment(item_data["key"])
             exp.setData(exp_data)
             # Remove item from model
@@ -1773,6 +1853,9 @@ class ExperimentDialog(QDialog):
         exp = self.exp_model.itemFromIndex(self.ui.lv_experiments.selectionModel().selectedIndexes()[0])
         exp_data = exp.data()
         exp_data["keys"] = []
+        # Emptied for the same reason as in remove_images_from_experiment: the groups table decides
+        # membership, so an experiment cleared here came back full on the next load
+        exp_data["groups"] = {}
         exp.setData(exp_data)
         self.inserter.remove_all_images_from_experiment(exp_data["name"])
         # Clear image model
@@ -1843,6 +1926,9 @@ class ExperimentDialog(QDialog):
             add_item.setData(
                 {
                     "name": name,
+                    # The name as stored. save_changes compares it against "name" to tell a rename
+                    # from an edit, and looks the experiment up in loaded_state by it
+                    "loaded_name": name,
                     "details": details,
                     "notes": notes,
                     "groups": groups,
@@ -1853,6 +1939,35 @@ class ExperimentDialog(QDialog):
             add_item.setIcon(Icon.get_icon("CLIPBOARD"))
             self.loaded_state[name] = self.get_experiment_fingerprint(add_item.data())
             self.exp_model.appendRow(add_item)
+
+    def apply_pending_rename(self, item: QStandardItem, data: Dict, loaded_name: str) -> Dict:
+        """
+        Method to carry out a pending rename of the given experiment
+
+        Refuses a name that is empty or already taken and reverts to the loaded one. Inserter.
+        rename_experiment updates rows BY NAME, so renaming onto an existing experiment would
+        merge the two -- strictly worse than the duplicate this fix removes. add_experiment has
+        always refused both for a NEW experiment; the line edit that renames never did, and it
+        could not matter while a rename merely created a second row.
+
+        :param item: The list item holding the experiment
+        :param data: The item's data dictionary, with the new name already written into it
+        :param loaded_name: The name the experiment was read from the database under
+        :return: The data dictionary, with the name reverted if the rename was refused
+        """
+        taken = any(self.exp_model.item(row).data()["name"] == data["name"]
+                    for row in range(self.exp_model.rowCount())
+                    if self.exp_model.item(row) is not item)
+        if not data["name"] or taken:
+            QMessageBox.information(
+                self, "Rename experiment...",
+                "Please enter a name." if not data["name"]
+                else f"An experiment named '{data['name']}' already exists.")
+            data["name"] = loaded_name
+            item.setData(data)
+            return data
+        self.inserter.rename_experiment(loaded_name, data["name"])
+        return data
 
     @staticmethod
     def get_experiment_fingerprint(data: Dict) -> Tuple:
@@ -1993,8 +2108,14 @@ class ExperimentDialog(QDialog):
             # Get item data and append key
             keys.append(img_item.data()["key"])
             img_paths.append(img_item.data()["path"])
-        groups = item.data()["groups"]
-        item.setData(
+        # UPDATED, not rebuilt. This used to assign a fresh six-key dictionary, which silently
+        # dropped "loaded_name" -- the name the experiment was read under, added 2026-09-01 so that
+        # save_changes can tell a rename from a new experiment. The method runs on every
+        # DESELECTION, so renaming an experiment and then clicking a different one restored the
+        # duplicate the rename fix had removed. A literal cannot carry a key added after it
+        data = item.data()
+        groups = data["groups"]
+        data.update(
             {
                 "name": name,
                 "details": details,
@@ -2004,6 +2125,7 @@ class ExperimentDialog(QDialog):
                 "image_paths": img_paths
             }
         )
+        item.setData(data)
         item.setText(self.create_experiment_label(name, details, groups))
 
     def clear_experiment_screen(self) -> None:
@@ -2132,6 +2254,11 @@ class StatisticsDialog(QDialog):
         self.setStyleSheet(Util.load_stylesheet("main.css"))
         self._initialize_plot_widgets()
         self.ui.tv_group_data.setModel(DataFrameModel(self.data))
+        # Sorting was never switched on, on either view -- a QTableView does not sort on a header
+        # click unless it is told to, so the header was inert. Safe because DataFrameModel.set_df
+        # stores df.copy(): sorting the view cannot reorder StatisticsDialog.data, and with it every
+        # statistic and every export derived from it
+        self.ui.tv_group_data.setSortingEnabled(True)
         self.ui.tv_group_data.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.ui.tv_group_data.verticalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.ui.btn_statistics.clicked.connect(self.calculate_and_display_statistics)
@@ -2164,6 +2291,8 @@ class StatisticsDialog(QDialog):
         """
         if not isinstance(self.ui.tv_group_statistics.model(), DataFrameModel):
             self.ui.tv_group_statistics.setModel(DataFrameModel(self.statistics))
+            # See tv_group_data above -- both views take their sorting from the same model class
+            self.ui.tv_group_statistics.setSortingEnabled(True)
         else:
             # Reset the view and add the newly calculated data
             self.ui.tv_group_statistics.model().setDataFrame(self.statistics)

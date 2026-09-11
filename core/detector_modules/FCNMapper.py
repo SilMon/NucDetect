@@ -1,4 +1,5 @@
 import os
+import threading
 from typing import Iterable, Dict, List, Tuple
 import numpy as np
 import tensorflow as tf
@@ -19,6 +20,12 @@ import gui.Paths as gpaths
 from core.logging_config import get_logger
 
 LOGGER = get_logger(__name__)
+
+# The process-wide Keras model, loaded at most once. See FCNMapper.load_model for why this is a
+# module global rather than a class or instance attribute -- in short, so that it is per-process and
+# so that it never enters the pickle batch analysis makes of Detector.
+_MODEL_CACHE = None
+_MODEL_CACHE_LOCK = threading.Lock()
 from core.detector_modules.AreaMapper import AreaMapper
 from core.detector_modules.ImageLoader import dtype_max
 
@@ -86,14 +93,66 @@ class FCNMapper(AreaMapper):
                 LOGGER.warning("Could not set dynamic GPU memory growth: %s", e)
 
     @staticmethod
-    def load_model() -> models.Model:
+    def load_model(use_cache: bool = True) -> models.Model:
         """
-        Method to load the ML models
+        Method to load the ML model, reusing the one already loaded in this process
+
+        **The cache is the point of this method, not an optimisation detail.**
+        ``Detector.ml_roi_extraction`` constructs a new ``FCNMapper`` for every image, and every
+        ``FCNMapper`` used to load its own model. Reading the file again is the small half of that
+        cost -- measured at 0.359 s. The large half is that **each freshly loaded model brings its
+        own ``predict_function``, so TensorFlow re-traces it**, and inference itself then runs far
+        slower: measured 6.29 s with one reused model against 11.10 s with a fresh model per image,
+        **+76 %**, with TensorFlow emitting "triggered tf.function retracing" exactly where
+        predicted. That is roughly 30 % of the whole u-net stage. Full measurement in the
+        2026-08-21 ML pipeline timings.
+
+        **Module level, not instance level, and that matters for two reasons.** A module global is
+        per-process, so a ``ProcessPoolExecutor`` worker gets its own and never shares a TensorFlow
+        object across processes; and it is not part of any instance's ``__dict__``, so it cannot be
+        dragged into the pickle that batch analysis makes of ``Detector`` once per image. The
+        existing invariant that ``Detector.release_transient_state`` drops ``self.fcnmapper`` before
+        that pickle happens is untouched -- this change only means the next mapper is cheap to
+        build rather than expensive.
+
+        **Memory trade, stated plainly:** the model (~11 MiB resident) now lives for the lifetime of
+        the process rather than being rebuilt per image. That is the intended exchange, and in a
+        batch it replaces N loads with one per worker.
+
+        :param use_cache: False forces a fresh load, bypassing and NOT populating the cache. Exists
+            for measurement -- it is what lets the retracing cost above be reproduced on demand --
+            and has no use in the application
+        :return: The Keras model
+        """
+        global _MODEL_CACHE
+        if not use_cache:
+            return models.load_model(os.path.join(gpaths.model_dir, "detector.keras"))
+        # Double-checked under the lock. The application analyses one image at a time per process,
+        # so contention is not expected, but a Qt worker thread and the main thread can both reach
+        # this and a race would build two models and keep whichever was assigned last -- wasting a
+        # load and, worse, handing different callers different objects, which is the retracing
+        # problem again in a subtler form
+        if _MODEL_CACHE is None:
+            with _MODEL_CACHE_LOCK:
+                if _MODEL_CACHE is None:
+                    path = os.path.join(gpaths.model_dir, "detector.keras")
+                    LOGGER.debug("Loading detection model from %s", path)
+                    _MODEL_CACHE = models.load_model(path)
+        return _MODEL_CACHE
+
+    @staticmethod
+    def clear_model_cache() -> None:
+        """
+        Drop the cached model, so the next load rebuilds it
+
+        For tests and measurement. The application has no reason to call it: the model is read-only
+        once loaded, and dropping it only means paying the load and the re-trace again.
+
         :return: None
         """
-        path = os.path.join(gpaths.model_dir, "detector.keras")
-        model = models.load_model(path)
-        return model
+        global _MODEL_CACHE
+        with _MODEL_CACHE_LOCK:
+            _MODEL_CACHE = None
 
     def get_marked_maps(self) -> List[np.ndarray]:
         """

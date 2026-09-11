@@ -486,48 +486,6 @@
        </item>
       </layout>
      </item>
-     <item>
-      <layout class="QVBoxLayout" name="verticalLayout_3">
-       <item>
-        <widget class="QPushButton" name="btn_preview">
-         <property name="enabled">
-          <bool>false</bool>
-         </property>
-         <property name="maximumSize">
-          <size>
-           <width>200</width>
-           <height>16777215</height>
-          </size>
-         </property>
-         <property name="toolTip">
-          <string>Button to preview changes</string>
-         </property>
-         <property name="text">
-          <string>Preview</string>
-         </property>
-        </widget>
-       </item>
-       <item>
-        <widget class="QPushButton" name="btn_accept">
-         <property name="enabled">
-          <bool>false</bool>
-         </property>
-         <property name="maximumSize">
-          <size>
-           <width>200</width>
-           <height>16777215</height>
-          </size>
-         </property>
-         <property name="toolTip">
-          <string>Button to accept the performed changes</string>
-         </property>
-         <property name="text">
-          <string>Accept</string>
-         </property>
-        </widget>
-       </item>
-      </layout>
-     </item>
     </layout>
    </item>
    <item>

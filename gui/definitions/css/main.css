@@ -1,4 +1,32 @@
 /* =======================================================================
+   @@CSS_DIR@@ -- SUBSTITUTED AT LOAD TIME, DO NOT "FIX" IT TO A REAL PATH
+   =======================================================================
+
+   Every url() below is written against the @@CSS_DIR@@ placeholder, which
+   Util.load_stylesheet replaces with the absolute path of this directory.
+
+   Qt resolves a relative url() against the CURRENT WORKING DIRECTORY, not
+   against the stylesheet's own location. These urls used to be written
+   relative to the project root and resolved only because
+   Paths.get_main_folder_path chdir'd there at import time -- so they worked
+   in a development run and silently drew nothing in a frozen build. The
+   chdir is gone; the placeholder is what replaces it.
+
+   (No worked example of the old form appears in this comment on purpose: a
+   literal relative url() in a comment is indistinguishable from a live rule
+   to anything that greps this file, including the harness that guards it.)
+
+   The placeholder is deliberate rather than a silent rewrite of relative
+   paths: an unsubstituted @@CSS_DIR@@ is broken in EVERY environment and
+   shows up immediately, whereas a relative path keeps working by accident
+   whenever the process happens to start in the right directory -- which is
+   exactly how the original defect stayed invisible.
+
+   Read this file through Util.load_stylesheet. A bare open().read() gets the
+   placeholder verbatim and the images will not draw.
+   ======================================================================= */
+
+/* =======================================================================
    Base palette and typography
    ======================================================================= */
 
@@ -147,12 +175,12 @@ QAbstractSpinBox::down-button:hover {
 
 /* Upper white triangle (up arrow) */
 QAbstractSpinBox::up-arrow {
-    image: url(gui/definitions/css/arrow_up.png);
+    image: url(@@CSS_DIR@@/arrow_up.png);
 }
 
 /* Lower white triangle (down arrow) */
 QAbstractSpinBox::down-arrow {
-    image: url(gui/definitions/css/arrow_down.png);
+    image: url(@@CSS_DIR@@/arrow_down.png);
 }
 
 /* Dim arrows when disabled */
@@ -179,7 +207,7 @@ QCheckBox::indicator {
 
 QCheckBox::indicator:checked {
     background-color: #205c9c;
-    image: url(gui/definitions/css/checkmark.png);
+    image: url(@@CSS_DIR@@/checkmark.png);
 }
 
 QRadioButton::indicator {
@@ -189,7 +217,7 @@ QRadioButton::indicator {
 }
 
 QRadioButton::indicator:checked {
-    image: url(gui/definitions/css/circle.png);
+    image: url(@@CSS_DIR@@/circle.png);
     background-color: #205c9c;
 }
 
@@ -237,11 +265,11 @@ QHeaderView::down-arrow {
 
 /* Same two white triangles the spin boxes use */
 QHeaderView::up-arrow {
-    image: url(gui/definitions/css/arrow_up.png);
+    image: url(@@CSS_DIR@@/arrow_up.png);
 }
 
 QHeaderView::down-arrow {
-    image: url(gui/definitions/css/arrow_down.png);
+    image: url(@@CSS_DIR@@/arrow_down.png);
 }
 
 /* List widgets (if used) */
