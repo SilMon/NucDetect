@@ -115,6 +115,14 @@ class Connector:
         """
         self.connection.commit()
 
+    def rollback_changes(self) -> None:
+        """
+        Method to discard all changes made since the last commit
+
+        :return: None
+        """
+        self.connection.rollback()
+
     def close_connection(self) -> None:
         """
         Method to close the established connection
@@ -406,6 +414,19 @@ class DatabaseInteractor:
         :return: None
         """
         self.connector.commit_changes()
+
+    def rollback_and_close(self) -> None:
+        """
+        Method to discard all changes made since the last commit and close the connection
+
+        The counterpart of commit_and_close, for a save the user cancels partway through. Every
+        write between them is in one open transaction, so discarding it is a true cancel rather
+        than a half-applied save.
+
+        :return: None
+        """
+        self.connector.rollback_changes()
+        self.connector.close_connection()
 
     def commit_and_close(self) -> None:
         """

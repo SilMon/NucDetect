@@ -571,7 +571,10 @@ class Editor(QDialog):
         self.initialize_ui()
 
     def accept(self) -> None:
-        self.editor.apply_all_changes()
+        # The editor answers False when the user cancels the confirmation for foci that lie outside
+        # every nucleus. Closing anyway would discard the very edits they went back to correct
+        if not self.editor.apply_all_changes():
+            return
         super().accept()
 
     def initialize_ui(self) -> None:
@@ -713,10 +716,12 @@ class Editor(QDialog):
         :param connect: If false, the spinbox will be disconnected
         :return: None
         """
+        # set_changes, not the preview_changes that stood here until 2026-09-13. The two built the
+        # same rectangle and called the same method; the duplicate is gone and this is the survivor
         if connect:
-            spin.valueChanged.connect(self.preview_changes)
+            spin.valueChanged.connect(self.set_changes)
         else:
-            spin.valueChanged.disconnect(self.preview_changes)
+            spin.valueChanged.disconnect(self.set_changes)
 
     def change_opacity(self, new_value: float) -> None:
         """
@@ -741,11 +746,21 @@ class Editor(QDialog):
         """
         Method to apply the values in the editing spin boxes to the selected item
 
-        Reached from the **A** hotkey. The Preview and Accept buttons this also served were removed
-        on 2026-09-08 (RW: *"Both can be removed"*) -- they were `enabled=false` in the .ui and
-        nothing ever enabled them, so they had never been clickable. With them went the
-        `sender() == btn_preview` test, which was the only thing that ever decided preview from
-        commit, and the `override` parameter that existed to bypass it.
+        Reached from the **A** hotkey, which is now the only one. The Preview and Accept buttons
+        this also served were removed on 2026-09-08 (RW: *"Both can be removed"*) -- they were
+        `enabled=false` in the .ui and nothing ever enabled them, so they had never been clickable.
+        With them went the `sender() == btn_preview` test, which was the only thing that ever
+        decided preview from commit, and the `override` parameter that existed to bypass it.
+
+        **A second hotkey, P, was removed on 2026-09-13.** It called a `preview_changes` that built
+        the same rectangle and called the same method, so P had never previewed anything -- it did
+        what A does. Two keys for one behaviour, neither documented anywhere, is worse than one, and
+        A is the honest name for a commit. In practice the geometry is already applied before either
+        key is pressed, because the spin boxes commit on `valueChanged`; the key is a way to apply a
+        value typed and left unconfirmed.
+
+        If a REAL preview is ever wanted for typed values, P is the place for it -- the drag path
+        already has one, since every step of a drag previews and Escape puts the item back.
 
         :return: None
         """
@@ -753,19 +768,6 @@ class Editor(QDialog):
         x, y = self.ui.spb_x.value(), self.ui.spb_y.value(),
         width, height = self.ui.spb_width.value(), self.ui.spb_height.value()
         rect = QRectF(x - width / 2, y - height / 2, width, height)
-        angle = self.ui.spb_angle.value()
-        self.editor.set_changes(rect, angle)
-
-    def preview_changes(self) -> None:
-        """
-        Method to preview the changes made during editing
-
-        :return: None
-        """
-        # Define QRect to adjust position of item
-        rect = QRectF(self.ui.spb_x.value() - self.ui.spb_width.value()/2,
-                      self.ui.spb_y.value() - self.ui.spb_height.value()/2,
-                      self.ui.spb_width.value(), self.ui.spb_height.value())
         angle = self.ui.spb_angle.value()
         self.editor.set_changes(rect, angle)
 
@@ -793,7 +795,7 @@ class Editor(QDialog):
         Method to write the given item's geometry into the five editing spin boxes
 
         The spin boxes are disconnected while they are written and reconnected afterwards, because
-        setValue emits valueChanged -- without that, filling the boxes would drive preview_changes,
+        setValue emits valueChanged -- without that, filling the boxes would drive set_changes,
         which reads the boxes and pushes the result straight back onto the item
 
         :param item: The item to read the geometry from
@@ -866,8 +868,6 @@ class Editor(QDialog):
             self.ui.btn_coords.setChecked(not self.ui.btn_coords.isChecked())
         elif event.key() == Qt.Key_5:
             self.ui.btn_show.setChecked(not self.ui.btn_show.isChecked())
-        elif event.key() == Qt.Key_P:
-            self.preview_changes()
         elif event.key() == Qt.Key_A:
             self.set_changes()
         elif event.key() == Qt.Key_Shift:
@@ -2071,23 +2071,50 @@ class PlotSettingsDialog(QDialog):
                             QtCore.Qt.WindowMinMaxButtonsHint)
 
     def _connect_widgets_to_update_timer(self):
-        self.ui.spb_h_size.valueChanged.connect(self.update_timer.start)
-        self.ui.spb_v_size.valueChanged.connect(self.update_timer.start)
-        self.ui.spb_dpi.valueChanged.connect(self.update_timer.start)
-        self.ui.cmbx_font.currentTextChanged.connect(self.update_timer.start)
-        self.ui.spb_title_size.valueChanged.connect(self.update_timer.start)
-        self.ui.spb_axis_size.valueChanged.connect(self.update_timer.start)
-        self.ui.spb_tick_size.valueChanged.connect(self.update_timer.start)
-        self.ui.cmbx_palette.currentTextChanged.connect(self.update_timer.start)
-        self.ui.cbx_show_legend.stateChanged.connect(self.update_timer.start)
-        self.ui.spb_legend_font_size.valueChanged.connect(self.update_timer.start)
-        self.ui.cbx_grid_show.stateChanged.connect(self.update_timer.start)
-        self.ui.cbx_ticks_minor.stateChanged.connect(self.update_timer.start)
-        self.ui.spb_steps_major.valueChanged.connect(self.update_timer.start)
-        self.ui.spb_steps_minor.valueChanged.connect(self.update_timer.start)
-        self.ui.cmbx_orientation.currentTextChanged.connect(self.update_timer.start)
-        self.ui.cbx_violin_split.stateChanged.connect(self.update_timer.start)
-        self.ui.cmbx_violin_inner.currentTextChanged.connect(self.update_timer.start)
+        """
+        Method to make every settings widget schedule one delayed redraw
+
+        Each connection goes through `_schedule_redraw`, which takes no arguments, rather than
+        straight to `QTimer.start`. That indirection is the whole point: `start` accepts an
+        optional interval in milliseconds and **overrides the configured one**, so connecting a
+        value-carrying signal to it hands the widget's own value in as the delay. Measured against
+        real widgets and a timer configured exactly as this one is: a DPI spin box at 2500 made the
+        preview wait 2.5 seconds, a step count of 0 fired on the next event-loop pass, and every
+        check box and combo box drove the interval to 0 or 2 ms -- re-rendering on every tick,
+        which is precisely what the 300 ms debounce exists to prevent.
+
+        The check boxes are the same `stateChanged`-emits-an-int trap that has now produced four
+        defects in this project. `toggled` would carry a bool, but the argument is unwanted here
+        either way, so all seventeen are uniform.
+        """
+        self.ui.spb_h_size.valueChanged.connect(self._schedule_redraw)
+        self.ui.spb_v_size.valueChanged.connect(self._schedule_redraw)
+        self.ui.spb_dpi.valueChanged.connect(self._schedule_redraw)
+        self.ui.cmbx_font.currentTextChanged.connect(self._schedule_redraw)
+        self.ui.spb_title_size.valueChanged.connect(self._schedule_redraw)
+        self.ui.spb_axis_size.valueChanged.connect(self._schedule_redraw)
+        self.ui.spb_tick_size.valueChanged.connect(self._schedule_redraw)
+        self.ui.cmbx_palette.currentTextChanged.connect(self._schedule_redraw)
+        self.ui.cbx_show_legend.stateChanged.connect(self._schedule_redraw)
+        self.ui.spb_legend_font_size.valueChanged.connect(self._schedule_redraw)
+        self.ui.cbx_grid_show.stateChanged.connect(self._schedule_redraw)
+        self.ui.cbx_ticks_minor.stateChanged.connect(self._schedule_redraw)
+        self.ui.spb_steps_major.valueChanged.connect(self._schedule_redraw)
+        self.ui.spb_steps_minor.valueChanged.connect(self._schedule_redraw)
+        self.ui.cmbx_orientation.currentTextChanged.connect(self._schedule_redraw)
+        self.ui.cbx_violin_split.stateChanged.connect(self._schedule_redraw)
+        self.ui.cmbx_violin_inner.currentTextChanged.connect(self._schedule_redraw)
+
+    def _schedule_redraw(self) -> None:
+        """
+        Method to restart the redraw debounce at its configured interval
+
+        Takes no arguments on purpose -- see `_connect_widgets_to_update_timer`. Do not connect a
+        widget signal to `self.update_timer.start` directly.
+
+        :return: None
+        """
+        self.update_timer.start()
 
     #: The system font names, resolved once per process. Registering them is global and
     #: cumulative -- matplotlib's font manager keeps every font ever added -- so doing it on every

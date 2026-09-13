@@ -378,16 +378,6 @@
   ],
   "Modification": [
     {
-      "id": "show_ellipses",
-      "title": "Show Ellipses",
-      "desc": "If active, the approximated ellipses for detected nuclei will be shown on all channels",
-      "type": "check",
-      "value": 1,
-      "values": {
-        "tristate": 0
-      }
-    },
-    {
       "id": "track_mouse",
       "title": "Mouse Tracking",
       "desc": "If active, the hovered coordinates of the mouse will be shown",

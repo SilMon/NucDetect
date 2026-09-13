@@ -6,7 +6,7 @@ import pyqtgraph as pg
 from PyQt5 import QtCore
 from PyQt5.QtCore import QRectF, Qt, QPointF, pyqtSignal
 from PyQt5.QtGui import QColor, QCursor, QKeyEvent, QMouseEvent
-from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem
+from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem, QMessageBox
 from pyqtgraph import ColorBarItem
 from skimage.draw import ellipse
 
@@ -16,7 +16,9 @@ from core.logging_config import get_logger
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 from core.database.connections import Requester, Inserter
+from gui import Util
 from gui.Util import assert_main_thread, composite_channels
+from gui.definitions.icons import Icon
 from gui.dialogs.geometry import (HANDLE_SIGNS, angle_from_vector, resize_about_anchor,
                                   to_local)
 from gui.loader import ROIDrawerTimer
@@ -160,7 +162,14 @@ class EditorView(pg.GraphicsView):
         self.scale_bar.setParentItem(self.plot_item.getViewBox())
         self.scale_bar.text.setPlainText(f"{self.scale_microns} µm")
         self.scale_bar.anchor((1, 1), (1, 1), offset=(-50, -50)) # Position set to bottom right
-        self.addItem(self.scale_bar)
+        # No addItem here. setParentItem above is pyqtgraph's documented way of attaching a scale
+        # bar, and giving an item a parent already puts it into the parent's scene -- the view box
+        # lives in this very scene, so adding it again made Qt print
+        # "QGraphicsScene::addItem: item has already been added to this scene" on every editor
+        # launch. Qt returned early and nothing was duplicated, so the bar always drew correctly;
+        # the cost was the warning, on a console that is a diagnostic surface. That exact message
+        # is what a genuine double-add produces -- this file has had one before, see the comment in
+        # create_new_item_at_mouse_position.
         # Connected before the thread is started, or a fast worker could emit into nothing
         self.variants_ready_signal.connect(self.enable_variant_modes)
         self.initialize_wb_and_hc()
@@ -474,6 +483,13 @@ class EditorView(pg.GraphicsView):
                        "drawn or saved; the rest of the image is unaffected",
                        self.roi.ident, len(unusable),
                        ", ".join(f"{n} in {channel}" for channel, n in sorted(per_channel.items())))
+        # Rebuilt in place rather than through remove_rois, and `idents` and `main` are
+        # deliberately NOT recomputed. Discarding a roi does not mean the image stopped having that
+        # channel, and `main` is a NOMINATION -- since 2026-09-13 the loader takes it from the
+        # channels table, which records it whether or not anything was detected in that channel.
+        # Recomputing either from what is left would undo that and reintroduce the row 72 crash on
+        # any image whose main channel is empty. Whether the handler should derive these at all is
+        # an open question, not a decision to take here.
         self.roi.rois = [roi for roi in self.roi.rois if roi.is_valid()]
 
     def draw_roi(self) -> None:
@@ -1070,14 +1086,19 @@ class EditorView(pg.GraphicsView):
                     new_roi.append(roi)
                 else:
                     LOGGER.warning("ROI does not contain any points!")
-        self.roi.rois.extend(new_roi)
+        # add_rois, not rois.extend. Appending to the public list skipped add_roi, which is the
+        # only thing that maintains the handler's derived state -- so a nucleus drawn by hand went
+        # in without nominating a main channel and without registering its channel in `idents`.
+        # That is what made the row 72 crash unrecoverable from inside the editor: the image now had
+        # a nucleus, and the save still raised because the handler did not know it did.
+        self.roi.add_rois(new_roi)
 
 
-    def apply_all_changes(self) -> None:
+    def apply_all_changes(self) -> bool:
         """
         Method to apply all made changes and save them to the database
 
-        :return: None
+        :return: True if the changes were saved, False if the user cancelled the save
         """
         self.delete_items_in_list()
         maps = self.create_association_maps()
@@ -1112,6 +1133,23 @@ class EditorView(pg.GraphicsView):
             associations = {}
         # Clean unassociated list
         unassociated = [x for x in unassociated if x not in associations.keys()]
+        # ASK BEFORE DELETING. A focus that lies inside no nucleus at save time is deleted, which is
+        # correct per RW's rule that a focus must always lie within a nucleus -- but until the drag
+        # gestures landed, reaching that state took typing coordinates into the spin boxes, and it
+        # now takes one slip of the mouse. The deletion was silent.
+        #
+        # Deliberately NOT a refusal, a snap-back or a check in end_drag: a user who deletes a
+        # nucleus by accident must be able to redraw it while its foci wait unassociated, so the
+        # forbidden state has to be reachable DURING editing and only rejected at save.
+        if unassociated and not self.confirm_focus_deletion(len(unassociated)):
+            # Nothing has been committed yet -- every write above is in one open transaction that
+            # commit_and_close at the end of this method would close. Rolling back is therefore a
+            # true cancel and not a half-applied save, which is the failure this editor has had
+            # before: UI row 72 wrote the drawn roi and then raised.
+            self.inserter.rollback_and_close()
+            LOGGER.info("Save cancelled by the user: %d foci lie outside every nucleus",
+                        len(unassociated))
+            return False
         self.delete_roi(unassociated)
         # Create new associations
         for focus, nucleus in associations.items():
@@ -1119,6 +1157,33 @@ class EditorView(pg.GraphicsView):
         # Change image entry to indicate that the image was manually modified
         self.inserter.mark_image_as_modified(self.roi.ident)
         self.inserter.commit_and_close()
+        return True
+
+    def confirm_focus_deletion(self, count: int) -> bool:
+        """
+        Method to ask whether foci that lie inside no nucleus may be deleted
+
+        Split out of apply_all_changes so the save path can be driven without a modal dialog: a
+        harness overrides this method rather than having to answer a window that never appears
+        under an offscreen platform.
+
+        :param count: The number of foci that would be deleted
+        :return: True if the save is to go ahead
+        """
+        msg = QMessageBox()
+        msg.setWindowIcon(Icon.get_icon("LOGO"))
+        msg.setIcon(QMessageBox.Warning)
+        msg.setStyleSheet(Util.load_stylesheet("messagebox.css"))
+        msg.setWindowTitle("Save changes?")
+        msg.setText(f"{count} {'focus lies' if count == 1 else 'foci lie'} outside every nucleus.")
+        msg.setInformativeText(
+            f"Saving deletes {'it' if count == 1 else 'them'}, because a focus has to lie inside a "
+            f"nucleus. Cancel to go back and place "
+            f"{'it' if count == 1 else 'them'}, or draw the nucleus "
+            f"{'it belongs' if count == 1 else 'they belong'} to.")
+        msg.setStandardButtons(QMessageBox.Save | QMessageBox.Cancel)
+        msg.setDefaultButton(QMessageBox.Cancel)
+        return msg.exec() == QMessageBox.Save
 
     def write_item_to_database(self, item, roi: ROI,
                                rle: List[Tuple[int, int, int]],

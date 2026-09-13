@@ -58,7 +58,11 @@ class QualityTester:
         # _get_values_dict already computes correctly as np.iinfo(channel.dtype).max -- so wiring
         # it up as written would have reintroduced the 8-bit cap that the "16-bit images are
         # silently reduced to 8-bit precision" fix removed. Deleted rather than connected.
-        "max_focus_overlap": .75,
+        # A "max_focus_overlap": .75 entry stood here until 2026-09-13, alongside a
+        # "max_foc_overlap" seeded into the settings table -- two spellings of one parameter, and
+        # no reader for either: check_focus_overlap does not exist. Removed by RW's decision
+        # rather than wired up. "max_foc_area" below is a DIFFERENT key, it IS read by
+        # check_size_boundaries, and it stays.
         "min_main_area": 1000,
         "max_main_area": 30000,
         "min_nucleus_int_perc": .8,

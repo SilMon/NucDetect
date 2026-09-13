@@ -31,7 +31,6 @@ INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("maximum_size_multip
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_nuclei", 0.95, "float");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_foci", 0.25, "float");
 -- Matching Settings
-INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_foc_overlap", 0.5, "float");
 -- Quality check settings
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_main_area", 115, "int");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_main_area", 4650, "int");
@@ -43,6 +42,5 @@ INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("overlap", 0.5, "flo
 -- General settings
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("size_factor", 1, "float");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("num_threads", 8, "int");
-INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("show_ellipsis", 1, "bool");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("track_mouse", 1, "bool");
 COMMIT;

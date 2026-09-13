@@ -78,6 +78,11 @@ class ROIHandler(Sequence):
         """
         Method to add new roi to this handler
 
+        Use this rather than `handler.rois.extend(...)`. `rois` is a plain public list, so appending
+        to it directly skips `add_roi` -- the only place `idents` and `main` are maintained -- and
+        leaves the handler describing itself incorrectly. One caller did exactly that until
+        2026-09-13 and it is why a hand-drawn nucleus could not be saved.
+
         :param rois: List of ROI to add
         :return: None
         """
