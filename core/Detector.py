@@ -227,7 +227,29 @@ class Detector:
                 # Found 2026-08-22 while investigating the empty-nuclei report. The branch also
                 # covers `not rois`, where rois is already empty and this is a no-op.
                 qroi = rois
-            handler.add_rois(qroi)
+            # THE ASSOCIATION RULE IS NOT PART OF THE QUALITY CHECK AND MUST NOT BE OPTIONAL.
+            # A focus that lies inside no nucleus is a background artefact, and RW's rule is that
+            # one must never reach the database: it is stored with `associated = NULL`, which is
+            # also how a NUCLEUS is stored, so it is read back as a nucleus and takes the result
+            # table down on its missing ellipse statistics.
+            #
+            # delete_unassociated_foci already did this, but only from inside check_quality -- so
+            # turning off the "Analysis - Quality Check" box, which is a user-facing switch about
+            # SIZE and INTENSITY filtering, silently also turned off a data-model invariant. Run
+            # here it is unconditional, and it is idempotent when the quality check already ran.
+            #
+            # The ORDER of qroi is preserved rather than rebuilt as nuclei + foci. `ROIHandler`
+            # registers channels in the order roi arrive, and `create_hash_association_maps`
+            # indexes its maps by `idents.index` -- so reordering here would renumber the channels
+            # under everything that reads a channel index, including the editor.
+            nuclei = [x for x in qroi if x.main]
+            keep = {id(x) for x in QualityTester.delete_unassociated_foci(
+                nuclei, [x for x in qroi if not x.main])}
+            checked = [x for x in qroi if x.main or id(x) in keep]
+            dropped = len(qroi) - len(checked)
+            if dropped:
+                self.add_log_message(f"QR: Foci outside every nucleus, deleted: {dropped}")
+            handler.add_rois(checked)
         imgdat["x_scale"] = analysis_settings["dots_per_micron"]
         imgdat["y_scale"] = analysis_settings["dots_per_micron"]
         imgdat["scale_unit"] = "µm"

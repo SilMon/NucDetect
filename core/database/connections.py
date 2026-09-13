@@ -880,9 +880,29 @@ class Requester(DatabaseInteractor):
                     """One cell: the number, or NO_STATISTICS when the column is NULL"""
                     return NO_STATISTICS if value is None else f"{float(value) * factor:.2f}"
 
+                # ELLIPTICITY IS DERIVED FROM THE AXES, not from the stored `ellipticity`
+                # column. That column holds `shape_match` -- the fitted ELLIPSE AREA divided by the
+                # measured area -- which is a goodness-of-fit ratio, not an elongation: a circle
+                # and a long thin ellipse both score about 1, because both are described well by an
+                # ellipse. It is unbounded above, so multiplying by 100 and calling it a percentage
+                # produced values over 100 %: measured on the real database, 511 of 1712 rows did,
+                # up to 138 %.
+                #
+                # 1 - minor/major is the usual meaning of ellipticity: 0 for a circle, approaching
+                # 1 for a line, and bounded. The two are barely related -- Pearson r = 0.36 over
+                # those same rows -- so this is a different quantity rather than a rescaling of the
+                # old one, and stored results will not agree with re-displayed ones.
+                #
+                # The shape_match column is untouched and still stored; it simply stopped being
+                # displayed under a name that does not describe it. It was NOT given a column of
+                # its own: both table headers are at 13 columns and the main one already keeps its
+                # labels short because Qt was eliding them and clipping the sort arrows.
+                major, minor = stats[12], stats[13]
+                ellipticity = (None if major is None or minor is None or float(major) <= 0
+                               else 1 - float(minor) / float(major))
                 measurements = [_measure(stats[11]), _measure(stats[10]),
                                 _measure(stats[15]),
-                                _measure(stats[18], 100), _measure(stats[14]),
+                                _measure(ellipticity, 100), _measure(stats[14]),
                                 _measure(stats[12]), _measure(stats[13])]
             else:
                 measurements = [NO_STATISTICS] * 7

@@ -144,23 +144,37 @@ class QualityTester:
         """
         # TODO überprüfen ob die Einstellungen so stimmen
         main, foci = self.separate_nuclei_and_foci()
+        self.log("Quality Check:")
+
+        # Every line reports PASSED and DISCARDED against the count that went in, rather than the
+        # survivors alone. "Nuclei Size Check: 19" read as "19 nuclei were checked" when it meant
+        # "19 of 51 survived" -- and that is what hid a finding for weeks: 63 % of the nuclei were
+        # being discarded and the line meant to report it looked like a tally of work done. The
+        # input count was only recoverable from "Nuclei segmented:" seven lines earlier, in a
+        # different block.
+        def _report(name: str, before: int, after: int) -> None:
+            self.log(f"{name}: {after} of {before} passed, {before - after} discarded")
+
         # Check size of nuclei
+        before = len(main)
         lower_bound, upper_bound = self.settings["min_main_area"], self.settings["max_main_area"]
         main = self.check_size_boundaries(main, lower_bound, upper_bound)
-        self.log("Quality Check:")
-        self.log(f"Nuclei Size Check: {len(main)}")
+        _report("Nuclei Size Check", before, len(main))
         # Delete foci whose nucleus was deleted or which are unassociated to a nucleus
-        self.log(f"Foci to check: {len(foci)}")
+        before = len(foci)
         foci = self.delete_unassociated_foci(main, foci)
-        self.log(f"Focus Association Check: {len(foci)}")
+        _report("Focus Association Check", before, len(foci))
         # Check size of foci
+        before = len(foci)
         foci = self.check_size_boundaries(foci, self.settings["min_foc_area"], self.settings["max_foc_area"])
-        self.log(f"Focus Size Check: {len(foci)}")
+        _report("Focus Size Check", before, len(foci))
         # Check foci for intensity
+        before = len(foci)
         foci = self.check_intensity_boundaries(foci, self.settings["min_foc_int"], 1)
-        self.log(f"Focus Intensity Check: {len(foci)}")
+        _report("Focus Intensity Check", before, len(foci))
+        before = len(foci)
         foci = self.check_focus_contrast(foci, self.settings["min_foc_cont"])
-        self.log(f"Focus Contrast Check: {len(foci)}")
+        _report("Focus Contrast Check", before, len(foci))
         return main, foci
 
     def separate_nuclei_and_foci(self) -> Tuple[List[ROI], List[ROI]]:
