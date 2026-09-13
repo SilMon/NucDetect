@@ -1304,6 +1304,9 @@ class NucDetect(QMainWindow):
             eta_text = ""
             # Seeded so the per-batch log line below has values even if a batch yields nothing
             h = m = s = 0
+            # Seconds of ANALYSIS reported by the workers, summed over finished images. The ETA is
+            # derived from this rather than from wall-clock-over-count -- see where it is used
+            work_done = 0.0
             # A plain slice loop. The previous start/stop/step arithmetic made the first batch
             # batch_size + 1 images long, and executed once even when there was nothing to analyse
             for batch_start in range(0, maxi, batch_size):
@@ -1337,16 +1340,37 @@ class NucDetect(QMainWindow):
                     self.row_signal.emit([name, r["handler"].ident,
                                           str(mnum), str(fnum), f"{fpn:.2f}"])
                     done += 1
+                    # .get, because a stubbed or older result may not carry it -- see the fallback
+                    work_done += r.get("duration", 0.0) or 0.0
                     # PER IMAGE, not per batch (RW, 2026-09-13: "the ETA should be updated with
                     # every new image, it is of no real use if the ETA does not tick down during
                     # the batch"). This used to run once the batch had finished and was carried
                     # into the NEXT batch's caption, so at ten images a batch the figure stood
-                    # still for ~75 s. Dividing by `done` was always per-image arithmetic; only the
-                    # place it ran was wrong
+                    # still for ~75 s.
+                    #
+                    # WORK PER IMAGE DIVIDED BY THE WORKERS DOING IT -- not elapsed time divided by
+                    # the count (RW, 2026-09-13: "the ETA starts really high and then only slowly
+                    # decreases. The first image analysis time can be used to extrapolate").
+                    # `elapsed / done` assumes images are processed one after another. They are not:
+                    # `workers` run at once, so after the first completion the elapsed time already
+                    # contains the pool's start-up AND the concurrent work of every image still in
+                    # flight and not yet counted. Simulated against RW's own per-image timings --
+                    # 22 images, 8 workers -- the old form showed 977 s against 74 s actually
+                    # remaining, +1220 %, and then collapsed as the count caught up rather than as
+                    # work completed. The form below showed +22 % on the same first image.
                     images_left = maxi - done
-                    # Not int(): truncating to whole seconds reports an ETA of zero for anything
-                    # faster than a second per image
-                    time_per_image = (time.time() - start_time) / done if done else 0
+                    # No more parallelism is available than there is work left, so the tail of a run
+                    # must not be divided by the full worker count
+                    effective = min(workers, images_left) or 1
+                    if work_done > 0:
+                        # Not int(): truncating to whole seconds reports an ETA of zero for anything
+                        # faster than a second per image
+                        time_per_image = (work_done / done) / effective
+                    else:
+                        # Fallback for a result that carries no duration -- an older Detector, or a
+                        # stand-in. Wrong in the way described above, but a wrong estimate beats
+                        # none
+                        time_per_image = (time.time() - start_time) / done if done else 0
                     eta = int(images_left * time_per_image)
                     h = eta // 3600
                     m = eta % 3600 // 60

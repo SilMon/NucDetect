@@ -241,7 +241,12 @@ class Detector:
         # Remove logging function from settings
         del analysis_settings["log"]
         imgdat["used_settings"] = analysis_settings
-        self.add_log_message(f"Total analysis time: {time.time() - start: .4f}")
+        # Returned as a FIELD, not only as log text. The parent's batch loop needs the time this
+        # image cost in order to estimate a remaining time that accounts for parallelism, and
+        # scraping it back out of the replayed log would be parsing our own prose. Computed once and
+        # used for both, so the number in the log and the number the estimate uses cannot diverge
+        imgdat["duration"] = time.time() - start
+        self.add_log_message(f"Total analysis time: {imgdat['duration']: .4f}")
         # Hand the buffered messages to the caller before the buffer is dropped. This is what lets
         # a ProcessPoolExecutor worker get its log across to the parent process, which owns the
         # log file -- the worker's own copy of this Detector dies with the task
