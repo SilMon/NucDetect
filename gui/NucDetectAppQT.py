@@ -1292,12 +1292,18 @@ class NucDetect(QMainWindow):
             maxi = len(paths)
             # Number of batches, rounded up -- the last one is short unless the count divides evenly
             total_batches = math.ceil(maxi / batch_size) if batch_size > 0 else 0
-            # Counts images actually finished. Kept separate from the 1-based display counter
-            # below: reusing one variable for both is what made the ETA undercount by one and go
-            # negative on the final batch of every run
+            # Counts images actually FINISHED, and the caption now reports this number directly.
+            # It used to be displayed as `done + 1` -- the image being worked on -- under a label
+            # reading "analysed", which is the off-by-one RW reported on 2026-09-13. The ETA is
+            # measured over the same counter, and reusing one variable for the count and a 1-based
+            # display is what made the ETA undercount by one and go negative on the final batch
             done = 0
-            # Empty until a batch has finished -- see where it is assigned
+            # Empty until the FIRST IMAGE has finished, not the first batch -- the per-image
+            # estimate inside the loop assigns it. Only the "Starting multi image analysis" emit
+            # before the loop is ever shown without one
             eta_text = ""
+            # Seeded so the per-batch log line below has values even if a batch yields nothing
+            h = m = s = 0
             # A plain slice loop. The previous start/stop/step arithmetic made the first batch
             # batch_size + 1 images long, and executed once even when there was nothing to analyse
             for batch_start in range(0, maxi, batch_size):
@@ -1312,15 +1318,6 @@ class NucDetect(QMainWindow):
                 # worker process instead of being pickled with every task
                 res = e.map(_analyse_in_worker, zip(tpaths, t_setts, t_savelog))
                 for r in res:
-                    # The bar counts BATCHES (RW, 2026-09-08), so its value does not move inside a
-                    # batch -- but the label does, because a batch is ~75 s and a caption frozen for
-                    # that long reads as a hang. Value and text are deliberately on different
-                    # granularities: the bar tracks what the ETA is measured over, the text tracks
-                    # what is happening
-                    self.prg_signal.emit(
-                        f"Batch {batch_start // batch_size + 1}/{total_batches}"
-                        f" -- analysed {done + 1}/{maxi} images{eta_text}",
-                        batch_start // batch_size, total_batches, "")
                     # Replay the log of the worker that analysed this image, if the user asked for
                     # analysis logging. The messages are discarded rather than buffered when off --
                     # they have already been produced, and holding them would only defer the cost
@@ -1340,19 +1337,34 @@ class NucDetect(QMainWindow):
                     self.row_signal.emit([name, r["handler"].ident,
                                           str(mnum), str(fnum), f"{fpn:.2f}"])
                     done += 1
-                images_left = maxi - done
-                # Not int(): truncating to whole seconds reports an ETA of zero for anything
-                # faster than a second per image
-                time_per_image = (time.time() - start_time) / done if done else 0
-                eta = int(images_left * time_per_image)
-                h = eta // 3600
-                m = eta % 3600 // 60
-                s = eta % 3600 % 60
-                # Kept for the NEXT batch's label. The ETA was computed here and written only to the
-                # log file, so the one number that answers "how much longer?" never reached the
-                # window. The first batch has none, which is honest -- there is nothing to
-                # extrapolate from until one batch has finished
-                eta_text = f" -- ETA {h:02d}h:{m:02d}m:{s:02d}s"
+                    # PER IMAGE, not per batch (RW, 2026-09-13: "the ETA should be updated with
+                    # every new image, it is of no real use if the ETA does not tick down during
+                    # the batch"). This used to run once the batch had finished and was carried
+                    # into the NEXT batch's caption, so at ten images a batch the figure stood
+                    # still for ~75 s. Dividing by `done` was always per-image arithmetic; only the
+                    # place it ran was wrong
+                    images_left = maxi - done
+                    # Not int(): truncating to whole seconds reports an ETA of zero for anything
+                    # faster than a second per image
+                    time_per_image = (time.time() - start_time) / done if done else 0
+                    eta = int(images_left * time_per_image)
+                    h = eta // 3600
+                    m = eta % 3600 // 60
+                    s = eta % 3600 % 60
+                    eta_text = f" -- ETA {h:02d}h:{m:02d}m:{s:02d}s"
+                    # Emitted AFTER `done` is incremented, and reading `done` rather than
+                    # `done + 1`. The emit used to sit at the top of this loop and show the image
+                    # being WORKED ON under a label that says "analysed" -- so the first image of a
+                    # run reported "analysed 1/22" with nothing yet finished, and the last reported
+                    # the full count one image early (RW, 2026-09-13).
+                    #
+                    # The bar still counts BATCHES (RW, 2026-09-08), so its value does not move
+                    # inside a batch while the caption does: the bar tracks whole units of work, the
+                    # caption tracks what has actually been completed
+                    self.prg_signal.emit(
+                        f"Batch {batch_start // batch_size + 1}/{total_batches}"
+                        f" -- analysed {done}/{maxi} images{eta_text}",
+                        batch_start // batch_size, total_batches, "")
                 cur_batch = batch_start // batch_size + 1
                 msg = f"Analysed batch {cur_batch: 02d}/{total_batches: 02d} in {time.time() - s2: 09.3f} secs\t\t"\
                       f"Total: {time.time() - start_time: 09.3f} secs\t\t"\

@@ -42,6 +42,11 @@ from core.roi.ROIHandler import ROIHandler
 # Excel's own limit on a worksheet title. openpyxl only warns above it, but the workbook is then
 # unreadable for some applications, so the export truncates rather than relying on the warning
 MAX_SHEET_NAME_LENGTH = 31
+#: Longest file STEM an export writes. Not a filesystem limit -- NTFS allows 255 per component --
+#: but a cap that keeps the full path clear of MAX_PATH once the results folder, the extension and
+#: a de-duplication suffix are added. Deliberately separate from MAX_SHEET_NAME_LENGTH: Excel's 31
+#: is a property of Excel, and applying it to file names would rename files nothing else renames
+MAX_FILE_STEM_LENGTH = 120
 
 
 LOGGER = get_logger(__name__)
@@ -72,6 +77,11 @@ class DataExportDialog(QDialog):
         self.errors: List[str] = []
         self.cur_img = current_image
         self.disp_name = display_name
+        # File stems already handed out by this export run, and the lock that guards them.
+        # The non-workbook path starts ONE THREAD PER IMAGE, so reserving a name is a genuine
+        # race: two images sharing a file name would otherwise both be told they may use it
+        self._used_file_stems = set()
+        self._stem_lock = threading.Lock()
         self.req = Requester(protected=False)
         self.ui = self.initialize_ui()
 
@@ -103,6 +113,20 @@ class DataExportDialog(QDialog):
         ui.btn_export.clicked.connect(self.accept)
         ui.btn_cancel.clicked.connect(self.close)
         ui.cbx_xlsx.stateChanged.connect(lambda: ui.cbx_xlsx_single.setEnabled(ui.cbx_xlsx.isChecked()))
+        # The single-file option combines XLSX and NOTHING else -- csv and html are written once per
+        # image whatever it says, because a csv cannot hold 116 tables. That is what "if possible"
+        # in the label was carrying on its own, and it carried it invisibly: RW ticked the box,
+        # found a file per image in the results folder and reported it as a defect (2026-09-13).
+        #
+        # Shown only while the option is actually IN FORCE -- ticked AND reachable -- so it explains
+        # the state the user is in rather than standing there as permanent small print. Both signals
+        # are needed: unticking XLSX leaves this box checked but disabled, and the note must go with
+        # the behaviour, not with the tick
+        # Zero-argument lambdas, as the line above uses: `stateChanged` emits the Qt check STATE
+        # as an int, and connecting the method directly fed that int into its `ui` parameter --
+        # `AttributeError: 'int' object has no attribute 'lbl_single_file_note'`
+        ui.cbx_xlsx.stateChanged.connect(lambda: self.update_single_file_note())
+        ui.cbx_xlsx_single.stateChanged.connect(lambda: self.update_single_file_note())
         # Fill the combobox
         cbx_cont = []
         if self.cur_img:
@@ -111,7 +135,21 @@ class DataExportDialog(QDialog):
             cbx_cont.extend(DataExportDialog.STANDARD_OPTIONS[1:])
         cbx_cont.extend(self.req.get_all_experiments())
         ui.cbx_choice.addItems(cbx_cont)
+        self.update_single_file_note(ui)
         return ui
+
+    def update_single_file_note(self, ui: Any = None) -> None:
+        """
+        Method to show the single-file note exactly while that option is in force
+
+        :param ui: The loaded ui. Only passed from initialize_ui, which runs BEFORE self.ui exists
+        :return: None
+        """
+        ui = ui if ui is not None else self.ui
+        # setVisible, not setText: an empty label still occupies its row and the dialog would
+        # change height for no visible reason
+        ui.lbl_single_file_note.setVisible(ui.cbx_xlsx.isChecked()
+                                           and ui.cbx_xlsx_single.isChecked())
 
     def save_data(self):
         """
@@ -119,6 +157,10 @@ class DataExportDialog(QDialog):
 
         :return: None
         """
+        # A fresh run may legitimately reuse every name, because it overwrites its own previous
+        # output. The reservations only have to be unique WITHIN one export
+        with self._stem_lock:
+            self._used_file_stems.clear()
         # Get the selection
         selection = self.ui.cbx_choice.currentText()
         # Save the selected image
@@ -248,6 +290,59 @@ class DataExportDialog(QDialog):
             if candidate not in taken:
                 return candidate
             counter += 1
+
+    @staticmethod
+    def clean_file_stem(name: str) -> str:
+        """
+        Method to turn the given name into a file stem the file system accepts
+
+        Separate from `get_valid_sheet_name`, and the two must not be merged: Excel rejects
+        `[]:*?/\\` and caps names at 31 characters, while Windows rejects `<>:"/\\|?*` plus the
+        control characters and allows 255. Cleaning a file name with Excel's rules would mangle
+        names the file system is perfectly happy with, and cleaning a sheet name with the file
+        system's would let `[` through into a workbook, which raises.
+
+        :param name: The name to derive a file stem from
+        :return: A stem safe to write to disk, never empty
+        """
+        illegal = set('<>:"/\\|?*')
+        cleaned = "".join("_" if c in illegal or ord(c) < 32 else c for c in str(name))
+        # Trailing dots and spaces are silently dropped by Windows, which would make two distinct
+        # stems collide again after they were checked for collision
+        cleaned = cleaned.strip().rstrip(". ")
+        return cleaned[:MAX_FILE_STEM_LENGTH] or "export"
+
+    def reserve_file_stem(self, name: str) -> str:
+        """
+        Method to claim a unique file stem for this export run
+
+        **Two images can carry the same file name in different folders**, and both are exported.
+        The workbook path has de-duplicated its SHEET names since 2026-08-xx, but the csv and html
+        outputs -- which are written per image whatever the single-file box says -- kept using the
+        raw image name, so the second image silently overwrote the first.
+
+        Measured on the live database 2026-09-13, exporting "All analysed Images":
+        **116 analysed images produced 108 csv and 108 html files.** Eight images from two folders
+        sharing file names lost their output with no error of any kind.
+
+        Reserved under a lock because the non-workbook path runs one thread per image.
+
+        :param name: The name to derive the stem from
+        :return: A cleaned stem not yet used by this run
+        """
+        stem = self.clean_file_stem(name)
+        with self._stem_lock:
+            if stem not in self._used_file_stems:
+                self._used_file_stems.add(stem)
+                return stem
+            counter = 2
+            while True:
+                suffix = f"_{counter}"
+                candidate = f"{stem[:MAX_FILE_STEM_LENGTH - len(suffix)]}{suffix}"
+                if candidate not in self._used_file_stems:
+                    self._used_file_stems.add(candidate)
+                    return candidate
+                counter += 1
 
     def export_image_as_table(self, md5: str,
                               xlsx_name: str = None,
@@ -385,7 +480,19 @@ class DataExportDialog(QDialog):
         :return: None
         """
         # Create a pandas dataframe
-        df = pd.DataFrame(rows)
+        # columns=header when there are no rows, and this is not defensive tidying. An image can be
+        # analysed and carry NO roi -- detection found nothing, or the quality check removed
+        # everything -- and `pd.DataFrame([])` is then (0, 0). Handing 13 column aliases to a frame
+        # with no columns raises `ValueError: Writing 0 cols but got 13 aliases`, and in the
+        # single-workbook path that takes the WHOLE export down: one thread writes every image into
+        # one ExcelWriter, so the run stops at the empty image and every later one is silently
+        # absent. Measured 2026-09-13 on the live database -- the empty image is number 55 of 116,
+        # and 61 images never reached the workbook.
+        #
+        # A header-only table is written instead of skipping the image, at RW's instruction: a sheet
+        # with headers and no rows says "analysed, nothing found", where an absent sheet is
+        # indistinguishable from an export that lost it
+        df = pd.DataFrame(rows) if len(rows) else pd.DataFrame(columns=list(header))
         # The results folder is not guaranteed to exist: it is created by Paths.ensure_directories,
         # which the GUI calls at start-up -- but a user who deletes it while the program is running,
         # or any entry point that has not called it, would otherwise get a bare FileNotFoundError
@@ -393,11 +500,19 @@ class DataExportDialog(QDialog):
         # Paths rather than calling makedirs here keeps directory creation in the module that
         # declares the directories
         Paths.ensure_directories()
+        # ONE stem for all three outputs of this item, reserved once, so `image.csv`, `image.html`
+        # and `image.xlsx` keep matching names -- and so a second image with the same file name
+        # gets `image_2` rather than overwriting the first. Claimed only when a FILE is actually
+        # written: an item that only contributes a sheet to a shared workbook needs no stem, and
+        # reserving one would push the next duplicate to `_3`
+        writes_file = (self.ui.cbx_csv.isChecked() or self.ui.cbx_html.isChecked()
+                       or (self.ui.cbx_xlsx.isChecked() and writer is None))
+        stem = self.reserve_file_stem(xlsx_name if xlsx_name else name) if writes_file else None
         if self.ui.cbx_csv.isChecked():
-            df.to_csv(os.path.join(Paths.result_path, f"{name}.csv"),
+            df.to_csv(os.path.join(Paths.result_path, f"{stem}.csv"),
                       header=header if include_header else False, index=False)
         if self.ui.cbx_html.isChecked():
-            df.to_html(os.path.join(Paths.result_path, f"{name}.html"),
+            df.to_html(os.path.join(Paths.result_path, f"{stem}.html"),
                        header=header if include_header else False, index=False)
         if self.ui.cbx_xlsx.isChecked():
             if writer is not None:
@@ -407,8 +522,7 @@ class DataExportDialog(QDialog):
                 df.to_excel(writer, header=header if include_header else False, index=False,
                             sheet_name=self.get_valid_sheet_name(sheet_name, writer.sheets))
             else:
-                fname = name if not xlsx_name else xlsx_name
-                df.to_excel(os.path.join(Paths.result_path, f"{fname}.xlsx"),
+                df.to_excel(os.path.join(Paths.result_path, f"{stem}.xlsx"),
                             header=header if include_header else False, index=False,
                             sheet_name=self.get_valid_sheet_name(sheet_name, ()))
 
