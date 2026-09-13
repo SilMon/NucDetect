@@ -1569,7 +1569,9 @@ class NucDetect(QMainWindow):
                                  ind, max_, "")
             temproi = ROI(channel=entry[3], main=entry[8] is None,
                           auto=bool(entry[2]), associated=entry[8], method=entry[9], match=entry[10])
-            stats = self.requester.get_statistics_for_roi(entry[0])
+            # entry[1] is the roi table's image column -- the second half of its primary key. The
+            # row already carries it, so the image needs no threading through the signature
+            stats = self.requester.get_statistics_for_roi(entry[0], entry[1])
             # None means the roi has no statistics row. It used to be an empty tuple, which sliced
             # to another empty tuple and produced {} without anyone noticing; the ROI is still
             # usable -- its area comes from the points table below -- so the empty dict is kept as

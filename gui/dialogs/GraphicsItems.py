@@ -999,7 +999,9 @@ class EditorView(pg.GraphicsView):
         unassociated = []
         # Get all associated foci and add them to list of unassociated foci
         for roi in self.delete:
-            roi_hash = self.requester.get_hashes_of_associated_foci(roi)
+            # self.roi.ident is the IMAGE md5 (ROIHandler.ident), not a channel name -- ROI.ident
+            # is the channel. The image is required: a nucleus hash is not unique across images
+            roi_hash = self.requester.get_hashes_of_associated_foci(roi, self.roi.ident)
             if roi_hash:
                 unassociated.extend(roi_hash)
         return unassociated
@@ -1023,7 +1025,8 @@ class EditorView(pg.GraphicsView):
                     self.delete_item_from_database(item.roi_id)
                     if isinstance(item, NucleusItem):
                         # Get hash list of associated foci
-                        hashes = self.requester.get_hashes_of_associated_foci(item.roi_id)
+                        hashes = self.requester.get_hashes_of_associated_foci(item.roi_id,
+                                                                              self.roi.ident)
                         unassociated.extend(hashes)
                         self.inserter.reset_nucleus_focus_association(item.roi_id)
                     else:

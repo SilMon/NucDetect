@@ -113,12 +113,27 @@ class ROI:
         else:
             return self.length
 
+    # ONE identifier space, chosen 2026-09-13. Until then `self.id` held the full 128-bit md5 while
+    # `hash(roi)` returned what CPython made of it, and the two are different numbers -- so every
+    # `*_by_hash` lookup on a freshly built ROI silently found nothing, and an edited ROI lost every
+    # pixel overlapping its own former area (a 1 px nudge kept 0.5 % of the nucleus; a shrink, or
+    # committing unchanged geometry, kept none of it and deleted the row).
+    #
+    # The reduction is MODULO 2**61 - 1, not a truncation to 64 bits: CPython hashes an
+    # arbitrary-precision int as `n % (2**61 - 1)`. Masking to 64 bits would produce a different
+    # number and make every stored hash unreachable -- verified against the real database, whose
+    # largest stored hash is 2305842721531669066, just under this modulus. Computing the residue
+    # here reproduces the stored values exactly, so no migration is needed.
+    HASH_MODULUS = 2 ** 61 - 1
+
     def __hash__(self):
-        if not self.id:
+        # `is None`, not `not self.id`: 0 is a legitimate residue, and a falsy test recomputed the
+        # hash of any ROI that happened to carry it -- including one loaded from the database
+        if self.id is None:
             md5 = hashlib.md5()
             ident = f"{self.ident}{self.area}".encode()
             md5.update(ident)
-            self.id = int(f"0x{md5.hexdigest()}", 0)
+            self.id = int(f"0x{md5.hexdigest()}", 0) % ROI.HASH_MODULUS
         return self.id
 
     def intersect_with(self, roi: ROI) -> bool:
