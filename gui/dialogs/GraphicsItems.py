@@ -1090,8 +1090,23 @@ class EditorView(pg.GraphicsView):
         for roi in self.roi:
             dims = roi.calculate_dimensions()
             centers[hash(roi)] = (dims["center_y"], dims["center_x"])
-        associations = self.create_associations(self.roi.idents.index(self.roi.main), maps,
-                                                unassociated, centers)
+        # Guarded, because `main` can legitimately be absent. `ROIHandler.main` is "" until an roi
+        # carrying main=True is added, and an image whose analysis found nothing has none -- so
+        # `idents.index(self.roi.main)` raised `ValueError: '' is not in list` on OK, after the new
+        # roi had already been written. Reported by hand twice, UI row 72, 2026-09-01 and
+        # 2026-09-13. The loader now recovers `main` from the channels table, which fixes the real
+        # case; this keeps the save from dying on any handler that still has no main channel.
+        #
+        # With no main channel there is nothing to associate foci WITH, so the association step is
+        # skipped rather than faked. Everything else in this method still runs: the drawn roi are
+        # written, the deletions are applied, and the image is marked modified
+        if self.roi.main in self.roi.idents:
+            associations = self.create_associations(self.roi.idents.index(self.roi.main), maps,
+                                                    unassociated, centers)
+        else:
+            LOGGER.warning("Image %s declares no main channel -- foci drawn on it cannot be "
+                           "associated with a nucleus", self.roi.ident)
+            associations = {}
         # Clean unassociated list
         unassociated = [x for x in unassociated if x not in associations.keys()]
         self.delete_roi(unassociated)
@@ -1125,6 +1140,21 @@ class EditorView(pg.GraphicsView):
         # roi.width/roi.height held the size the item was CREATED at while the statistics row below
         # stored the edited size from item.width/2 -- the two tables disagreed for every item that
         # was ever resized. Both now read the same source
+        # THE STORED CENTRE IS HALF A PIXEL ABOVE AND LEFT OF THE AREA'S CENTROID FOR AN
+        # EVEN-SIZED ITEM, and that is accepted rather than a defect (RW, 2026-09-13: "Document and
+        # accept"). The area below is rasterised around `centre + 0.5` for an even span -- an even
+        # number of pixels cannot be centred on an integer -- while these columns are INTEGER and
+        # store the unshifted centre the user actually placed.
+        #
+        # Measured on two foci drawn by hand, UI row 49: stored (1068, 525) against an area centroid
+        # of (1068.50, 525.50), exactly -0.50 on both axes, both times. Detector-written foci of the
+        # same size are off by -0.30 to +0.18 in varying directions, which is ordinary rounding
+        # against a discrete blob; the editor's offset is systematic because the shift is.
+        #
+        # Storing the shifted value instead would be off by +0.50 the other way, so nothing is
+        # gained without widening the columns. Do not "fix" this by removing the +0.5 in
+        # process_changed_items: that is what makes an even requested size draw an even span, which
+        # UI row 4 verifies
         roidat = (hash(roi), image_id, False, roi.ident,
                   item.center[0], item.center[1], item.width,
                   item.height, None, "manual", -1, roi.colocalized)
@@ -1671,7 +1701,23 @@ class ROIItem(QGraphicsEllipseItem):
 
     def is_active(self, active: bool = True) -> None:
         """
-        Method to set the activity of this item
+        Method to set the activity of this item -- its PEN, and nothing else
+
+        **This deliberately does not touch a nucleus's editing rectangle.** `NucleusItem` used to
+        override it to call `edit_rect.activate(False)` on the way down, and nothing re-activated it
+        on the way up: `is_active(True)` only re-applies the pen. So pressing the Ellipses button off
+        and on with a nucleus selected left the selection indicator and all nine grab handles
+        invisible while the item was still `selected_item` -- the spin boxes still drove it, a drag
+        still moved it, and `handle_at` skipped the now-invisible handles, so resize and rotate
+        silently stopped working. Reported by hand twice, UI row 20, 2026-09-01 and 2026-09-13.
+
+        **`enable_editing` owns the editing rectangle**, adds and removes it from the view and
+        activates it, and runs on SELECTION -- which is where it belongs, as
+        `EditingRectangle.activate`'s own comment says: *"The grab points belong to the selection,
+        not to the item."* A display toggle must not reach into it.
+
+        The other caller, `ROIDrawer.change_channel`, is unaffected: `EditorView.show_channel`
+        clears `selected_item` and calls `enable_editing(False)` before it runs.
 
         :param active: Bool
         :return: None
@@ -1798,19 +1844,6 @@ class NucleusItem(ROIItem):
         self.indicators[1].setLine(-r1, 0, r1, 0)
         for indicator in self.indicators:
             indicator.setPos(self.boundingRect().center())
-
-    def is_active(self, active: bool = True) -> None:
-        """
-        Method to set the activity of this item
-
-        :param active: Bool
-        :return: None
-        """
-        if not active:
-            self.edit_rect.activate(active)
-        # The pen choice itself is now the base class's, because inactive_pen means the same
-        # thing on both halves of the hierarchy. Only the edit rectangle is special here
-        super().is_active(active)
 
     def update_indicators(self, draw: bool = True) -> None:
         """

@@ -1531,6 +1531,14 @@ class NucDetect(QMainWindow):
         names = self.requester.get_channels(md5)
         for name in names:
             rois.idents.insert(name[1], name[2])
+            # `main` from the channels table, not only from the roi. `ROIHandler.add_roi` is the
+            # only other thing that sets it, so an image whose analysis found NOTHING arrived at
+            # the editor with main="" -- and saving then raised `ValueError: '' is not in list`.
+            # The channels table records which channel was nominated whether or not anything was
+            # found in it, which is exactly the fact that was missing. Columns are
+            # (md5, index_, name, active, main)
+            if name[4]:
+                rois.main = name[2]
         processed_roi = self.process_roi_database_entries(entries)
         rois.add_rois(processed_roi)
         # Named from the md5 this method was asked for, not from cur_img: the two are the same image
