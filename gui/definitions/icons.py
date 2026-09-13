@@ -108,7 +108,6 @@ class Icon:
             "DRAFTING_COMPASS": qta.icon("fa5s.drafting-compass", color=Icon.STANDARD),
             "MOUSE": qta.icon("fa5s.mouse-pointer", color=Icon.STANDARD),
             "CHECK": qta.icon("fa5s.check", color=Icon.HIGHLIGHT),
-            "MAGIC": qta.icon("fa5s.magic", color=Icon.HIGHLIGHT),
             "LOCK": qta.icon("fa5s.lock", color=Icon.STANDARD),
             "UNDO": qta.icon("fa5s.undo", color=Icon.STANDARD),
             "IMAGE": qta.icon("fa5s.image", color=Icon.STANDARD),
