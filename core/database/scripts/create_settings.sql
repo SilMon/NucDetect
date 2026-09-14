@@ -18,8 +18,14 @@ INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("bckg_subtr_diameter
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("bckg_subtr_feature_min", 1.3668, "float");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("bckg_subtr_feature_max", 9.5676, "float");
 -- Image Processing Settings
-INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_sigma", 1.5, "float");
-INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_sigma", 3.5, "float");
+/*
+min_sigma and max_sigma are in MICROMETRES since 2026-09-14 and are multiplied by
+dots_per_micron before they reach the blob detector. They were pixel values; 1.5 and 3.5 px
+at the 6.412 px/um default are the 0.2339 and 0.5459 um seeded here, so a fresh install detects
+exactly what it detected before on a 40x image.
+*/
+INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_sigma", 0.2339, "float");
+INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_sigma", 0.5459, "float");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("num_sigma", 10, "int");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("acc_thresh", 0.02, "float");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("iterations", 10, "int");
@@ -32,10 +38,23 @@ INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_nucle
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_foci", 0.25, "float");
 -- Matching Settings
 -- Quality check settings
-INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_main_area", 115, "int");
-INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_main_area", 4650, "int");
-INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_foc_area", 8, "int");
-INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_foc_area", 70, "int");
+/*
+The four size bounds below are in SQUARE MICROMETRES, which is what the settings dialog has always
+said. Until 2026-09-14 they were compared against an area in PIXELS, so the unit had no effect.
+
+The two NUCLEUS seeds were already written as um^2 and are unchanged -- 115 um^2 is a nucleus about
+12.1 um across, which is right, while as a pixel count it would be 1.9 um, which is not. The two
+FOCUS seeds were pixel counts wearing the same label and ARE converted: 8 px^2 -> 0.195 um^2 (a
+focus 0.5 um across) and 70 px^2 -> 1.703 um^2 (1.5 um across). As um^2 the old numbers would have
+described foci 3.2 and 9.4 um across, which no focus is.
+
+So this file mixed two units between its nucleus and focus rows. Check the unit of any bound added
+here against a physical size before trusting the number.
+*/
+INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_main_area", 115, "float");
+INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_main_area", 4650, "float");
+INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_foc_area", 0.195, "float");
+INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("max_foc_area", 1.703, "float");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_foc_int", 0.055, "float");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("min_foc_cont", 0.005, "float");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("overlap", 0.5, "float");

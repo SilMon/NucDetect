@@ -730,6 +730,31 @@ class Requester(DatabaseInteractor):
             where = (where, ("active", Specifiers.EQUALS, 1))
         return [x[0] for x in self.connector.get_view_from_table("name", "channels", where)]
 
+    def get_image_scale(self, image: str) -> Union[Tuple[float, float], None]:
+        """
+        Method to get the pixels-per-micrometre scale stored for an image
+
+        `images.x_res` / `y_res` hold the conversion factor the user entered for this image, written
+        per image at the end of the analysis. They are NOT the TIFF tags -- a file's declared
+        resolution is not trusted, because not every microscope writes a meaningful one, so the
+        value here is always one a person supplied.
+
+        Both columns are nullable and always have been, so None is a legitimate answer meaning
+        "nobody has said what scale this image was acquired at". Callers must show pixels and say so
+        rather than substituting a default: a wrong scale silently reports wrong micrometres.
+
+        :param image: The md5 hash of the image
+        :return: (x, y) in pixels per micrometre, or None if either is missing
+        """
+        rows = self.connector.get_view_from_table(("x_res", "y_res"), "images",
+                                                  ("md5", Specifiers.EQUALS, image))
+        if not rows:
+            return None
+        x_res, y_res = rows[0]
+        if x_res is None or y_res is None or x_res <= 0 or y_res <= 0:
+            return None
+        return float(x_res), float(y_res)
+
     def get_main_channel(self, image: str) -> str:
         """
         Method to get the main channel of the given image
@@ -815,6 +840,12 @@ class Requester(DatabaseInteractor):
         :param name: Optional: The file name of the image
         :return: The created table
         """
+        # Once per image, not once per nucleus: the scale is a property of the image
+        scale = self.get_image_scale(image)
+        if scale is None:
+            LOGGER.warning("Image %s has no conversion factor -- areas and axes are reported in "
+                           "PIXELS, not micrometres. Set the factor for this image to convert "
+                           "them", image)
         # Get all nuclei associated with this image
         nucs = self.get_nuclei_hashes_for_image(image)
         # Hoisted out of the nucleus loop: it does not depend on the nucleus, so it was one query
@@ -880,6 +911,18 @@ class Requester(DatabaseInteractor):
                     """One cell: the number, or NO_STATISTICS when the column is NULL"""
                     return NO_STATISTICS if value is None else f"{float(value) * factor:.2f}"
 
+                # LENGTHS AND AREAS ARE CONVERTED FOR DISPLAY; COORDINATES ARE NOT.
+                # RW, 2026-09-14: *"Convert every length or area. Centers and the like should still
+                # be displayed as pixels, because they are literal coordinates in the image."* So
+                # the ellipse area becomes um^2 and the two axes become um, while the centre stays
+                # where it is -- a pixel position in the image the user is looking at.
+                #
+                # The stored values are untouched: every area in the database is still a pixel
+                # count, which is ruling 1 of the same day. Only the cells change.
+                #
+                # scale is None when nobody has said what this image was acquired at. The values are
+                # then shown in PIXELS rather than converted with a guessed factor, and the caller
+                # is told -- see the warning below.
                 # ELLIPTICITY IS DERIVED FROM THE AXES, not from the stored `ellipticity`
                 # column. That column holds `shape_match` -- the fitted ELLIPSE AREA divided by the
                 # measured area -- which is a goodness-of-fit ratio, not an elongation: a circle
@@ -897,13 +940,16 @@ class Requester(DatabaseInteractor):
                 # displayed under a name that does not describe it. It was NOT given a column of
                 # its own: both table headers are at 13 columns and the main one already keeps its
                 # labels short because Qt was eliding them and clipping the sort arrows.
+                area_factor = scale[0] * scale[1] if scale else 1.0      # px^2 per um^2
+                length_factor = scale[0] if scale else 1.0                # px per um
                 major, minor = stats[12], stats[13]
                 ellipticity = (None if major is None or minor is None or float(major) <= 0
                                else 1 - float(minor) / float(major))
                 measurements = [_measure(stats[11]), _measure(stats[10]),
-                                _measure(stats[15]),
+                                _measure(stats[15], 1 / area_factor),
                                 _measure(ellipticity, 100), _measure(stats[14]),
-                                _measure(stats[12]), _measure(stats[13])]
+                                _measure(stats[12], 1 / length_factor),
+                                _measure(stats[13], 1 / length_factor)]
             else:
                 measurements = [NO_STATISTICS] * 7
             row = [name, str(image), str(nuc)] + measurements + [match]

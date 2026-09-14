@@ -36,8 +36,11 @@ class FocusMapper(AreaMapper):
         # value moves with the dialog default rather than being a second place to remember.
         "dots_per_micron": 6.412,
         "smoothing": 3,
-        "min_sigma": 1.5,
-        "max_sigma": 3.5,
+        # MICROMETRES since 2026-09-14, converted to pixels in detect_foci_on_acc_map. These
+        # two were 1.5 and 3.5 PIXELS, which at the 6.412 px/um default is what they still
+        # mean on a 40x image -- the numbers changed, the detection did not.
+        "min_sigma": 0.2339,
+        "max_sigma": 0.5459,
         "num_sigma": 10,
         "acc_thresh": .1,
         "overlap": .10,
@@ -89,8 +92,9 @@ class FocusMapper(AreaMapper):
         get = self.settings.get
         self.log("Focus Detection:")
         self.log(f"Channels to process: {count}")
-        self.log(f"Sigma range: {get('min_sigma', '?')}-{get('max_sigma', '?')} "
-                 f"({get('num_sigma', '?')} steps)")
+        self.log(f"Sigma range: {get('min_sigma', '?')}-{get('max_sigma', '?')} um "
+                 f"({get('num_sigma', '?')} steps, "
+                 f"{get('dots_per_micron', '?')} px/um)")
         self.log(f"Accumulator threshold: {get('acc_thresh', '?')}, "
                  f"max overlap: {get('overlap', '?')}")
         self.log(f"Preprocessing: smoothing={get('use_smoothing', '?')}, "
@@ -297,10 +301,18 @@ class FocusMapper(AreaMapper):
         :return: The detected foci
         """
         # Get needed variables
+        # MULTIPLY: dots_per_micron is pixels per micron, so a sigma in um becomes pixels. The
+        # settings are declared in micrometres and converted here, which is the same rule the
+        # quality check's size bounds follow -- RW, 2026-09-14: "The settings are in um and should
+        # be converted to pixel sizes for the analysis."
+        #
+        # This is what the `# TODO fix conversion via mmpd` that stood here asked for. Until
+        # 2026-09-14 mmpd was read and discarded, so the sigma range was in PIXELS and the physical
+        # size of focus the detector looked for changed with the objective: the same 1.5-3.5 meant
+        # 0.23-0.55 um at 40x and 0.15-0.35 um at 63x, a factor of 1.57 on the same microscope.
         mmpd = settings["dots_per_micron"]
-        # TODO fix conversion via mmpd
-        min_sigma = settings["min_sigma"]
-        max_sigma = settings["max_sigma"]
+        min_sigma = settings["min_sigma"] * mmpd
+        max_sigma = settings["max_sigma"] * mmpd
         num_sigma = settings["num_sigma"]
         acc_thresh = settings["acc_thresh"]
         overlap = settings["overlap"]

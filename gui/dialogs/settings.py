@@ -11,7 +11,10 @@ from functools import partial
 from typing import Any, Dict, NotRequired, Optional, TypedDict, Union, List
 
 from PyQt5 import uic, QtCore
-from PyQt5.QtWidgets import QDialog, QWidget, QScrollArea, QSizePolicy, QVBoxLayout, QMessageBox
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import (QDialog, QWidget, QScrollArea, QSizePolicy, QVBoxLayout, QMessageBox,
+                             QTableWidget, QTableWidgetItem, QHeaderView, QDoubleSpinBox,
+                             QPushButton, QDialogButtonBox, QLabel)
 
 import gui.Paths as gpaths
 from gui import Util
@@ -76,6 +79,10 @@ class AnalysisSettingsDialog(QDialog):
         """
         return {
             "re-analyse": self.cbx_reanalyse.isChecked(),
+            # Checked means one conversion factor for the whole run, which is the common case and
+            # the default. Unchecked, the caller asks for a factor per image before starting --
+            # it is the caller that knows WHICH images the run covers, not this dialog
+            "uniform_scale": self.ui.cbx_uniform.isChecked(),
             "add_to_experiment": self.ui.cbx_experiment.isChecked(),
             "experiment_details": {
                 "name": self.ui.le_name.text(),
@@ -273,6 +280,102 @@ class AnalysisSettingsDialog(QDialog):
         # nominated, with nothing in the log or the results recording the substitution
         for index, checkbox in enumerate(channels):
             checkbox.toggled.connect(partial(self.on_channel_activation_changed, index))
+
+class ImageScaleDialog(QDialog):
+    """
+    Class to collect a conversion factor for each image of an analysis run
+
+    Shown when the analysis settings dialog's "uniform" box is unchecked, and also the place to
+    supply a factor for an image that has none. One factor per image, not one per axis: non-square
+    pixels are rare, an area conversion needs only the product, and two boxes per row is a lot of
+    typing for a case nobody here has met.
+
+    The value a file DECLARES is shown beside each row but is never applied on its own -- RW,
+    2026-09-14: *"not all microscopes really save meaningful data in these fields, so the user
+    should still be required to set the values themself."* Clicking "use" copies it into the box,
+    which is a decision the user makes rather than one made for them.
+    """
+
+    def __init__(self, images, default: float, parent=None):
+        """
+        :param images: One (md5, display name, declared factor or None) per image
+        :param default: The factor from the analysis dialog, used to prefill every row
+        :param parent: The parent of this dialog
+        """
+        super(ImageScaleDialog, self).__init__(parent)
+        self.images = list(images)
+        self.default = default
+        self.boxes = {}
+        self.setWindowTitle("Conversion factor per image")
+        self.setWindowIcon(Icon.get_icon("LOGO"))
+        self.setStyleSheet(Util.load_stylesheet("main.css"))
+        self.initialize_ui()
+
+    def initialize_ui(self) -> None:
+        """
+        Method to build the dialog
+
+        :return: None
+        """
+        layout = QVBoxLayout(self)
+        hint = QLabel("Pixels per micrometre, for each image of this run. The value a file declares "
+                      "is shown where it has one -- it is a suggestion, not a measurement.")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        table = QTableWidget(len(self.images), 3, self)
+        table.setHorizontalHeaderLabels(["Image", "Declared by the file", "Pixels per µm"])
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for row, (md5, name, declared) in enumerate(self.images):
+            item = QTableWidgetItem(name)
+            item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+            item.setToolTip(md5)
+            table.setItem(row, 0, item)
+            shown = QTableWidgetItem("-" if declared is None else f"{declared:.4f}")
+            shown.setFlags(shown.flags() & ~Qt.ItemIsEditable)
+            table.setItem(row, 1, shown)
+            box = QDoubleSpinBox(self)
+            box.setDecimals(4)
+            box.setMaximum(100.0)
+            # The analysis dialog's value, not the declared one -- see the class docstring
+            box.setValue(self.default)
+            self.boxes[md5] = box
+            table.setCellWidget(row, 2, box)
+        table.resizeColumnsToContents()
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        layout.addWidget(table)
+
+        use_declared = QPushButton("Use the declared values where there are any", self)
+        use_declared.clicked.connect(self.apply_declared)
+        layout.addWidget(use_declared)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.resize(640, min(200 + 28 * len(self.images), 700))
+
+    def apply_declared(self) -> None:
+        """
+        Method to copy every declared value into its spin box
+
+        One deliberate action rather than a silent default, which is the whole point of the
+        distinction. Rows whose file declares nothing are left as they are.
+
+        :return: None
+        """
+        for md5, _name, declared in self.images:
+            if declared:
+                self.boxes[md5].setValue(float(declared))
+
+    def get_data(self) -> Dict[str, float]:
+        """
+        Method to get the entered factors
+
+        :return: The conversion factor per image md5
+        """
+        return {md5: box.value() for md5, box in self.boxes.items()}
+
 
 class SettingsDialog(QDialog):
     """

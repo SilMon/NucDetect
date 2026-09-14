@@ -58,8 +58,12 @@ class DataExportDialog(QDialog):
         "All analysed Images",
         "All defined Experiments"
     )
-    STANDARD_HEADER = ["Image Name", "Image Identifier", "ROI Identifier", "Center Y", "Center X", "Area [px]",
-                       "Ellipticity[%]", "Or. Angle [deg]", "Maj. Axis", "Min. Axis", "match"]
+    # Areas and axes are in micrometres, centres in pixels -- RW, 2026-09-14: a centre is a
+    # literal coordinate in the image and converting it would help nobody. An image with no stored
+    # conversion factor reports these three columns in pixels instead, and the log says which image.
+    STANDARD_HEADER = ["Image Name", "Image Identifier", "ROI Identifier", "Center Y", "Center X",
+                       "Area [µm²]", "Ellipticity[%]", "Or. Angle [deg]", "Maj. Axis [µm]",
+                       "Min. Axis [µm]", "match"]
 
     def __init__(self, current_image: Union[str, None] = None, display_name: Union[str, None] = None):
         """

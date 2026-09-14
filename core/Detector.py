@@ -110,6 +110,20 @@ class Detector:
         self.analysis_log["Messages"][self.analysis_log["Analysed Images"][-1]] = []
         prg[LOAD](0.3, "Hashing image")
         imgdat["id"] = self.imageloader.calculate_image_id(path)
+        # A per-image conversion factor overrides the run-wide one, for THIS image only.
+        #
+        # Done here rather than at either dispatch site because this is where the image identity is
+        # known: the single-image path and the batch path would otherwise each need their own copy
+        # of the same override, and the batch one hands the settings to a worker process.
+        #
+        # The dict is COPIED before the override. analysis_settings is shared across the run --
+        # batch analysis passes one dict to every worker -- so writing into it would give the next
+        # image whatever the previous one was set to. That this method mutates its argument at all
+        # is an open finding; this line does not add to it.
+        per_image = analysis_settings.get("per_image_scale") or {}
+        if imgdat["id"] in per_image:
+            analysis_settings = dict(analysis_settings)
+            analysis_settings["dots_per_micron"] = per_image[imgdat["id"]]
         # Check if only a grayscale image was provided
         if imgdat["channels"] == 1:
             self.add_log_message("Detector class can only analyse multichannel images, not grayscale!")

@@ -52,7 +52,7 @@ from gui.definitions.icons import Icon, Color
 from core.detector_modules.ImageLoader import ImageLoader
 from gui.dialogs.data import Editor, ExperimentDialog, StatisticsDialog, DataExportDialog
 from gui.dialogs.selection import ExperimentSelectionDialog
-from gui.dialogs.settings import AnalysisSettingsDialog, SettingsDialog
+from gui.dialogs.settings import AnalysisSettingsDialog, ImageScaleDialog, SettingsDialog
 from gui import Paths as gpaths
 from gui import Util
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, False)
@@ -203,8 +203,8 @@ class NucDetect(QMainWindow):
     # every label and clipped every arrow. The user could sort but had no way to see that they had.
     STANDARD_TABLE_HEADER = ["Image Name", "Image ID",
                              "ROI ID", "Center Y",
-                             "Center X", "Area [px]", "Ellipt. [%]",
-                             "Angle [°]", "Maj. Axis", "Min. Axis",
+                             "Center X", "Area [µm²]", "Ellipt. [%]",
+                             "Angle [°]", "Maj. [µm]", "Min. [µm]",
                              "Co-Loc. [%]", "Channel", "Foci"]
 
     def __init__(self):
@@ -1109,12 +1109,49 @@ class NucDetect(QMainWindow):
             settings = anal_sett_dial.get_data()
             an_sett = settings["analysis_settings"]
             settings["analysis_settings"].update({x: y for (x, y) in self.settings.items() if x not in an_sett})
+            # One factor for the run, or one per image. The checkbox lives in the settings dialog
+            # but the IMAGE LIST does not -- this window knows which images the run covers, so the
+            # second dialog is opened from here rather than from inside the first.
+            if not settings.get("uniform_scale", True):
+                per_image = self.ask_for_per_image_scale(
+                    settings["analysis_settings"]["dots_per_micron"],
+                    batch=show_redo_option)
+                if per_image is None:
+                    # Cancelled. Treated exactly like cancelling the settings dialog: an analysis
+                    # that would run with the wrong scale is worse than one that does not run
+                    self.ui.list_images.setEnabled(True)
+                    self.enable_buttons(True)
+                    return None
+                settings["analysis_settings"]["per_image_scale"] = per_image
             return settings
         else:
             # If the dialog was rejected, abort analysis
             self.ui.list_images.setEnabled(True)
             self.enable_buttons(True)
             return None
+
+    def ask_for_per_image_scale(self, default: float,
+                                batch: bool = False) -> Union[Dict[str, float], None]:
+        """
+        Method to collect a conversion factor for every image of the coming run
+
+        :param default: The factor from the analysis dialog, used to prefill every row
+        :param batch: True when the run covers every loaded image rather than the selected one
+        :return: The factor per image md5, or None if the user cancelled
+        """
+        paths = list(self.loaded_files) if batch else [self.cur_img["path"]]
+        rows = []
+        for path in paths:
+            md5 = ImageLoader.calculate_image_id(path)
+            # The value the FILE declares, offered as a suggestion and never applied on its own --
+            # get_image_scale answers None when the image has no stored factor, which is also the
+            # state this dialog exists to fix
+            declared = self.requester.get_image_scale(md5)
+            rows.append((md5, os.path.basename(path), declared[0] if declared else None))
+        dialog = ImageScaleDialog(rows, default=default, parent=self)
+        if dialog.exec() != QDialog.Accepted:
+            return None
+        return dialog.get_data()
 
     def analyze(self) -> None:
         """
