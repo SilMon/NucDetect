@@ -13,10 +13,11 @@ import pyqtgraph as pg
 from PyQt5 import uic, QtCore, QtGui
 from PyQt5.QtCore import QRectF, Qt, QItemSelection, QAbstractTableModel, QVariant, pyqtSignal, QTimer
 from PyQt5.QtGui import QKeyEvent, QStandardItemModel, QStandardItem
-from PyQt5.QtWidgets import QDialog, QGraphicsItem, QInputDialog, \
-    QSizePolicy, QMessageBox, QSpinBox, QHBoxLayout, QVBoxLayout, QHeaderView, \
-    QMenuBar, QMenu, QAction, QComboBox, QListWidget, QAbstractItemView, QListWidgetItem, \
-    QAbstractScrollArea, QWidget
+from PyQt5.QtWidgets import (
+                             QDialog, QInputDialog, QSizePolicy, QMessageBox, QSpinBox,
+                             QHBoxLayout, QVBoxLayout, QHeaderView, QMenuBar, QMenu, QAction,
+                             QComboBox, QListWidget, QAbstractItemView, QListWidgetItem,
+                             QAbstractScrollArea, QWidget)
 from matplotlib.backends.backend_qt5 import NavigationToolbar2QT as NavigationToolbar
 
 from gui import Plots

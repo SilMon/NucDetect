@@ -24,7 +24,20 @@ class FocusMapper(AreaMapper):
     STANDARD_SETTINGS = {
         "use_smoothing": False,
         "use_background_reduction": False,
-        "use_signal_improvement": False,
+        # "use_signal_improvement": False stood here until 2026-09-14. RW: *"Signal improvement
+        # is no longer supported by the program."* The key appeared once in the whole tree, in
+        # this dict: nothing read it and nothing supplied it, so the settings dict a real
+        # analysis runs with never contained it.
+        #
+        # THE LESSON IS THE DICT, NOT THE KEY. STANDARD_SETTINGS is a FALLBACK, not a
+        # description of the real settings -- a log line added on 2026-08-21 read this key,
+        # ran green against this dict in a harness, and raised KeyError on the first real
+        # analysis. A key here that no dialog, settings.json entry or seed supplies is a trap
+        # for the next person who assumes the two agree.
+        #
+        # Three more keys are in that state and are NOT removed here, because nobody has ruled
+        # on them: "smoothing" in this dict, and "cutoff" and "min_nucleus_int_perc" in
+        # QualityTester.STANDARD_SETTINGS. All three are read by nothing at all.
         # Reconciled with what the application actually ships, 2026-08-15. dots_per_micron was
         # 1.3938, which implies a 1024 px field of 734.7 um and matches no acquisition the lab
         # performs; it is now the analysis settings dialog's own default. min_sigma/max_sigma were

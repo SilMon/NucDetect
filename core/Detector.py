@@ -173,7 +173,9 @@ class Detector:
         main_map, main_roi = self.nucleus_extraction(main, main_channel_name, analysis_settings,
                                                      prg[NUCLEUS])
         # Define a handler to take the ROI
-        handler = ROIHandler(ident=imgdat["id"])
+        # The nomination comes from the analysis dialog, by way of settings["main"] -- it is
+        # the channel the user pointed at, and it holds whether or not anything was found on it
+        handler = ROIHandler(ident=imgdat["id"], main=main_channel_name)
         handler.idents = analysis_settings["names"]
         # Check if nuclei were detected
         if main_roi:
@@ -230,7 +232,32 @@ class Detector:
                 # -- as soon as a deactivated channel was not the trailing one
                 qroi = self.perform_quality_check(channels, analysis_settings["names"],
                                                   analysis_settings, rois)
-                self.add_log_message(f"QR: Removed foci: {len(rois) - len(qroi)}")
+                # RW ruled on 2026-08-24 that this line must report more than it did:
+                # *"Both the count of deleted nuclei as well as deleted foci should be provided.
+                # For foci, the number per channel should be stated."*
+                #
+                # It read `len(rois) - len(qroi)` under the label "Removed foci". Both lists hold
+                # nuclei AND foci, so the difference is the number of ROI removed, always too high
+                # by the nucleus count: on a run RW pasted it said 5211 foci where 5179 foci and 32
+                # nuclei had gone. That mattered more than a wording slip, because the number then
+                # failed to reconcile with the lines above it -- and reconciling the gap by hand is
+                # what exposed the size-bound defect.
+                #
+                # The counts are taken HERE, from the two lists, because this is the last place the
+                # channel of each removed ROI is still known. Identity, not equality: two ROI with
+                # the same area on the same channel are equal and hash alike, so a set of hashes
+                # would under-count duplicates.
+                kept = {id(x) for x in qroi}
+                removed = [x for x in rois if id(x) not in kept]
+                removed_nuclei = sum(1 for x in removed if x.main)
+                per_channel = {}
+                for roi in removed:
+                    if not roi.main:
+                        per_channel[roi.ident] = per_channel.get(roi.ident, 0) + 1
+                breakdown = ", ".join(f"{name}: {n}" for name, n in sorted(per_channel.items()))
+                self.add_log_message(
+                    f"QR: Removed {removed_nuclei} nuclei and {sum(per_channel.values())} foci"
+                    + (f" ({breakdown})" if breakdown else ""))
             else:
                 # `rois`, NOT an empty list. This read `qroi = []`, so **switching the quality check
                 # off discarded every detected ROI** and the analysis produced nothing at all --

@@ -4,7 +4,7 @@ from concurrent.futures import ProcessPoolExecutor
 from itertools import product
 
 import numpy as np
-from typing import Tuple, Union, List, Dict
+from typing import Tuple, Union, List
 
 import pandas as pd
 from scipy.stats import permutation_test, cramervonmises_2samp
@@ -281,10 +281,18 @@ def create_circular_mask(h: Union[int, float], w: Union[int, float],
     :param radius: The radius of the circle, optional
     :return: The created mask as numpy array
     """
+    # (size - 1) / 2, not int(size / 2). The geometric centre of an n-wide array is at (n-1)/2, so
+    # for an EVEN size int(n/2) sits half a pixel past it and the disc is clipped on the far side:
+    # create_circular_mask(14, 14) had its centre of mass at 7.0 against a geometric centre of 6.5.
+    # Measured 2026-09-11, and it is not a corner case -- the shipped opening footprint is
+    # mask_size * maximum_size_multiplier * size_factor = 14, even by default, so every opening in
+    # nucleus detection was biased half a pixel down and to the right.
+    #
+    # Odd sizes were already correct and are unchanged: (21-1)/2 = 10.0 = int(21/2).
     if center is None:
-        center = [int(w / 2), int(h / 2)]
+        center = [(w - 1) / 2, (h - 1) / 2]
     if radius is None:
-        radius = min(center[0], center[1], w - center[0], h - center[1])
+        radius = min(center[0], center[1], w - 1 - center[0], h - 1 - center[1])
     y, x = np.ogrid[:h, :w]
     dist_from_center = np.sqrt((x - center[0]) ** 2 + (y - center[1]) ** 2)
     mask = dist_from_center <= radius

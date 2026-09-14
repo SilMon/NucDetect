@@ -35,14 +35,27 @@ class ROIHandler(Sequence):
         "idents",
     ]
 
-    def __init__(self, ident: str = None):
+    def __init__(self, ident: str = None, main: str = ""):
         """
         :param ident: md5 hash of the image this handler is associated with
+        :param main: name of the channel the nuclei are detected on
         """
         self.ident: str = ident
         self.rois: List[ROI] = []
         self.idents: List[str] = []
-        self.main = ""
+        # NOMINATED, not derived -- RW, 2026-09-14: *"The user assigns on which channel the program
+        # will look for nuclei, so which channel is 'main'."*
+        #
+        # It used to be set by `add_roi` from each ROI's own `main` flag, which made it a property
+        # of what happened to be DETECTED rather than of what the user asked for. Two consequences:
+        # an image whose nucleus channel found nothing had `main == ""`, and `idents.index("")`
+        # raised on save (UI row 72, twice); and removing the last nucleus would silently have
+        # un-nominated the channel, which is why the removal paths could not simply recompute it.
+        #
+        # `""` still means "nobody has said", and readers still have to handle it -- an in-band
+        # sentinel is its own small finding -- but it is now only reachable when the caller supplies
+        # nothing, not as a consequence of detection.
+        self.main = main
 
     def __len__(self):
         return len(self.rois)
@@ -71,7 +84,14 @@ class ROIHandler(Sequence):
         self.rois.append(roi)
         if roi.ident not in self.idents:
             self.idents.append(roi.ident)
-        if roi.main:
+        # `if roi.main: self.main = roi.ident` stood here until 2026-09-14. The main channel is a
+        # nomination made by the user before the analysis runs, so it is supplied at construction
+        # and a detected ROI no longer votes on it. See __init__.
+        #
+        # The fallback covers a handler built without one: the first main ROI still names the
+        # channel, so nothing that used to work stops working, but a supplied nomination is never
+        # overwritten by what was detected.
+        if roi.main and not self.main:
             self.main = roi.ident
 
     def add_rois(self, rois: List[ROI]) -> None:

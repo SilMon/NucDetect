@@ -34,7 +34,6 @@ import PyQt5
 import numpy as np
 import pyqtgraph as pg
 from PyQt5 import QtCore, QtWidgets
-from PyQt5 import QtGui
 from PyQt5 import uic
 from PyQt5.QtCore import QSize, pyqtSignal, QItemSelectionModel, QSortFilterProxyModel, QModelIndex, \
     QAbstractListModel, QTimer, Qt
@@ -1563,6 +1562,8 @@ class NucDetect(QMainWindow):
         self.prg_signal.emit(f"Loading data",
                              0, 100, "")
         # Get requester
+        # main comes from the channels table a few lines below, which records the nomination
+        # made when the image was analysed
         rois = ROIHandler(ident=md5)
         entries = self.requester.get_associated_roi(md5)
         names = self.requester.get_channels(md5)

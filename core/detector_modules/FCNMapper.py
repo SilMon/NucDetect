@@ -4,12 +4,10 @@ from typing import Iterable, Dict, List, Tuple
 import numpy as np
 import tensorflow as tf
 from scipy.signal.windows import hann
-from skimage.exposure import rescale_intensity
 from skimage.feature import peak_local_max
-from skimage.filters import gaussian, threshold_otsu, threshold_minimum, threshold_local
-from skimage.filters.rank import maximum
+from skimage.filters import threshold_otsu
 from skimage.segmentation import watershed
-from scipy.ndimage import label, binary_fill_holes
+from scipy.ndimage import label
 from skimage.morphology import opening
 from skimage.transform import resize
 from skimage.util import view_as_windows

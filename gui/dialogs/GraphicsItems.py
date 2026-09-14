@@ -5,7 +5,7 @@ import numpy as np
 import pyqtgraph as pg
 from PyQt5 import QtCore
 from PyQt5.QtCore import QRectF, Qt, QPointF, pyqtSignal
-from PyQt5.QtGui import QColor, QCursor, QKeyEvent, QMouseEvent
+from PyQt5.QtGui import QColor, QKeyEvent, QMouseEvent
 from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem, QMessageBox
 from pyqtgraph import ColorBarItem
 from skimage.draw import ellipse

@@ -380,11 +380,27 @@ class Connector:
         :param quote: If true, strings will be quoted
         :return: The converted value
         """
+        # None FIRST, and it is a SQL keyword rather than a value. There was no branch for it at
+        # all until 2026-09-14: the method fell off the end, returned the Python None, and the
+        # caller's f-string rendered it as the bare word `None` -- which SQLite then read as a
+        # column name. `Inserter.set_image_scale(md5, None, None)` raised
+        # `OperationalError: no such column: None`, and EVERY nullable column had the same hole,
+        # not just that one: x_res, y_res, unit, associated, match and co_localized are all
+        # nullable by design, and writing NULL to any of them had no working route.
+        #
+        # CAVEAT, because this is the one place to write it down: `<col> = NULL` is never true in
+        # SQL, so a None reaching a WHERE clause now silently matches nothing where it used to
+        # raise. Use Specifiers.IS with Specifiers.NULL for that -- convert_where_statement already
+        # renders those two as `IS NULL`. A loud failure has been traded for a quiet one in a place
+        # no caller currently goes; the trade is worth it because the INSERT and UPDATE paths are
+        # the ones that exist and they were simply broken.
+        if value is None:
+            return "NULL"
         # bool BEFORE int, because bool is a subclass of int: tested the other way round the int
         # branch wins and True converts to "True" rather than "1". SQLite only accepts the bare
         # TRUE/FALSE literals from 3.23 onwards and only while the value is interpolated unquoted,
         # so the old order worked by two coincidences at once
-        if isinstance(value, bool):
+        elif isinstance(value, bool):
             return f"{int(value)}"
         elif isinstance(value, (float, int)):
             return f"{value}"
@@ -945,8 +961,14 @@ class Requester(DatabaseInteractor):
                 major, minor = stats[12], stats[13]
                 ellipticity = (None if major is None or minor is None or float(major) <= 0
                                else 1 - float(minor) / float(major))
+                # stats[2] is the MEASURED area -- the pixel count of the roi. stats[15] is
+                # `ellipse_area`, pi * r_major * r_minor of the fitted ellipse, which is what this
+                # cell held until 2026-09-14 under a header reading "Area". The two differ by
+                # exactly the fit ratio that used to be displayed as Ellipticity[%]: measured
+                # 0.95 to 1.38 on the real database, so up to 38 % apart. RW: display the actual
+                # area. The ellipse area stays in the statistics table and is simply not shown.
                 measurements = [_measure(stats[11]), _measure(stats[10]),
-                                _measure(stats[15], 1 / area_factor),
+                                _measure(stats[2], 1 / area_factor),
                                 _measure(ellipticity, 100), _measure(stats[14]),
                                 _measure(stats[12], 1 / length_factor),
                                 _measure(stats[13], 1 / length_factor)]

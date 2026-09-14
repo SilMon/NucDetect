@@ -1,15 +1,11 @@
 import itertools
 import time
-import warnings
-from typing import List, Tuple, Dict, Union
+from typing import List, Tuple
 
 import numpy as np
-from numba.typed import List as NumbaList
 from scipy.spatial import cKDTree
 
-from core.roi.AreaAnalysis import imprint_area_into_array, convert_area_to_array, get_surface
 from core.roi.ROI import ROI
-from core.roi import AreaAnalysis
 
 
 class MapComparator:
