@@ -33,6 +33,22 @@ LOGGER = get_logger(__name__)
 # captions have to agree -- which is exactly why the value is validated rather than assumed
 DETECTION_METHODS = frozenset({"image processing", "u-net", "combined"})
 
+# Thresholds for the per-image plausibility report below. They decide when the line is escalated
+# from a record to a warning; they filter NOTHING and change no result.
+#
+# BOTH ARE SET ABOVE WHAT THIS DETECTOR NORMALLY DOES, measured rather than chosen:
+#
+# * **border**: over the whole testing database -- 116 analysed images, 1714 stored nuclei -- 19.5 %
+#   of nuclei are cut off by an edge, per image a median of 20 % and a maximum of 60 %. 0.4 fires
+#   on that tail and not on the norm. (The 2026-09-11 investigation measured 25.3 % on its seven
+#   reference images, which agrees.)
+# * **size bounds**: the detector's own output runs 36 % to 52 % outside them, and RW ruled on
+#   2026-09-15 that the bounds are correctly tuned as they stand. So half the output being
+#   discarded is this pipeline working normally, and the threshold has to sit well above it --
+#   0.5 would have warned on most images, which is a warning nobody reads.
+IMPLAUSIBLE_DISCARD_SHARE = 0.75
+IMPLAUSIBLE_BORDER_SHARE = 0.4
+
 
 class Detector:
     FORMATS = [
@@ -172,6 +188,10 @@ class Detector:
         # and named the nucleus channel after a different channel whenever anything was deactivated
         main_map, main_roi = self.nucleus_extraction(main, main_channel_name, analysis_settings,
                                                      prg[NUCLEUS])
+        # Reported HERE, on what the detector returned, not on what survives the quality check:
+        # the point of the line is to describe the detection, and a result that is implausible
+        # because the bounds removed most of it reads as a clean one once they have
+        plausibility = self.report_nucleus_plausibility(main_roi, main.shape, analysis_settings)
         # Define a handler to take the ROI
         # The nomination comes from the analysis dialog, by way of settings["main"] -- it is
         # the channel the user pointed at, and it holds whether or not anything was found on it
@@ -295,6 +315,9 @@ class Detector:
         imgdat["y_scale"] = analysis_settings["dots_per_micron"]
         imgdat["scale_unit"] = "µm"
         imgdat["handler"] = handler
+        # Travels back with the result so the PARENT can escalate it. A batch worker's own logger
+        # is a NullHandler, so the warning has to be raised where the results are collected
+        imgdat["plausibility"] = plausibility
         imgdat["names"] = analysis_settings["names"]
         imgdat["channels"] = channels
         imgdat["active channels"] = active
@@ -354,6 +377,88 @@ class Detector:
             nucleus.detection_method = "Nucleus Detection"
         self.add_log_message(f"Finished nuclei extraction {time.time() - s0:.4f}")
         return nucmap, nuclei
+
+    def report_nucleus_plausibility(self, nuclei: List[ROI], shape: Tuple[int, int],
+                                    analysis_settings: Dict) -> Dict[str, Union[int, float, bool]]:
+        """
+        Method to describe what the nucleus detection returned, before anything filters it
+
+        **Nothing here changes a result.** Until 2026-09-15 the pipeline reported the two counts
+        the mapper logs -- seeds found, nuclei segmented -- and nothing else, so the failures a
+        user actually meets were invisible: the segmentation returns 1 px regions (4 of 166 on the
+        reference images, against a median of 6188 px), a third to a half of its output is
+        discarded downstream by the size bounds, and a quarter of what survives is cut off by the
+        image border. Each of those produces a plausible-looking result with a full progress bar.
+
+        The figures were all already computed somewhere; the point of this method is that they are
+        reported together, per image, **without the user having to know what the image should
+        contain**. The bounds are the same ones QualityTester filters on, converted the same way,
+        so the "discarded" figure here and what the quality check actually removes cannot drift
+        apart -- and it is reported whether or not the quality check is switched on, because the
+        question "is this a sensible detection?" does not depend on that setting.
+
+        Reported through add_log_message rather than LOGGER: in a batch run this executes inside a
+        ProcessPoolExecutor worker, whose logger is a NullHandler by design, so a LOGGER call here
+        would vanish for exactly the runs that need it most. The parent replays the buffered lines
+        and escalates the warning -- see the returned dict, which travels back in the result.
+
+        :param nuclei: The nuclei as the detector produced them, before the quality check
+        :param shape: The (height, width) of the main channel
+        :param analysis_settings: The settings this analysis runs with
+        :return: The figures, for the caller to surface
+        """
+        # px per um, squared for an area, exactly as QualityTester.check_size_boundaries does it.
+        # .get with a default where the quality check uses []: a missing bound must not take a
+        # REPORT down, and the three keys are guaranteed present in the dict a real analysis runs
+        # with -- it is harnesses and hand-built dicts that omit them
+        px_per_um2 = analysis_settings.get("dots_per_micron", 1.0) ** 2
+        lower = analysis_settings.get("min_main_area", 0) * px_per_um2
+        upper = analysis_settings.get("max_main_area", float("inf")) * px_per_um2
+        below = above = border = 0
+        for nucleus in nuclei:
+            area = nucleus.calculate_dimensions()["area"]
+            if area < lower:
+                below += 1
+            elif area > upper:
+                above += 1
+            if nucleus.touches_border(shape):
+                border += 1
+        total = len(nuclei)
+        # max(1, total) rather than a guard: total == 0 is itself implausible and is reported as
+        # such below, so the shares must stay computable rather than take the report down
+        divisor = max(1, total)
+        report = {
+            "nuclei": total,
+            "below_min_area": below,
+            "above_max_area": above,
+            "border": border,
+            "discarded_share": (below + above) / divisor,
+            "border_share": border / divisor,
+        }
+        report["implausible"] = bool(
+            total == 0
+            or report["discarded_share"] > IMPLAUSIBLE_DISCARD_SHARE
+            or report["border_share"] > IMPLAUSIBLE_BORDER_SHARE
+        )
+        self.add_log_message(
+            f"Plausibility: {total} nuclei, {below} below and {above} above the size bounds "
+            f"({report['discarded_share']:.1%} discarded), {border} touching the image border "
+            f"({report['border_share']:.1%})"
+        )
+        if report["implausible"]:
+            # The reason is spelled out rather than left to be re-derived from the line above: the
+            # three conditions look alike in the numbers and mean different things -- an empty
+            # result, a channel whose objects are the wrong size, and a field of view that is
+            # mostly edge
+            if total == 0:
+                reason = "no nuclei were detected at all"
+            elif report["discarded_share"] > IMPLAUSIBLE_DISCARD_SHARE:
+                reason = "most of the detected nuclei lie outside the size bounds"
+            else:
+                reason = "most of the detected nuclei are cut off by the image border"
+            report["reason"] = reason
+            self.add_log_message(f"Plausibility: RESULT LOOKS IMPLAUSIBLE -- {reason}")
+        return report
 
     def ip_roi_extraction(self, nuclei: List[ROI],
                           foc_channels: List[np.ndarray], analysis_settings,

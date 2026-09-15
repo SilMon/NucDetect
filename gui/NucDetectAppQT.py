@@ -196,15 +196,20 @@ class NucDetect(QMainWindow):
     table_signal = pyqtSignal(list, list)
     row_signal = pyqtSignal(list)
     status_signal = pyqtSignal(bool)
-    # Labels are kept SHORT on purpose. The table has 13 columns, and a header section only shows
+    # Labels are kept SHORT on purpose. The table has 14 columns, and a header section only shows
     # its sort indicator if the label leaves room for it -- measured before this was shortened,
     # every one of the 13 sections was ~50 px wide against labels needing 52-238 px, so Qt elided
     # every label and clipped every arrow. The user could sort but had no way to see that they had.
+    #
+    # "Edge" was added 2026-09-15 and is a NUCLEUS-level column: it says whether the nucleus is cut
+    # off by the image border, which RW ruled is to be flagged rather than filtered. It is not in
+    # CHANNEL_LEVEL_COLUMNS, so it merges across a nucleus's channel rows like every other
+    # nucleus-level cell -- that behaviour follows from the header label, not from the position.
     STANDARD_TABLE_HEADER = ["Image Name", "Image ID",
                              "ROI ID", "Center Y",
                              "Center X", "Area [µm²]", "Ellipt. [%]",
                              "Angle [°]", "Maj. [µm]", "Min. [µm]",
-                             "Co-Loc. [%]", "Channel", "Foci"]
+                             "Co-Loc. [%]", "Edge", "Channel", "Foci"]
 
     def __init__(self):
         """
@@ -1095,14 +1100,56 @@ class NucDetect(QMainWindow):
         self.loaded_files.clear()
         self._forget_current_image()
 
+    def settings_for_analysis_dialog(self, batch: bool = False) -> Dict:
+        """
+        Method to build the settings the analysis dialog opens with
+
+        **The main-channel nomination comes from the IMAGE when it has one.** RW, 2026-09-15:
+        *"The analysis settings dialog should also show the correct main channel selection for
+        images that were already analysed."* The dialog used to preselect `settings.main_channel`
+        -- the program-wide default from the settings table -- every time it opened, because
+        nothing writes a nomination back. So a user who analysed an image on Red met a dialog
+        offering Blue the next time, and re-analysing without noticing produced an analysis on a
+        channel they had not chosen.
+
+        The per-image nomination is already recorded: `channels.main` is written at the end of
+        every analysis, for whichever channel was used. This reads it back.
+
+        **Not for a batch run.** "Analyse all" covers many images, which can carry different
+        nominations, and one dialog cannot show several -- so the program-wide default is used
+        there and nothing is guessed.
+
+        **A COPY, never `self.settings` itself.** The dialog is handed a dict it reads freely and
+        this method overwrites a key in it; writing that into the loaded program settings would
+        make one image's nomination the default for every image afterwards, which is the opposite
+        of what was asked for.
+
+        :param batch: True when the run will cover every loaded image rather than the selected one
+        :return: The settings for the dialog
+        """
+        settings = dict(self.settings)
+        if batch or not self.cur_img:
+            return settings
+        # Columns are (md5, index_, name, active, main). An image that was never analysed has no
+        # channel rows at all, and one analysed before the main flag was written has none set --
+        # both leave the program-wide default in place rather than inventing a nomination
+        nominated = [row for row in self.requester.get_channels(self.cur_img["key"]) if row[4]]
+        if not nominated:
+            return settings
+        settings["main_channel"] = nominated[0][1]
+        LOGGER.debug("Analysis dialog opens on channel %s (%s), the nomination stored for %s",
+                     nominated[0][1], nominated[0][2], self.cur_img["file_name"])
+        return settings
+
     def show_analysis_settings_dialog(self, show_redo_option: bool = False) -> Union[Dict, None]:
         """
         Method to show the analysis settings dialog
 
         :return: Bool which signifies if the dialog was confirmed or cancelled
         """
-        anal_sett_dial = AnalysisSettingsDialog(settings=self.settings,
-                                                all_=show_redo_option)
+        anal_sett_dial = AnalysisSettingsDialog(
+            settings=self.settings_for_analysis_dialog(batch=show_redo_option),
+            all_=show_redo_option)
         code = anal_sett_dial.exec()
         if code == QDialog.Accepted:
             settings = anal_sett_dial.get_data()
@@ -1219,6 +1266,7 @@ class NucDetect(QMainWindow):
             path, settings=analysis_settings,
             save_log=bool(analysis_settings["analysis_settings"].get("logging", True)),
             progress=reporter)
+        self.report_plausibility(data)
         self.roi_cache = data["handler"]
         # Captured BEFORE the advance at the end of this method moves the selection off this image
         self._roi_cache_img = self.cur_img
@@ -1365,6 +1413,9 @@ class NucDetect(QMainWindow):
                         # ~2400 of them around this run's eight progress lines. The file still gets
                         # everything, in image order, which is the point of the replay
                         log_messages(r.get("log", ()), console=False)
+                    # Outside the log_analysis branch above on purpose: the replayed record is
+                    # file-only and optional, the verdict is neither
+                    self.report_plausibility(r)
                     self.save_rois_to_database(r, all_=True)
                     # Get the image hash and file name
                     name = self.requester.get_image_filename(r["handler"].ident)
@@ -1782,6 +1833,32 @@ class NucDetect(QMainWindow):
                 row_.insert(2, group)
             rows.extend(row)
         return rows
+
+    @staticmethod
+    def report_plausibility(result: Dict) -> None:
+        """
+        Method to raise the detector's plausibility verdict for one analysed image
+
+        The Detector cannot do this itself. In a batch run it executes in a ProcessPoolExecutor
+        worker, whose logger is a NullHandler by design, so anything it logs directly is dropped --
+        it therefore reports the figures into its own buffered analysis log and hands the verdict
+        back with the result. This is the parent side of that: it runs for single and batch
+        analyses alike, and it is NOT gated on the "logging" setting, because that setting governs
+        the per-image analysis record and this is a warning about the result itself.
+
+        :param result: One analysis result, as returned by Detector.analyse_image
+        :return: None
+        """
+        # .get, because a stubbed result or one produced before 2026-09-15 carries no verdict
+        plausibility = result.get("plausibility")
+        if not plausibility or not plausibility.get("implausible"):
+            return
+        LOGGER.warning("Implausible detection result for %s: %s -- %d nuclei, %d below and %d "
+                       "above the size bounds, %d touching the image border",
+                       result.get("id", "unknown image"),
+                       plausibility.get("reason", "see the analysis log"),
+                       plausibility["nuclei"], plausibility["below_min_area"],
+                       plausibility["above_max_area"], plausibility["border"])
 
     def get_table_data_for_image(self, img: str) -> List[List[str]]:
         """

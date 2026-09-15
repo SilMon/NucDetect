@@ -35,9 +35,10 @@ class FocusMapper(AreaMapper):
         # analysis. A key here that no dialog, settings.json entry or seed supplies is a trap
         # for the next person who assumes the two agree.
         #
-        # Three more keys are in that state and are NOT removed here, because nobody has ruled
-        # on them: "smoothing" in this dict, and "cutoff" and "min_nucleus_int_perc" in
-        # QualityTester.STANDARD_SETTINGS. All three are read by nothing at all.
+        # "smoothing": 3 stood here until 2026-09-15, and "cutoff" and "min_nucleus_int_perc"
+        # in QualityTester.STANDARD_SETTINGS went with it -- the last three keys in this state.
+        # RW ruled on all three at once. Nothing supplied them and nothing read them: the whole
+        # tree held each name exactly once, in the dict that declared it.
         # Reconciled with what the application actually ships, 2026-08-15. dots_per_micron was
         # 1.3938, which implies a 1024 px field of 734.7 um and matches no acquisition the lab
         # performs; it is now the analysis settings dialog's own default. min_sigma/max_sigma were
@@ -48,7 +49,6 @@ class FocusMapper(AreaMapper):
         # rather than trusted. If the acquisition calibration behind 6.412 is ever corrected, this
         # value moves with the dialog default rather than being a second place to remember.
         "dots_per_micron": 6.412,
-        "smoothing": 3,
         # MICROMETRES since 2026-09-14, converted to pixels in detect_foci_on_acc_map. These
         # two were 1.5 and 3.5 PIXELS, which at the 6.412 px/um default is what they still
         # mean on a 40x image -- the numbers changed, the detection did not.

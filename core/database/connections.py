@@ -2,7 +2,7 @@ import os
 import sqlite3
 import time
 from enum import Enum
-from typing import Tuple, Dict, List, Optional, Union, Iterable, Any
+from typing import Tuple, Dict, List, Optional, Set, Union, Iterable, Any
 
 from core.detector_modules.ImageLoader import ImageLoader
 from core.logging_config import get_logger
@@ -20,6 +20,13 @@ NO_STATISTICS = "Not calculated"
 # placeholder that parses as a number would be indistinguishable from a real result, and the result
 # table's sort key already groups non-numeric cells together after the numeric ones
 NO_COLOCALIZATION = "n/a"
+# Shown in the Edge column of the result table. A nucleus cut off by the image border is measured
+# as though it were whole -- half the size of an uncut one, on the reference images -- so RW ruled
+# on 2026-09-15 that those nuclei are FLAGGED rather than dropped: they stay in the table, in the
+# exports and in the statistics, and the cell says which they are. Words rather than yes/no so the
+# column reads without its header, and so it sorts into two blocks
+CLIPPED_BY_BORDER = "clipped"
+NOT_CLIPPED_BY_BORDER = "whole"
 
 
 class Specifiers(Enum):
@@ -848,6 +855,55 @@ class Requester(DatabaseInteractor):
         return self.connector.get_view_from_table(Specifiers.ALL, "points",
                                                   ("hash", Specifiers.EQUALS, roi))
 
+    def get_nuclei_clipped_by_border(self, image: str,
+                                     nuclei: Iterable[int] = None) -> Set[int]:
+        """
+        Method to get the hashes of the nuclei that are cut off by the edge of the image
+
+        **Derived, not stored.** The flag is computed from the geometry already in the database --
+        the run list in `points` against `images.width`/`height` -- so it needs no column, no
+        migration, and it answers for images analysed long before the flag existed. `roi`'s own
+        `center_x`/`center_y`/`width`/`height` cannot be used: the centre is the CENTROID, not the
+        centre of the bounding box, so the box position is not recoverable from them.
+
+        Rows are bounded by `height` and columns by `width`, verified against the testing database
+        on the five non-square images it holds -- 1384 x 1032 rows reaching row 1031 and column
+        1384. Runs are (row, first_col, length) and half open, so `first_col + length` is one past
+        the last pixel and the right edge is `>= width` while the bottom edge is `>= height - 1`.
+
+        One query per nucleus rather than one aggregate query for the image: `MIN`/`MAX` cannot go
+        through Connector.get_view_from_table, whose parameter check rejects parentheses. Measured
+        on the testing database, the loop costs 3 ms for a 15-nucleus image against the several
+        queries per nucleus this table already runs.
+
+        :param image: The md5 hash of the image
+        :param nuclei: Optional; the nucleus hashes to check. Queried if not given
+        :return: The hashes of the nuclei touching any of the four image edges
+        """
+        info = self.get_info_for_image(image)
+        if info is None:
+            LOGGER.warning("No row for image %s -- no nucleus can be checked against its border",
+                           image)
+            return set()
+        width, height = info[7], info[8]
+        if nuclei is None:
+            nuclei = self.get_nuclei_hashes_for_image(image)
+        clipped = set()
+        for nucleus in nuclei:
+            points = self.connector.get_view_from_table(("row", "column_", "width"), "points",
+                                                        ("hash", Specifiers.EQUALS, nucleus))
+            # A nucleus whose points are gone cannot be judged, and saying "whole" would be an
+            # answer rather than an absence. It is left out and the missing geometry is already
+            # reported by the row builder
+            if not points:
+                continue
+            if (min(p[0] for p in points) <= 0
+                    or min(p[1] for p in points) <= 0
+                    or max(p[0] for p in points) >= height - 1
+                    or max(p[1] + p[2] for p in points) >= width):
+                clipped.add(nucleus)
+        return clipped
+
     def get_table_data_for_image(self, image: str, name: str = None) -> List[List]:
         """
         Method to create a result table for the given image
@@ -864,6 +920,9 @@ class Requester(DatabaseInteractor):
                            "them", image)
         # Get all nuclei associated with this image
         nucs = self.get_nuclei_hashes_for_image(image)
+        # Once per image, like the scale: the border test needs the image dimensions, which are one
+        # row, and the set is then a lookup per nucleus rather than a query per nucleus per channel
+        clipped = self.get_nuclei_clipped_by_border(image, nucs)
         # Hoisted out of the nucleus loop: it does not depend on the nucleus, so it was one query
         # per nucleus for one answer. Fetching it here is also what makes the check below possible
         # exactly once per image rather than once per row.
@@ -974,7 +1033,11 @@ class Requester(DatabaseInteractor):
                                 _measure(stats[13], 1 / length_factor)]
             else:
                 measurements = [NO_STATISTICS] * 7
-            row = [name, str(image), str(nuc)] + measurements + [match]
+            # The Edge cell is a property of the NUCLEUS, so it sits with the other nucleus-level
+            # cells, before the per-channel pair appended below -- the result table merges its
+            # nucleus-level columns across the channel rows and picks them out by header name
+            edge = CLIPPED_BY_BORDER if nuc in clipped else NOT_CLIPPED_BY_BORDER
+            row = [name, str(image), str(nuc)] + measurements + [match, edge]
             # Count the foci
             for channel in channels:
                 rows.append(row + [channel,

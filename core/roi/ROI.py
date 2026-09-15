@@ -327,6 +327,30 @@ class ROI:
                 raise ValueError(f"ROI {self.id} associated to {self.associated} does not contain any points!")
         return self.dims
 
+    def touches_border(self, shape: Tuple[int, int]) -> bool:
+        """
+        Method to check whether this roi is cut off by the edge of the image it was detected on
+
+        A nucleus clipped by the image border is measured as though it were whole: it is roughly
+        half the size of an uncut one -- median 3648 px against 6956 px, over the 42 of 166 nuclei
+        that touch an edge on the seven reference images -- so it drags down every area- and
+        intensity-derived statistic and inflates the count. RW ruled on 2026-09-15 that such nuclei
+        are to be FLAGGED rather than dropped, which is what this answers; nothing filters on it.
+
+        The bounding box is used rather than the run list itself, and that is exact here: a roi
+        touches an edge exactly when its bounding box does.
+
+        `maxY` and `maxX` are EXCLUSIVE -- calculate_dimensions builds them as minimum + extent,
+        and get_bounding_box measures the width to one past the last pixel because a run is
+        half open. So the far edges are `>= height` and `>= width`, not `>= height - 1`.
+
+        :param shape: The (height, width) of the image this roi was detected on
+        :return: True if the roi touches any of the four image edges
+        """
+        dims = self.calculate_dimensions()
+        return (dims["minY"] <= 0 or dims["minX"] <= 0
+                or dims["maxY"] >= shape[0] or dims["maxX"] >= shape[1])
+
     def extract_area_intensity(self,
                                channel: np.ndarray) -> List[Union[int, float]]:
         """

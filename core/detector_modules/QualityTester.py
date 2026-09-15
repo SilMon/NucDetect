@@ -75,12 +75,17 @@ class QualityTester:
         # 1000 -> 24.3, 30000 -> 729.8, 5 -> 0.12, 270 -> 6.57 at 6.412 px/um.
         "min_main_area": 24.3,
         "max_main_area": 729.8,
-        "min_nucleus_int_perc": .8,
         "min_foc_area": 0.12,
         "max_foc_area": 6.57,
         "min_foc_int": .055,
         "min_foc_cont": .005,
-        "cutoff": .03,
+        # "min_nucleus_int_perc": .8 and "cutoff": .03 stood here until 2026-09-15, removed by
+        # RW's ruling together with "smoothing" in FocusMapper.STANDARD_SETTINGS. Nothing supplied
+        # either and nothing read either -- each name appeared exactly once in the whole tree, in
+        # this dict. min_nucleus_int_perc reads like a real quality criterion, and that is the
+        # point: it was never wired up, so declaring it here promised a filter that does not
+        # exist. The nucleus plausibility that WAS wanted is reported by
+        # Detector.report_nucleus_plausibility, which filters nothing.
         # "size_factor": 1.0 stood here until 2026-09-14. QualityTester no longer reads it:
         # check_size_boundaries used to divide by it as though it were a scale, which it is
         # not -- it is the manual editor's spin box, and NucleusMapper's mask multiplier.

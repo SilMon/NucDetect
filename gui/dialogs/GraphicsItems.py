@@ -474,8 +474,9 @@ class EditorView(pg.GraphicsView):
         # TEMPORARY (2026-09-08, at RW's instruction): identified by channel and count, NOT by
         # hash. Every area-less roi in a channel produces the SAME hash -- md5 of the channel name
         # and an empty area -- so a per-row hash names nothing and repeats. Naming the row properly
-        # needs the identity split filed on `reviews/2026-07-26-core-review.md`; until then a
-        # channel and a count is all that can be said honestly.
+        # needs `hash(roi)` and `roi.id` to stop being two different identifiers, which is a known
+        # and separate piece of work; until then a channel and a count is all that can be said
+        # honestly.
         per_channel = {}
         for roi in unusable:
             per_channel[roi.ident] = per_channel.get(roi.ident, 0) + 1
@@ -1449,7 +1450,7 @@ class ROIDrawer:
             #
             # TEMPORARY message (2026-09-08, at RW's instruction): the channel, not the hash. Every
             # area-less roi in a channel hashes to the same value, so the hash named nothing --
-            # naming the row needs the identity split filed on `reviews/2026-07-26-core-review.md`
+            # naming the row needs the roi identity split described at discard_unusable_roi
             if not roi.is_valid():
                 LOGGER.warning("Skipping a roi in channel %s: no points are stored for it. This "
                                "should have been discarded before drawing", roi.ident)

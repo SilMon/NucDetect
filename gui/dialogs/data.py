@@ -28,7 +28,7 @@ from gui.Util import create_image_item_list_from
 from core.database.connections import Inserter, Requester
 from core.logging_config import get_logger
 from gui.definitions.icons import Icon
-from gui.dialogs.GraphicsItems import EditorView, ROIItem
+from gui.dialogs.GraphicsItems import EditorView, ROIDrawer, ROIItem
 from gui.dialogs.selection import ImageSelectionDialog, ExperimentSelectionDialog
 from gui import Paths
 from gui.loader import Loader
@@ -62,9 +62,12 @@ class DataExportDialog(QDialog):
     # Areas and axes are in micrometres, centres in pixels -- RW, 2026-09-14: a centre is a
     # literal coordinate in the image and converting it would help nobody. An image with no stored
     # conversion factor reports these three columns in pixels instead, and the log says which image.
+    # "Edge" was added 2026-09-15, with the column of the same name on the main result table: the
+    # rows come from Requester.get_table_data_for_image, so the two headers describe one row shape
+    # and adding a cell there without adding it here miscounts every column after it
     STANDARD_HEADER = ["Image Name", "Image Identifier", "ROI Identifier", "Center Y", "Center X",
                        "Area [µm²]", "Ellipticity[%]", "Or. Angle [deg]", "Maj. Axis [µm]",
-                       "Min. Axis [µm]", "match"]
+                       "Min. Axis [µm]", "match", "Edge"]
 
     def __init__(self, current_image: Union[str, None] = None, display_name: Union[str, None] = None):
         """
@@ -382,9 +385,25 @@ class DataExportDialog(QDialog):
         """
         # Get general table header
         header = copy.copy(self.STANDARD_HEADER)
-        # Get the channels for this image
-        chans = sorted(self.req.get_channel_names(md5, False))
-        header.extend(chans)
+        # ("Channel", "Foci"), exactly as _export_experiment_as_table does, because both render the
+        # SAME rows -- get_table_data_for_image emits one row per nucleus PER CHANNEL, ending in
+        # the channel name and that channel's focus count.
+        #
+        # This used to append one column per non-main channel, a WIDE layout the rows have never
+        # had. It matched only by coincidence, when an image has exactly two non-main channels:
+        # the two channel NAMES then fill the "Channel" and "Foci" slots and the widths agree.
+        # 115 of the 116 analysed images in the testing database have exactly two. The fifth
+        # channel of `demo_5channel` gives four, and pandas refused the export with
+        # `ValueError: Writing 14 cols but got 16 aliases` -- which in the single-workbook path
+        # aborts the WHOLE run, so every image after it is silently missing. Reported from real
+        # use 2026-09-15. Reconstructed with the pre-Edge-column constants it was
+        # `Writing 13 cols but got 15 aliases`, so the defect predates that column by exactly two
+        # aliases and was not caused by it.
+        #
+        # Whether this export should instead BE the wide table its header promised -- one column
+        # per channel, one row per nucleus -- is a separate question for RW, and a different
+        # change: it would have to reshape the rows, not the header.
+        header.extend(("Channel", "Foci"))
         # Get the data for the given image
         rows = self.get_data_for_image(md5)
         # Try to get the name of the image
@@ -575,6 +594,47 @@ class Editor(QDialog):
         self.y_scale = y_scale
         self.initialize_ui()
 
+    def mark_main_channel_in_combo_box(self) -> None:
+        """
+        Method to mark the main channel in the channel selector, so it is identifiable at a glance
+
+        RW, 2026-09-15: *"The editor channel selection should use color to highlight the main
+        channel if possible. This would allow the user to easily identify the main channel."*
+        Asked for after a re-analysis on a different channel was read as having run on the old
+        one -- nothing on this screen said which channel the nuclei belong to, and nuclei stay
+        drawn on EVERY channel (ROIDrawer.change_channel keeps them active while "show additional"
+        is on), so the view itself cannot answer it either.
+
+        **THE ITEM TEXT IS NOT TOUCHED, and that is a constraint rather than a preference.**
+        `show_channel` is connected to `currentIndexChanged` and looks `currentText()` up in
+        `EditorView.active_channels`, which is keyed by the bare channel name -- appending
+        "(main)" to the label would raise KeyError on every selection of that entry. The mark is
+        therefore colour, weight and a tooltip, all of which live in item DATA.
+
+        The colour is TAKEN FROM the nucleus pen rather than repeated as a literal, so the entry
+        matches what a nucleus actually looks like in the view and cannot drift from it if that
+        pen is ever restyled.
+
+        :return: None
+        """
+        main = self.editor.main_channel
+        index = self.ui.cbx_channel.findText(main)
+        # -1 means the nominated channel is not offered -- the combo is built from the channels
+        # the loaded ARRAY has, and Editor.__init__ drops database rows beyond that. It already
+        # logs the mismatch; there is simply nothing to mark here
+        if index < 0:
+            LOGGER.warning("Main channel %s is not among the offered channels %s -- not marking it",
+                           main, [self.ui.cbx_channel.itemText(i)
+                                  for i in range(self.ui.cbx_channel.count())])
+            return
+        font = self.ui.cbx_channel.font()
+        font.setBold(True)
+        colour = ROIDrawer.MARKERS["nucleus_auto"].color()
+        self.ui.cbx_channel.setItemData(index, QtGui.QBrush(colour), Qt.ForegroundRole)
+        self.ui.cbx_channel.setItemData(index, font, Qt.FontRole)
+        self.ui.cbx_channel.setItemData(index, f"{main} is the main channel -- the nuclei were "
+                                               f"detected on it", Qt.ToolTipRole)
+
     def accept(self) -> None:
         # The editor answers False when the user cancels the confirmation for foci that lie outside
         # every nucleus. Closing anyway would discard the very edits they went back to correct
@@ -643,6 +703,7 @@ class Editor(QDialog):
         for _, name in sorted(self.active_channels, key=lambda channel: channel[0]):
             self.ui.cbx_channel.addItem(name)
         self.ui.cbx_channel.addItem("Composite")
+        self.mark_main_channel_in_combo_box()
         self.ui.cbx_channel.setCurrentText("Composite")
         self.ui.cbx_channel.currentIndexChanged.connect(
             lambda: self.editor.show_channel(self.ui.cbx_channel.currentText())
