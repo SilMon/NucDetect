@@ -85,8 +85,48 @@ class DataExportDialog(QDialog):
         # race: two images sharing a file name would otherwise both be told they may use it
         self._used_file_stems = set()
         self._stem_lock = threading.Lock()
-        self.req = Requester(protected=False)
+        # ONE REQUESTER PER THREAD, handed out by the `req` property below. This used to be a
+        # single `Requester(protected=False)` shared by every export thread -- and `protected` is
+        # what `connect_to_database` passes to sqlite3's `check_same_thread`, so the guard against
+        # exactly this sharing had been switched OFF to make it possible. Several threads then
+        # drove one connection and one cursor concurrently, which sqlite does not support: a
+        # cursor's result set belongs to whoever last executed on it.
+        self._local = threading.local()
         self.ui = self.initialize_ui()
+
+    @property
+    def req(self) -> Requester:
+        """
+        The calling thread's own Requester, created on first use
+
+        A property rather than an argument threaded through eight call sites: every reader below
+        keeps saying `self.req` and gets a connection it is allowed to use. `protected` is left at
+        its default, so sqlite enforces the one-thread-per-connection rule again instead of being
+        told to ignore it.
+
+        Closed by `_run_export`, which is the single funnel every export thread goes through; the
+        dialog's own (main-thread) requester lives as long as the dialog.
+        """
+        requester = getattr(self._local, "requester", None)
+        if requester is None:
+            requester = Requester()
+            self._local.requester = requester
+        return requester
+
+    def _release_thread_requester(self) -> None:
+        """
+        Method to close the calling thread's Requester, if it made one
+
+        Without this an export run leaks one sqlite connection per image -- the non-workbook path
+        starts a thread per image -- and they would only be released when the garbage collector
+        happened to reach them.
+
+        :return: None
+        """
+        requester = getattr(self._local, "requester", None)
+        if requester is not None:
+            requester.connector.close_connection()
+            self._local.requester = None
 
     def accept(self) -> None:
         self.save_data()
@@ -218,6 +258,10 @@ class DataExportDialog(QDialog):
             worker(*args)
         except Exception:
             self.errors.append(traceback.format_exc())
+        finally:
+            # In the finally, so a failed export releases its connection too. This runs on the
+            # export thread, which is the only thread allowed to close that connection
+            self._release_thread_requester()
 
     def export_goes_into_one_workbook(self) -> bool:
         """
@@ -2544,9 +2588,17 @@ class GroupDialog(QDialog):
                                    " This action cannot be reversed!",
                                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
         if clk == QMessageBox.Yes:
-            # Remove list item
+            # THE MODEL, AND ONLY THE MODEL -- RW, 2026-09-16: *"consolidate add and remove"*.
+            #
+            # This used to delete the group's rows and commit here, while `add_group` and
+            # `add_images_to_group` only touch the model and rely on the save path. So Cancel
+            # undid every addition and kept every deletion, which is the opposite of what a
+            # Cancel button promises.
+            #
+            # The immediate write was also REDUNDANT: `ExperimentDialog.save_changes` calls
+            # `remove_group_associations_for_experiment` and rewrites every association from this
+            # model, so a group removed from the model is removed from the database on OK
+            # whether or not anything was deleted here. Dropping the write is therefore all that
+            # is needed to put both halves on one contract -- the model is the pending state, and
+            # OK applies it.
             self.group_model.removeRow(index)
-            # Update images in database
-            for key in data["keys"]:
-                self.inserter.remove_image_from_group(key, self.data["name"])
-            self.inserter.commit()

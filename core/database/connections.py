@@ -101,6 +101,11 @@ class Connector:
             query = self.commands["get_columns_from_table"].replace("<table_name>", table)
             info = [x[1] for x in self.cursor.execute(query).fetchall()]
             table_info[table]["columns"] = info
+            # The same names as a set, built ONCE per schema read rather than once per query.
+            # check_identifiers runs on every statement this class builds, and the result table
+            # issues thousands in one call: building the set per call cost 14 % of that call,
+            # measured 2026-09-16 against the previous commit on the same database
+            table_info[table]["column_set"] = set(info)
             table_info[table]["column_number"] = len(info)
         return table_info
 
@@ -147,35 +152,61 @@ class Connector:
         self.cursor.executescript(self.commands["create_tables"])
         self.table_info = self.get_table_info_from_database()
 
-    @staticmethod
-    def check_parameters(*args) -> None:
+    def check_identifiers(self, table: str, columns) -> None:
         """
-        Method to check multiple parameters for illegal characters
+        Method to reject any table or column name that is not in the database's own schema
 
-        :param args: All passed parameters
+        **This replaced a blacklist of illegal characters on 2026-09-16, and the two are not the
+        same kind of check.** The blacklist existed because every value was interpolated into the
+        SQL text, so a value carrying a quote or a semicolon could end one statement and start
+        another. Values are BOUND now -- see build_where and build_set -- so no value reaches the
+        SQL text at all and the blacklist had nothing left to protect.
+
+        What still has to be interpolated is identifiers: SQLite cannot bind a table or a column
+        name. Those are checked against the real schema instead -- an allow-list of what exists
+        beats a deny-list of what looked dangerous, and it cannot be defeated by a character
+        nobody thought of.
+
+        **The blacklist was also wrong in the other direction**, which is why it is gone rather
+        than kept alongside: `.` was illegal, so the ordinary value "1.5" was rejected and no
+        decimal could be written through `update`.
+
+        :param table: The table the columns belong to
+        :param columns: A column name, an iterable of them, or Specifiers.ALL
+        :raises ValueError: If the table is unknown, or a column is not one of its columns
         :return: None
         """
-        for param in args:
-            if isinstance(param, list) or isinstance(param, tuple):
-                for p in param:
-                    Connector.check_parameter(p)
-            else:
-                Connector.check_parameter(param)
+        self.check_for_table(table)
+        known = self.table_info[table]["column_set"]
+        for column in Connector.iterate_column_names(columns):
+            if column not in known:
+                raise ValueError(f"Query rejected: {column!r} is not a column of {table!r} "
+                                 f"(it has {sorted(known)})")
 
     @staticmethod
-    def check_parameter(param: Any) -> None:
+    def iterate_column_names(columns):
         """
-        Throws Exception if the parameter contains illegal characters
+        Method to yield the bare column names out of whatever a caller passed as `column`
 
-        :param param: The parameter to check
-        :return:None
+        Callers pass a name, a tuple of names, `Specifiers.ALL`, or a name behind a keyword --
+        "DISTINCT name" is the only such form in the tree. `*` names no column and yields
+        nothing; the keyword is stripped so the name behind it is checked.
+
+        :param columns: The column argument as handed to a query builder
+        :return: The column names to validate, one at a time
         """
-        if isinstance(param, Specifiers) or not isinstance(param, str):
+        if isinstance(columns, Specifiers):
             return
-        for c in ".;,():\'\"\\/<>!$§%&[]{}´`|~#*=":
-            if c in param:
-                error = f"Query rejected: Parameter contains illegal character \"{c}\""
-                raise ValueError(error)
+        if isinstance(columns, str):
+            columns = (columns,)
+        for column in columns:
+            if isinstance(column, Specifiers) or column == "*":
+                continue
+            name = column.strip()
+            if name.lower().startswith("distinct "):
+                name = name[len("distinct "):].strip()
+            yield name
+
 
     def create_standard_settings(self) -> None:
         """
@@ -190,14 +221,37 @@ class Connector:
         """
         Method to delete all saved data for the given image
 
+        **NO executescript, since 2026-09-16.** `executescript` issues a COMMIT before it runs
+        anything, so clearing an image committed whatever transaction was already open -- and
+        `save_rois_to_database` calls this and THEN writes the new results, so the old data was
+        committed away before the new data existed. A write that failed in between left the image
+        with neither.
+
+        The script it used to run needed several statements only because it built a temporary
+        VIEW to find the hashes that no other image shares. A subquery says the same thing, so
+        this is three ordinary statements that run inside the caller's transaction and commit
+        when the caller does.
+
+        **Why points are deleted by a subquery and not by hash**: hash(roi) is md5(channel + area)
+        and carries no image, so two images holding an identical focus in the same channel share
+        one hash -- 4388 such hashes in the live database -- and the points table has no image
+        column, so they share ONE set of points. Deleting by hash alone removed the other image's
+        geometry and left its roi row standing with nothing under it: 57 such rows existed across
+        33 images, and the manual editor raised "ROI ... does not contain any points!" on them.
+
         :param image: md5 hash of the image
         :return: None
         """
-        # Check parameter
-        self.check_parameter(image)
-        query = self.commands["delete_existing_image_data"].replace("<img_hash>",
-                                                                    self.convert_value(image))
-        self.cursor.executescript(query)
+        self.cursor.execute(
+            "DELETE FROM points WHERE hash IN ("
+            "    SELECT hash FROM roi WHERE image = ?"
+            "    AND hash NOT IN (SELECT hash FROM roi WHERE image <> ?))",
+            (image, image))
+        # BY IMAGE, not by hash: statistics has an image column, so the row belonging to another
+        # image with the same hash must survive
+        self.cursor.execute("DELETE FROM statistics WHERE image = ?", (image,))
+        self.cursor.execute("DELETE FROM roi WHERE image = ?", (image,))
+
 
     def count_instances(self, column: str, table: str, where: Tuple = ()) -> int:
         """
@@ -208,16 +262,14 @@ class Connector:
         :param where: The condition to count
         :return: The number of found instances
         """
-        self.check_for_table(table)
-        self.check_parameters(column, table, where)
+        self.check_identifiers(table, column)
         if not where:
             query = self.commands["count"].replace("<column>", column).replace("<table_name>", table)
             return self.cursor.execute(query).fetchall()[0][0]
-        else:
-            where = self.convert_where_statement(where)
-            query = self.commands["count_where"].replace("<column>", column) \
-                .replace("<table_name>", table).replace("<condition>", where)
-            return self.cursor.execute(query).fetchall()[0][0]
+        condition, params = self.build_where(table, where)
+        query = self.commands["count_where"].replace("<column>", column) \
+            .replace("<table_name>", table).replace("<condition>", condition)
+        return self.cursor.execute(query, params).fetchall()[0][0]
 
     def insert_or_replace_into(self, table: str, columns: Union[List, Tuple],
                                values: Union[List, Tuple], many: bool = False) -> None:
@@ -234,10 +286,9 @@ class Connector:
         # and there is nothing to insert, so return before len(values[0]) below indexes into it
         if not values:
             return
-        # Check parameters for illegal characters
-        self.check_parameters(table, columns, values)
-        # Check if the requested table exists
-        self.check_for_table(table)
+        # Identifiers against the schema. The values are bound by execute/executemany below
+        # and never needed the character blacklist that used to be applied to them here
+        self.check_identifiers(table, columns)
         # Convert the column list
         columns = self.convert_column_list(columns)
         # Get value string
@@ -261,12 +312,12 @@ class Connector:
         if not where:
             raise ValueError("No condition for update given!")
         self.check_for_table(table)
-        self.check_parameters(table, values, where)
-        set_stm = self.convert_set_statement(values)
-        where = self.convert_where_statement(where)
+        set_stm, set_params = self.build_set(table, values)
+        condition, where_params = self.build_where(table, where)
         query = self.commands["update"].replace("<table_name>", table) \
-            .replace("<set_values>", set_stm).replace("<condition>", where)
-        self.cursor.execute(query)
+            .replace("<set_values>", set_stm).replace("<condition>", condition)
+        # SET parameters before WHERE: placeholders bind in the order they appear in the text
+        self.cursor.execute(query, set_params + where_params)
 
     def delete(self, table: str, where: Tuple = ()) -> None:
         """
@@ -279,10 +330,9 @@ class Connector:
         if not where:
             raise ValueError("An empty condition would delete the whole table!")
         self.check_for_table(table)
-        self.check_parameters(table, where)
-        where = self.convert_where_statement(where)
-        query = self.commands["delete"].replace("<table_name>", table).replace("<condition>", where)
-        self.cursor.execute(query)
+        condition, params = self.build_where(table, where)
+        query = self.commands["delete"].replace("<table_name>", table).replace("<condition>", condition)
+        self.cursor.execute(query, params)
 
     def reset_database(self) -> None:
         """
@@ -314,18 +364,15 @@ class Connector:
         """
         # Convert list of columns
         columns = self.convert_column_list(column)
-        # Check for table
-        self.check_for_table(table)
-        # Check table name for illegal characters
-        self.check_parameters(column, table, where)
+        # Identifiers against the schema; every value below is bound
+        self.check_identifiers(table, column)
         if not where:
             query = self.commands["select_from"].replace("<columns>", columns).replace("<table_name>", table)
             return self.cursor.execute(query).fetchall()
-        else:
-            where = self.convert_where_statement(where)
-            query = self.commands["select_from_where"].replace("<columns>", columns) \
-                .replace("<table_name>", table).replace("<condition>", where)
-            return self.cursor.execute(query).fetchall()
+        condition, params = self.build_where(table, where)
+        query = self.commands["select_from_where"].replace("<columns>", columns) \
+            .replace("<table_name>", table).replace("<condition>", condition)
+        return self.cursor.execute(query, params).fetchall()
 
     @staticmethod
     def get_value_string(number: int) -> str:
@@ -349,34 +396,71 @@ class Connector:
             return columns.value
         return ",".join(columns) if isinstance(columns, tuple) or isinstance(columns, list) else columns
 
-    @staticmethod
-    def convert_set_statement(values: Iterable[Tuple[str, str]]) -> str:
-        """
-        Method to convert the given iterable to a usable SET statment
+    # convert_set_statement was removed here on 2026-09-16. It rendered an update's values
+    # into the SQL text; build_set binds them instead, and nothing else called it.
 
-        :param values: The values to convert
-        :return: The usable SET statement
+    def build_where(self, table: str, where) -> Tuple[str, List]:
         """
-        if isinstance(values[0], tuple):
-            return ",".join([f"{x[0]}={Connector.convert_value(x[1])}" for x in values])
-        else:
-            return f"{values[0]}={Connector.convert_value(values[1])}"
+        Method to turn a condition into WHERE text with placeholders, plus the values to bind
 
-    @staticmethod
-    def convert_where_statement(where: Union[str, Tuple[Union[Tuple[str, Union[str, Specifiers], str]]]]) -> str:
-        """
-        Method to convert the given conditions to a usable where statement
+        **Replaced convert_where_statement on 2026-09-16.** That method rendered the whole
+        condition -- column, operator AND value -- into the SQL text, which is what made a
+        character blacklist necessary and what made nested conditions dangerous: `check_parameters`
+        recursed exactly one level, so the values inside a nested tuple were never inspected at
+        all. Binding removes both problems rather than deepening the inspection.
 
-        :param where: List of where statements to convert
-        :return: The usable where statement
+        The column is interpolated, because SQLite cannot bind an identifier -- it is checked
+        against the schema by check_identifiers instead. The value is always bound. The one
+        exception is `Specifiers.NULL`, which is a SQL keyword rather than a value: `IS ?` with
+        None bound is never true, so `IS NULL` has to reach the text.
+
+        :param table: The table the condition applies to, for validating its columns
+        :param where: A (column, operator, value) triple, or a tuple of such triples
+        :return: The WHERE text and the parameters to bind, in order
         """
-        if not isinstance(where[0], tuple):
-            cond1 = Connector.convert_value(where[0])
-            sign = Connector.convert_value(where[1])
-            cond2 = Connector.convert_value(where[2])
-            return cond1 + sign + cond2
-        else:
-            return " AND ".join([Connector.convert_where_statement(x) for x in where])
+        if isinstance(where[0], tuple):
+            parts, params = [], []
+            for condition in where:
+                text, values = self.build_where(table, condition)
+                parts.append(text)
+                params.extend(values)
+            return " AND ".join(parts), params
+        column, operator, value = where
+        self.check_identifiers(table, column)
+        operator = operator.value if isinstance(operator, Specifiers) else str(operator)
+        if value is Specifiers.NULL:
+            return f"{column} {operator} NULL", []
+        if isinstance(value, Specifiers):
+            return f"{column} {operator} {value.value}", []
+        return f"{column} {operator} ?", [value]
+
+    def build_set(self, table: str, values) -> Tuple[str, List]:
+        """
+        Method to turn an update's values into SET text with placeholders, plus what to bind
+
+        Same change as build_where, and the same reason: the value used to be rendered into the
+        text by convert_value, so `update` could not write a string containing a quote and --
+        because of the blacklist that protected it -- could not write "1.5" either.
+
+        :param table: The table being updated, for validating its columns
+        :param values: A (column, value) pair, or an iterable of them
+        :return: The SET text and the parameters to bind, in order
+        """
+        pairs = values if isinstance(values[0], tuple) else (tuple(values),)
+        self.check_identifiers(table, [pair[0] for pair in pairs])
+        parts, params = [], []
+        for column, value in pairs:
+            # A Specifier is a SQL KEYWORD, not a value -- `SET associated = NULL` is written by
+            # reset_nucleus_focus_association exactly that way, and binding it raises
+            # "type 'Specifiers' is not supported". Python's None, by contrast, IS bound: sqlite
+            # binds it as SQL NULL natively, which is the correct route and the one the
+            # 2026-09-14 convert_value fix was reaching for by hand
+            if isinstance(value, Specifiers):
+                parts.append(f"{column}={value.value}")
+            else:
+                parts.append(f"{column}=?")
+                params.append(value)
+        return ",".join(parts), params
 
     @staticmethod
     def convert_value(value: Union[float, int, str, Specifiers], quote: bool = True) -> str:
