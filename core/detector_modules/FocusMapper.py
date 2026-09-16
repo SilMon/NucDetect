@@ -23,6 +23,25 @@ class FocusMapper(AreaMapper):
     # No __slots__ -- see the note on AreaMapper for why the hierarchy does not use them.
     STANDARD_SETTINGS = {
         "use_smoothing": False,
+        # The six keys preprocess_channel indexes under `use_smoothing`, added 2026-09-15. They
+        # were read with [] and declared nowhere, which is the `use_signal_improvement` trap in
+        # reverse: the dict the application runs with supplies them, this fallback did not, and
+        # the only reason it never raised is that `use_smoothing` above is False here -- so the
+        # branch is unreachable from this dict and a caller that switches smoothing on against it
+        # gets a KeyError out of the middle of an analysis.
+        #
+        # DECLARED rather than switched to .get, deliberately. This dict claims to be a runnable
+        # fallback; .get with an invented default would smooth with parameters nobody chose, and
+        # silently. The five numeric values are the ones gui/settings/settings.json seeds into
+        # the settings table, so the fallback and the real dict start from the same place.
+        # "Gaussian" is the analysis dialog's combo box at index 0, which is what an untouched
+        # dialog supplies, and it is a real branch of perform_noise_reduction.
+        "smoothing_method": "Gaussian",
+        "filter_radius": 3,
+        "gaussian_sigma": 1.5,
+        "denoising_weight": 0.15,
+        "sigma_color": 0.1,
+        "sigma_spatial": 15,
         "use_background_reduction": False,
         # "use_signal_improvement": False stood here until 2026-09-14. RW: *"Signal improvement
         # is no longer supported by the program."* The key appeared once in the whole tree, in

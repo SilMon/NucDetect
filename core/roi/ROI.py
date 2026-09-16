@@ -79,16 +79,38 @@ class ROI:
     # None. It had no callers. Use intersect_with, whose name states what actually happens.
 
     def __eq__(self, other: Union[int, ROI]):
-        if isinstance(other, ROI):
-            return set(self.area) == set(other.area)
-        elif isinstance(other, int):
-            return self.id == other
+        """
+        ONE definition of identity, shared with __hash__ -- RW's ruling, 2026-09-15:
+        *"__eq__ should use the md5 hash to consolidate both functions."*
 
-    def __ne__(self, other):
-        if not isinstance(other, ROI):
-            return True
-        else:
-            return not self.__eq__(other)
+        Until then the two disagreed. `__hash__` derives from the channel AND the run list, while
+        this compared `set(self.area)` alone: two roi with identical pixels on DIFFERENT channels
+        compared equal and hashed differently, which breaks the invariant every set and dict
+        relies on. **The hash could not be the side that moves** -- it is the stored row identity
+        in `roi`, `points` and `statistics`, so changing it would orphan every stored roi.
+
+        **The rest of the program already agreed with the hash**: MapComparator keys all of its
+        dictionaries by `hash(x)` and QualityTester.delete_unassociated_foci compares hashes, so
+        this closes a gap rather than opening one. The only place two roi are compared with `==`
+        is `ROIHandler.remove_roi`, where being channel-aware is strictly safer.
+
+        Comparing the hashes rather than `(ident, area)` is deliberate: `hash` is the cached
+        value, so repeated comparisons cost one md5 per roi rather than one per comparison.
+
+        :param other: A ROI, or an identifier to compare against this roi's own
+        :return: True if the two are the same roi; NotImplemented for anything else, so Python
+                 falls back to identity instead of this silently returning None
+        """
+        if isinstance(other, ROI):
+            return hash(self) == hash(other)
+        if isinstance(other, int):
+            return self.id == other
+        return NotImplemented
+
+    # __ne__ was REMOVED here, 2026-09-15, rather than updated. It read
+    # `if not isinstance(other, ROI): return True`, which contradicted __eq__'s int branch: a roi
+    # was both equal to its own identifier and unequal to it. Python derives != from __eq__ when
+    # __ne__ is absent, which is correct for every case this handled and for that one too.
 
     def __gt__(self, other):
         if not isinstance(other, ROI):
@@ -200,11 +222,25 @@ class ROI:
         """
         if not rle:
             return
+        # SORTED, so the run list is in scanline order whatever built it -- (row, first column,
+        # length) tuples compare in exactly that order. `__hash__` derives from the repr of this
+        # list, so the identity of a roi depended on a convention held separately by four
+        # encoders (the detector's scan, the blob encoder, the editor's lexsort and the
+        # intersection) and by the physical row order SQLite happens to return from `points`.
+        # Any future encoder emitting the same pixels in another order would have created a
+        # SECOND identity for the same roi.
+        #
+        # **IT CHANGES NO STORED HASH, and that was measured rather than argued** (2026-09-15,
+        # read-only against the live database): all **225 720** stored roi reproduce their stored
+        # hash from their channel and points, all 225 720 are already in scanline order, and
+        # sorting leaves all 225 720 hashes identical. The convention was always held; it is now
+        # enforced in the one place that can enforce it.
+        #
         # Copy rather than store the caller's list by reference, and do not clear() first: the
         # clear() mutated the list this ROI held *previously*, which any other holder of it would
         # have seen emptied, and it was pointless anyway given the rebind on the next line.
         # Same aliasing hazard already fixed in ImageListModel.set_paths.
-        self.area = list(rle)
+        self.area = sorted(rle)
         self.reset_stored_values()
 
     def intersect_area(self, rle) -> bool:
@@ -225,11 +261,14 @@ class ROI:
         # Get the intersecting area
         intersect = AreaAnalysis.get_rle_area_intersection(self.area, rle)
         if intersect:
-            self.area = intersect
+            # Through set_area, not by assigning self.area: it is the one place the run list is
+            # canonicalised and the cached values are dropped, and this was the only writer that
+            # went around it -- so a merged roi's identity depended on the order
+            # get_rle_area_intersection happened to emit
+            self.set_area(intersect)
             # Kept as "Merged" rather than renamed with the methods: the value is persisted in the
             # roi table, so changing it would invalidate stored results.
             self.detection_method = "Merged"
-            self.reset_stored_values()
             return True
         else:
             return False

@@ -1522,11 +1522,21 @@ class NucDetect(QMainWindow):
             # leave orphaned rows behind for an image whose earlier analysis was interrupted, and
             # the new results would be inserted alongside them.
             #
-            # A miss means analysis reached an image that add_image_information_to_database never
-            # registered; there is nothing saved for it, so nothing to clear. Indexing the result
-            # unconditionally is what raised IndexError there until 2026-08-15.
-            if req.get_info_for_image(key) is not None:
-                ins.delete_existing_image_data(key)
+            # UNCONDITIONAL since 2026-09-16. The guard tested whether the image is REGISTERED,
+            # and skipped the clearing when it is not -- but "no such image" is exactly the case
+            # that needs it least safely: a second analysis of an unregistered image then wrote
+            # its roi ALONGSIDE the first. Measured on 2026-09-15 by analysing demo.tif twice
+            # through this path without registering it: 30 nuclei on Blue and 8 on Red in one
+            # image, both sets of foci, and a result table of 76 rows mixing two analyses.
+            #
+            # Latent in the application, because add_image_information_to_database registers
+            # every image at load -- but it cost an investigation, having produced a database
+            # defect that does not exist in the running program.
+            #
+            # Deleting is free when there is nothing to delete: delete_existing_image_data issues
+            # DELETEs keyed on this image and is a no-op for a hash with no rows, which is the
+            # same argument the guard's own comment made for the first-analysis case.
+            ins.delete_existing_image_data(key)
             # Check if image should be added to experiment
             if data["add to experiment"]:
                 exp_data = data["experiment details"]
