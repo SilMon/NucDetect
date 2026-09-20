@@ -184,10 +184,33 @@ QAbstractSpinBox::down-arrow {
 }
 
 /* Dim arrows when disabled */
+/* THIS RULE DID NOTHING, AND THE COMMENT IS THE POINT -- 2026-09-20.
+   It set border colours, which is how the arrows were drawn before they became images: a CSS
+   triangle is made of borders. Since `image:` was introduced above, border colours are not painted
+   at all, so a disabled spin box rendered identically to an enabled one. Verified by rendering
+   both states and diffing the pixels. It is commented out rather than deleted because the obvious
+   repair is to put a colour back here, and that does not work.
+
 QAbstractSpinBox::up-arrow:disabled,
 QAbstractSpinBox::down-arrow:disabled {
-    border-bottom-color: #808080;  /* up */
-    border-top-color: #808080;     /* down */
+    border-bottom-color: #808080;
+    border-top-color: #808080;
+}
+*/
+
+/* The disabled state is carried by the control and its buttons instead, which DO respond to
+   background-color. `spb_x`, `spb_y`, `spb_width` and `spb_height` in the editor are disabled
+   until an item is selected, which is most of the time the editor is open.
+   Palette from QPushButton:disabled, so every disabled control in the program reads alike. */
+QAbstractSpinBox:disabled {
+    background-color: #404f73;
+    border-color: #2e3a58;
+    color: #a0a9c4;
+}
+
+QAbstractSpinBox::up-button:disabled,
+QAbstractSpinBox::down-button:disabled {
+    background-color: #404f73;
 }
 
 /* =======================================================================
@@ -210,6 +233,22 @@ QCheckBox::indicator:checked {
     image: url(@@CSS_DIR@@/checkmark.png);
 }
 
+/* Added 2026-09-20 by the sub-control audit. Styling QCheckBox moves it onto the stylesheet paint
+   path, and the disabled state was not restored: a DISABLED box rendered pixel-for-pixel identical
+   to an enabled one. Measured, not assumed -- both states were rendered to a QImage and diffed;
+   unstyled they differ, styled they did not. `cbx_white_balance` and `cbx_high_contrast` in the
+   editor start disabled and are enabled when the image variants finish, so this is a real window
+   in which a box invites a click that does nothing.
+   Palette taken from QPushButton:disabled rather than invented, so the two read alike. */
+QCheckBox:disabled {
+    color: #a0a9c4;
+}
+
+QCheckBox::indicator:disabled {
+    border-color: #2e3a58;
+    background-color: #404f73;
+}
+
 QRadioButton::indicator {
     border: 1px solid #3c4f7c;
     background-color: #0a3c6e;
@@ -219,6 +258,17 @@ QRadioButton::indicator {
 QRadioButton::indicator:checked {
     image: url(@@CSS_DIR@@/circle.png);
     background-color: #205c9c;
+}
+
+/* Same audit, same finding -- see the QCheckBox note above. `rbtn_four` and `rbtn_five` in the
+   analysis settings dialog are disabled until the image has that many channels. */
+QRadioButton:disabled {
+    color: #a0a9c4;
+}
+
+QRadioButton::indicator:disabled {
+    border-color: #2e3a58;
+    background-color: #404f73;
 }
 
 /* =======================================================================

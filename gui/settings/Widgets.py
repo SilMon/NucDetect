@@ -177,64 +177,82 @@ class SettingsDial(_SettingsRangeWidget):
         self.dial = self.control
 
 
-class SettingsSpinner(SettingsWidget):
+class _SettingsSpinnerWidget(SettingsWidget):
     """
-    Class to show an integer spinner in the settings
+    Base for the settings widgets backed by a spin box
+
+    The same de-duplication as _SettingsRangeWidget above, applied to the other pair on 2026-09-20.
+    SettingsSpinner and SettingsDecimalSpinner differed in the .ui file, the type string, and the
+    decimal one's extra `decimals` argument; the bounds, prefix, suffix, step and the value handler
+    were duplicated.
+
+    A subclass supplies two class attributes, and overrides _configure_control only if it has
+    something to set before the bounds -- which the decimal spinner does, and the ordering matters:
+    see its override.
     """
+    #: The type string reported to the settings dialog
+    _TYPE = None
+    #: The .ui file to load from gui/settings
+    _UI_FILE = None
 
-    def __init__(self, _id, min_val, max_val, value, parent=None, title="", desc="", step=1, prefix="", suffix="%",
-                 *, callback):
-        super(SettingsSpinner, self).__init__(_id, "IntegerSpinnerWidget", value, "menu_spin.ui",
-                                              title, desc, parent, callback=callback)
-        self.min_val = min_val
-        self.max_val = max_val
-        self.step = step
-        self.prefix = prefix
-        self.suffix = suffix
-        self.spin = self.ui.spin
-        self.spin.setMinimum(self.min_val)
-        self.spin.setMaximum(self.max_val)
-        self.spin.setPrefix(self.prefix)
-        self.spin.setSuffix(self.suffix)
-        self.spin.setSingleStep(step)
-        self.spin.setValue(self.value)
-        self.spin.valueChanged.connect(self._on_value_changed)
-
-    def _on_value_changed(self):
-        self.value = self.spin.value()
-        super(SettingsSpinner, self)._change_emit()
-
-
-class SettingsDecimalSpinner(SettingsWidget):
-    """
-    Class to show an integer spinner in the settings
-    """
-
-    def __init__(self, _id, min_val, max_val, value, parent=None, title="", desc="", step=1.0, decimals=2,
+    def __init__(self, _id, min_val, max_val, value, parent=None, title="", desc="", step=1,
                  prefix="", suffix="%", *, callback):
-        super(SettingsDecimalSpinner, self).__init__(_id, "DecimalSpinnerWidget", value, "menu_decimal_spin.ui",
+        super(_SettingsSpinnerWidget, self).__init__(_id, self._TYPE, value, self._UI_FILE,
                                                      title, desc, parent, callback=callback)
         self.min_val = min_val
         self.max_val = max_val
         self.step = step
         self.prefix = prefix
         self.suffix = suffix
-        self.decimals = decimals
         self.spin = self.ui.spin
-        # decimals first: QDoubleSpinBox rounds every bound and the value to the decimals in force
-        # when they are set, and a later setDecimals does not restore the lost precision
-        self.spin.setDecimals(self.decimals)
+        self._configure_control()
         self.spin.setMinimum(self.min_val)
         self.spin.setMaximum(self.max_val)
         self.spin.setPrefix(self.prefix)
         self.spin.setSuffix(self.suffix)
-        self.spin.setSingleStep(step)
+        self.spin.setSingleStep(self.step)
         self.spin.setValue(self.value)
         self.spin.valueChanged.connect(self._on_value_changed)
 
+    def _configure_control(self):
+        """
+        Hook for whatever a subclass must set BEFORE the bounds and the value
+
+        :return: None
+        """
+
     def _on_value_changed(self):
         self.value = self.spin.value()
-        super(SettingsDecimalSpinner, self)._change_emit()
+        super(_SettingsSpinnerWidget, self)._change_emit()
+
+
+class SettingsSpinner(_SettingsSpinnerWidget):
+    """
+    Class to show an integer spinner in the settings
+    """
+    _TYPE = "IntegerSpinnerWidget"
+    _UI_FILE = "menu_spin.ui"
+
+
+class SettingsDecimalSpinner(_SettingsSpinnerWidget):
+    """
+    Class to show a decimal spinner in the settings
+    """
+    _TYPE = "DecimalSpinnerWidget"
+    _UI_FILE = "menu_decimal_spin.ui"
+
+    def __init__(self, _id, min_val, max_val, value, parent=None, title="", desc="", step=1.0,
+                 decimals=2, prefix="", suffix="%", *, callback):
+        # Set before super().__init__, because _configure_control runs inside it and needs this
+        self.decimals = decimals
+        super(SettingsDecimalSpinner, self).__init__(_id, min_val, max_val, value, parent, title,
+                                                     desc, step, prefix, suffix, callback=callback)
+
+    def _configure_control(self):
+        # decimals first: QDoubleSpinBox rounds every bound and the value to the decimals in force
+        # when they are set, and a later setDecimals does not restore the lost precision. This is
+        # the whole reason the base class has this hook rather than one fixed setup order
+        self.spin.setDecimals(self.decimals)
 
 
 class SettingsComboBox(SettingsWidget):

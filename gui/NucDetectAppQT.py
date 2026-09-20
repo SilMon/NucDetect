@@ -256,6 +256,16 @@ class NucDetect(QMainWindow):
         # Highest bar fraction shown so far during the running analysis, or None when no analysis
         # is in progress. See _set_progress for why the monotonicity clamp is opt-in
         self._prg_floor: Union[float, None] = None
+        # Wall-clock instant the running analysis is currently estimated to finish, or None when
+        # nothing is being estimated. Set from the ETA the analysis thread reports, and re-set every
+        # time a new one arrives -- which is what makes the display jump when the estimate changes
+        # and tick down in between, as RW asked for on 2026-09-13
+        self._eta_deadline: Union[float, None] = None
+        # Drives the countdown. GUI-thread timer: it is created here, in __init__, which runs on the
+        # GUI thread, and only _tick_eta touches the label
+        self.eta_timer = QTimer()
+        self.eta_timer.setInterval(1000)
+        self.eta_timer.timeout.connect(self._tick_eta)
         # Timer which polls running data exports. Instance attribute on purpose: as a class
         # attribute it was shared between windows and accumulated one connected slot per export
         self.check_timer = QTimer()
@@ -1382,11 +1392,11 @@ class NucDetect(QMainWindow):
             # measured over the same counter, and reusing one variable for the count and a 1-based
             # display is what made the ETA undercount by one and go negative on the final batch
             done = 0
-            # Empty until the FIRST IMAGE has finished, not the first batch -- the per-image
-            # estimate inside the loop assigns it. Only the "Starting multi image analysis" emit
-            # before the loop is ever shown without one
-            eta_text = ""
-            # Seeded so the per-batch log line below has values even if a batch yields nothing
+            # Seeded so the per-batch log line below has values even if a batch yields nothing.
+            # There is no `eta_text` any more: the ETA is not written into the caption at all since
+            # 2026-09-20, it is emitted in `symbol` and counted down by the GUI thread. Until the
+            # FIRST IMAGE finishes there is no estimate, and the countdown label stays empty --
+            # only the "Starting multi image analysis" emit is ever shown in that state
             h = m = s = 0
             # Seconds of ANALYSIS reported by the workers, summed over finished images. The ETA is
             # derived from this rather than from wall-clock-over-count -- see where it is used
@@ -1462,7 +1472,8 @@ class NucDetect(QMainWindow):
                     h = eta // 3600
                     m = eta % 3600 // 60
                     s = eta % 3600 % 60
-                    eta_text = f" -- ETA {h:02d}h:{m:02d}m:{s:02d}s"
+                    # h/m/s are for the LOG line below, which keeps the formatted figure because
+                    # a log has no clock to tick. The caption no longer carries the ETA at all
                     # Emitted AFTER `done` is incremented, and reading `done` rather than
                     # `done + 1`. The emit used to sit at the top of this loop and show the image
                     # being WORKED ON under a label that says "analysed" -- so the first image of a
@@ -1474,8 +1485,12 @@ class NucDetect(QMainWindow):
                     # caption tracks what has actually been completed
                     self.prg_signal.emit(
                         f"Batch {batch_start // batch_size + 1}/{total_batches}"
-                        f" -- analysed {done}/{maxi} images{eta_text}",
-                        batch_start // batch_size, total_batches, "")
+                        f" -- analysed {done}/{maxi} images",
+                        batch_start // batch_size, total_batches,
+                        # The ETA travels in `symbol` rather than in the caption, so the GUI thread
+                        # can count it down between images. See _set_progress for why this reuses an
+                        # existing parameter instead of widening prg_signal
+                        f"ETA:{eta}")
                 cur_batch = batch_start // batch_size + 1
                 msg = f"Analysed batch {cur_batch: 02d}/{total_batches: 02d} in {time.time() - s2: 09.3f} secs\t\t"\
                       f"Total: {time.time() - start_time: 09.3f} secs\t\t"\
@@ -2019,18 +2034,81 @@ class NucDetect(QMainWindow):
         The clamp is opt-in rather than global because this method also serves loading, export and
         ROI progress, which legitimately restart at low values without passing through zero.
 
+        **`symbol` also carries the ETA**, in the form `ETA:<seconds>`. That is a reuse of an
+        existing parameter rather than a widening of `prg_signal`, at RW's instruction
+        (2026-09-20): the signal is `(str, float, float, str)` and serves loading, export and ROI
+        progress as well as analysis, so adding a field would touch every one of its 22 emitters
+        for the benefit of one. `symbol` was passed `""` by all of them, so it was free.
+
+        An `ETA:` symbol seeds the countdown and is NOT appended to the caption -- the countdown
+        owns that number now. **Anything else is appended exactly as before**, and an empty symbol
+        CLEARS the countdown, which is what ends it: every non-analysis emitter passes `""`, and so
+        does the "Analysis finished" emit.
+
         :param text: The text to show above the bar
         :param progress: The value of the bar
         :param maxi: The max value of the bar
-        :param symbol: The symbol printed after the displayed values
+        :param symbol: `ETA:<seconds>` to drive the countdown, `""` to clear it, or a symbol to
+            print after the displayed values
         :return: None
         """
         if self._prg_floor is not None:
             progress = max(progress, self._prg_floor * maxi)
             self._prg_floor = progress / maxi if maxi else 0.0
+        if symbol.startswith("ETA:"):
+            self._set_eta(symbol[4:])
+            symbol = ""
+        elif not symbol:
+            self._set_eta(None)
         self.ui.lbl_status.setText(f"{text} -- {(progress / maxi) * 100:.2f}% {symbol}")
         self.ui.prg_bar.setMaximum(int(maxi))
         self.ui.prg_bar.setValue(int(progress))
+
+    def _set_eta(self, seconds: Union[str, float, None]) -> None:
+        """
+        Method to arm, re-arm or clear the ETA countdown
+
+        :param seconds: Seconds remaining, or None to clear the countdown
+        :return: None
+        """
+        self._assert_main_thread("_set_eta")
+        if seconds is None:
+            self._eta_deadline = None
+            self.eta_timer.stop()
+            self.ui.lbl_eta.setText("")
+            return
+        try:
+            remaining = float(seconds)
+        except (TypeError, ValueError):
+            # A malformed ETA must not take down the analysis it is describing -- the same rule the
+            # focus-detection log line was rewritten under on 2026-09-13
+            LOGGER.warning("Unreadable ETA %r -- countdown cleared", seconds)
+            self._set_eta(None)
+            return
+        self._eta_deadline = time.time() + max(remaining, 0)
+        # Painted immediately rather than waiting up to a second for the first tick, which is what
+        # makes the display JUMP when a new estimate arrives instead of drifting to it
+        self._tick_eta()
+        if not self.eta_timer.isActive():
+            self.eta_timer.start()
+
+    def _tick_eta(self) -> None:
+        """
+        Method to repaint the ETA countdown, called once a second while an analysis is running
+
+        :return: None
+        """
+        if self._eta_deadline is None:
+            self.eta_timer.stop()
+            return
+        # CEIL, not int(). The deadline is set from `now + seconds`, so by the time this runs even
+        # a few microseconds later the difference is already just under the whole number -- an ETA
+        # of 125 s painted as 124 immediately, losing a second before the clock had moved. Ceiling
+        # also gives a countdown the right end: it reads 1 while any time at all remains and
+        # reaches 0 exactly at the deadline. Caught by verify_progress_bar, not by reading
+        remaining = math.ceil(max(self._eta_deadline - time.time(), 0))
+        self.ui.lbl_eta.setText(f"ETA {remaining // 3600:02d}h:"
+                                f"{remaining % 3600 // 60:02d}m:{remaining % 60:02d}s")
 
     def save_results(self) -> None:
         """
