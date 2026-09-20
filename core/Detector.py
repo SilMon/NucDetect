@@ -365,7 +365,13 @@ class Detector:
         self.nucleusmapper.set_settings(analysis_settings)
         self.nucleusmapper.set_progress(progress)
         try:
-            nucmap = self.nucleusmapper.map_nuclei()
+            # get_nucleus_maps, NOT map_nuclei. It is a thin wrapper that validates before it
+            # delegates -- exactly one channel must be set, and settings must be present -- and
+            # calling the inner method directly bypassed those checks, which is what made the
+            # wrapper look like dead code. The checks are worth having here: clear_state() sets
+            # the channel tuple to () between analyses, so an analysis that reached this line
+            # without set_channels would otherwise map whatever was left over
+            nucmap = self.nucleusmapper.get_nucleus_maps()
         finally:
             # The reporter belongs to one analysis, not to the mapper. Clearing it also keeps a
             # live callback -- a bound method of the main window during single-image analysis --

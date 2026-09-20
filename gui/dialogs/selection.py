@@ -11,7 +11,7 @@ from typing import Dict, List, Any, Tuple
 from PyQt5 import QtCore, uic
 from PyQt5.QtCore import QItemSelectionModel
 from PyQt5.QtGui import QStandardItemModel, QStandardItem
-from PyQt5.QtWidgets import QDialog, QCheckBox, QProgressBar
+from PyQt5.QtWidgets import QDialog, QCheckBox, QDialogButtonBox, QProgressBar
 
 from gui import Paths
 from gui import Util
@@ -98,6 +98,7 @@ class ExperimentSelectionDialog(QDialog):
             cbx_temp.stateChanged.connect(partial(self.on_checkbox_change, cbx_temp))
             self.check_boxes.append(cbx_temp)
         self.sel_exp = exp
+        self._update_accept_state()
 
     def on_checkbox_change(self, cbx: QCheckBox, state: int = 0) -> None:
         """
@@ -110,6 +111,36 @@ class ExperimentSelectionDialog(QDialog):
         """
         # Change stored information
         self.active_channels[cbx.text()] = cbx.isChecked()
+        self._update_accept_state()
+
+    def _update_accept_state(self) -> None:
+        """
+        Method to allow accepting this dialog only while at least one channel is selected
+
+        Added 2026-09-20, with the wiring that made the selection mean something. RW, from real
+        use: *"it is even possible to de-select every channel and still open the dialog"* -- which
+        was harmless only for as long as the selection was ignored. Now that the statistics filter
+        on it, an empty selection asks for the foci of no channel, and the honest answer is an
+        empty table and a blank plot.
+
+        Refused by disabling OK rather than by rejecting the click: a button that does nothing is
+        indistinguishable from a broken dialog, and the tooltip says which state the dialog is in.
+
+        NB: it also disables OK for an experiment with no non-main channel at all, where the
+        checkbox list is empty. That is the same case -- the result table for such an experiment is
+        empty by construction, and get_table_data_for_image already logs it as an error.
+
+        :return: None
+        """
+        ok = self.ui.buttonBox.button(QDialogButtonBox.Ok)
+        # The button box lives in the .ui file, so a future edit there can take it away without
+        # touching this file. Nothing is gained by raising here -- the dialog still works, it just
+        # stops guarding -- so the guard is skipped rather than made fatal
+        if ok is None:
+            return
+        has_selection = any(self.active_channels.values())
+        ok.setEnabled(has_selection)
+        ok.setToolTip("" if has_selection else "Select at least one channel")
 
     def clear_vbox(self) -> None:
         """

@@ -99,67 +99,82 @@ class SettingsText(SettingsWidget):
         super(SettingsText, self)._change_emit()
 
 
-class SettingsSlider(SettingsWidget):
+class _SettingsRangeWidget(SettingsWidget):
+    """
+    Base for the settings widgets backed by an integer range control
+
+    SettingsSlider and SettingsDial were the same thirty lines twice until 2026-09-20, differing
+    only in which .ui file they loaded, the type string they reported and the name of the child
+    widget inside that file. Everything else -- the min/max/step/unit state, the setup order, the
+    snap-to-step handler and its re-entry guard -- was duplicated character for character, and
+    SettingsDial's copy of the guard had already been reduced to a "see SettingsSlider" comment,
+    which is the duplication admitting itself.
+
+    A subclass supplies three class attributes and nothing else. Both concrete classes keep their
+    original constructor signature, so no call site changes.
+    """
+    #: The type string reported to the settings dialog
+    _TYPE = None
+    #: The .ui file to load from gui/settings
+    _UI_FILE = None
+    #: The name of the range control inside that .ui file
+    _CONTROL = None
+
+    def __init__(self, _id, min_val, max_val, value, parent=None, title="", desc="", step=1,
+                 unit="%", *, callback):
+        super(_SettingsRangeWidget, self).__init__(_id, self._TYPE, value, self._UI_FILE,
+                                                   title, desc, parent, callback=callback)
+        self.min_val = min_val
+        self.max_val = max_val
+        self.step = step
+        self.unit = unit
+        self.control = getattr(self.ui, self._CONTROL)
+        self.ui.val.setText("{} {}".format(value, unit))
+        self.control.setMinimum(self.min_val)
+        self.control.setMaximum(self.max_val)
+        self.control.setSingleStep(self.step)
+        self.control.setValue(self.value)
+        self.control.valueChanged.connect(self._on_value_changed)
+
+    def _on_value_changed(self):
+        self.value = _snap_to_step(self.control.value(), self.min_val, self.max_val, self.step)
+        if self.value != self.control.value():
+            # setValue re-enters this handler, so the correction would emit `changed` a second time
+            # and the dialog would record the unsnapped value first
+            self.control.blockSignals(True)
+            self.control.setValue(self.value)
+            self.control.blockSignals(False)
+        self.ui.val.setText("{} {}".format(self.value, self.unit))
+        super(_SettingsRangeWidget, self)._change_emit()
+
+
+class SettingsSlider(_SettingsRangeWidget):
     """
     Class to show an slider in the settings
     """
+    _TYPE = "SliderWidget"
+    _UI_FILE = "menu_slider.ui"
+    _CONTROL = "slider"
 
-    def __init__(self, _id, min_val, max_val, value, parent=None, title="", desc="", step=1, unit="%", *, callback):
-        super(SettingsSlider, self).__init__(_id, "SliderWidget", value,
-                                             "menu_slider.ui", title, desc, parent, callback=callback)
-        self.min_val = min_val
-        self.max_val = max_val
-        self.step = step
-        self.unit = unit
-        self.slider = self.ui.slider
-        self.ui.val.setText("{} {}".format(value, unit))
-        self.slider.setMinimum(self.min_val)
-        self.slider.setMaximum(self.max_val)
-        self.slider.setSingleStep(self.step)
-        self.slider.setValue(self.value)
-        self.slider.valueChanged.connect(self._on_value_changed)
-
-    def _on_value_changed(self):
-        self.value = _snap_to_step(self.slider.value(), self.min_val, self.max_val, self.step)
-        if self.value != self.slider.value():
-            # setValue re-enters this handler, so the correction would emit `changed` a second time
-            # and the dialog would record the unsnapped value first
-            self.slider.blockSignals(True)
-            self.slider.setValue(self.value)
-            self.slider.blockSignals(False)
-        self.ui.val.setText("{} {}".format(self.value, self.unit))
-        super(SettingsSlider, self)._change_emit()
+    def __init__(self, *args, **kwargs):
+        super(SettingsSlider, self).__init__(*args, **kwargs)
+        # Kept as an alias of self.control: this attribute was public before the classes were
+        # merged, and dropping it would be a silent break for anything reaching in by name
+        self.slider = self.control
 
 
-class SettingsDial(SettingsWidget):
+class SettingsDial(_SettingsRangeWidget):
     """
     Class to show a dial in the settings
     """
+    _TYPE = "DialWidget"
+    _UI_FILE = "menu_dial.ui"
+    _CONTROL = "dial"
 
-    def __init__(self, _id, min_val, max_val, value, parent=None, title="", desc="", step=1, unit="%", *, callback):
-        super(SettingsDial, self).__init__(_id, "DialWidget", value,
-                                           "menu_dial.ui", title, desc, parent, callback=callback)
-        self.min_val = min_val
-        self.max_val = max_val
-        self.step = step
-        self.unit = unit
-        self.dial = self.ui.dial
-        self.ui.val.setText("{} {}".format(value, unit))
-        self.dial.setMinimum(self.min_val)
-        self.dial.setMaximum(self.max_val)
-        self.dial.setSingleStep(step)
-        self.dial.setValue(self.value)
-        self.dial.valueChanged.connect(self._on_value_changed)
-
-    def _on_value_changed(self):
-        self.value = _snap_to_step(self.dial.value(), self.min_val, self.max_val, self.step)
-        if self.value != self.dial.value():
-            # see SettingsSlider._on_value_changed
-            self.dial.blockSignals(True)
-            self.dial.setValue(self.value)
-            self.dial.blockSignals(False)
-        self.ui.val.setText("{} {}".format(self.value, self.unit))
-        super(SettingsDial, self)._change_emit()
+    def __init__(self, *args, **kwargs):
+        super(SettingsDial, self).__init__(*args, **kwargs)
+        # see SettingsSlider -- same reason
+        self.dial = self.control
 
 
 class SettingsSpinner(SettingsWidget):

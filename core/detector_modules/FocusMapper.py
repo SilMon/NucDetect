@@ -1,12 +1,10 @@
 import warnings
-from math import sqrt
-from typing import Iterable, Tuple, Dict, List, Any
+from typing import Tuple, Dict, List, Any
 
 import numpy as np
 from skimage.exposure import rescale_intensity
 from skimage.restoration import denoise_tv_chambolle, denoise_bilateral, denoise_wavelet
 from skimage.util import img_as_float
-from skimage.draw import disk
 from skimage.feature import blob_log
 from skimage.filters import gaussian, unsharp_mask, butterworth
 from skimage.filters.rank import mean, median
@@ -144,7 +142,11 @@ class FocusMapper(AreaMapper):
             # one number that makes an empty or runaway channel obvious in the log
             self.log(f"Channel {ind + 1}/{count}: {len(foci)} foci detected")
             # Create foci map and append
-            foci_maps.append(foci)#self.create_foci_map(pchannel.shape, foci))
+            # The disabled `#self.create_foci_map(pchannel.shape, foci)` stood here until
+            # 2026-09-20, when the method it called was deleted as dead code. What this stage
+            # returns is the blob_log LIST, and every consumer downstream reads it as one; the
+            # binary map was an earlier representation that nothing has asked for since.
+            foci_maps.append(foci)
         self.log(f"Foci detected in total: {sum(len(f) for f in foci_maps)}")
         return foci_maps
 
@@ -301,27 +303,12 @@ class FocusMapper(AreaMapper):
             else (0, 255)
         return rescale_intensity(processed, in_range="image", out_range=out_range).astype(channel.dtype)
 
-    @staticmethod
-    def check_for_preprocessing(main: np.ndarray, channel: np.ndarray) -> Tuple[bool, bool]:
-        """
-        Method to check if the channel should be pre-processed or not
-
-        :param main: Binary image of the main channel
-        :param channel: The focus channel to test
-        :return: True if pre-processing should be applied, True if the image should be smoothed beforehand
-        """
-        hist_raw = []
-        for y in range(channel.shape[0]):
-            for x in range(channel.shape[1]):
-                if main[y][x]:
-                    hist_raw.append(channel[y][x])
-        # Calculate the histogram
-        hist, counts = np.unique(hist_raw, return_counts=True)
-        # Calculate the percentage histogram
-        sum_ = sum(counts)
-        phist = [x / sum_ * 100 for x in counts]
-        # Check the first 15% of the histogram
-        return sum(phist[:int(len(phist) * 0.15)]) > 45
+    # check_for_preprocessing was removed here on 2026-09-20. It decided whether a channel
+    # should be pre-processed by building a histogram of the main channel's pixels in a nested
+    # Python loop, and it had no callers -- preprocessing is driven by the `use_smoothing` and
+    # `use_background_reduction` settings instead. It was also annotated `-> Tuple[bool, bool]`
+    # while returning a single bool, so the docstring's "True if pre-processing should be
+    # applied, True if the image should be smoothed" never matched what it answered.
 
     @staticmethod
     def detect_foci_on_acc_map(settings: Dict, acc_map: np.ndarray) -> List[Tuple]:
@@ -354,24 +341,3 @@ class FocusMapper(AreaMapper):
                         max_sigma=max_sigma,
                         num_sigma=num_sigma, threshold=acc_thresh, overlap=overlap)
 
-    @staticmethod
-    def create_foci_map(shape: Tuple[int], foci: Iterable) -> np.ndarray:
-        """
-        Method to create a binary foci map for the given foci
-
-        :param shape: The shape of the original map
-        :param foci: The foci to mark on the binary map
-        :return: The created foci map
-        """
-        # Create empty map
-        bin_map = np.zeros(shape=shape,
-                           dtype=np.uint32)
-        tsq = sqrt(2)
-        # Iterate over the given foci
-        for ind, focus in enumerate(foci):
-            # Extract variables
-            y, x, r = focus
-            # Draw focus into the foci map
-            rr, cc = disk((y, x), r * tsq, shape=shape)
-            bin_map[rr, cc] = ind + 1
-        return bin_map

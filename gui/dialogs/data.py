@@ -1923,6 +1923,22 @@ class StatisticsDialog(QDialog):
                             columns=data_header)
         # Remove the unnecessary columns
         data = data[["Group", "Channel", "Foci"]]
+        # THE CHANNEL SELECTION IS APPLIED HERE, and until 2026-09-20 it was applied nowhere:
+        # active_channels was accepted by __init__, reassigned on every experiment change and read
+        # by nothing, so ticking the boxes in ExperimentSelectionDialog changed neither the table
+        # nor the plot. Reported from real use twice -- UI rows 7 and 8 -- before it was wired up.
+        #
+        # Filtered at the single point where the frame is built, so the table, the plot, the
+        # statistics and the CSV export all see the same rows; every one of them reads self.data.
+        # The dialog's boxes carry the non-main channel names, which is exactly what the Channel
+        # column holds (get_table_data_for_image takes them from get_channel_names(image, False)).
+        active = [name for name, selected in self.active_channels.items() if selected]
+        # An empty mapping means "nobody has chosen", not "choose nothing": StatisticsDialog can be
+        # built directly with {}, and filtering to nothing there would silently empty a dialog that
+        # used to show everything. An empty SELECTION cannot arrive here at all -- the selection
+        # dialog refuses to close on one.
+        if active:
+            data = data[data["Channel"].isin(active)]
         # Tell pandas which dtypes to use
         data["Foci"] = pd.to_numeric(data["Foci"], errors="coerce")
         return data

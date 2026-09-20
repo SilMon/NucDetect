@@ -30,7 +30,10 @@ class NucleusMapper(AreaMapper):
         """
         Method to create the nucleus map for the given channel
 
-        :return: The created foci maps
+        Validates, then delegates to map_nuclei. Detector called map_nuclei directly until
+        2026-09-20, which skipped both checks below.
+
+        :return: The created nucleus map
         """
         # Check if channels were set
         if not self.channels:

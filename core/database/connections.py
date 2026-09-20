@@ -446,6 +446,26 @@ class Connector:
         :param values: A (column, value) pair, or an iterable of them
         :return: The SET text and the parameters to bind, in order
         """
+        # WHAT BINDING DOES NATIVELY, moved here when convert_value was deleted on 2026-09-20.
+        # Both behaviours cost real debugging to establish and neither needs a branch in this
+        # file any more; they are written down so nobody reintroduces the rendering they belong
+        # to, having rediscovered the same two traps:
+        #
+        #   * None binds as SQL NULL. Until 2026-09-14 the renderer had no branch for None at
+        #     all: it fell off the end, returned the Python None, and the caller's f-string wrote
+        #     the bare word `None`, which SQLite then read as a COLUMN NAME.
+        #     `Inserter.set_image_scale(md5, None, None)` raised `no such column: None`, and
+        #     every nullable column had the same hole -- x_res, y_res, unit, associated, match
+        #     and co_localized are all nullable by design, and writing NULL to any of them had no
+        #     working route.
+        #   * True binds as 1. The renderer had to test bool BEFORE int, because bool is a
+        #     subclass of int and the other order rendered True as the string "True". SQLite
+        #     accepts the bare TRUE/FALSE literals only from 3.23 onwards, and only while the
+        #     value is interpolated unquoted, so the old order worked by two coincidences at once.
+        #
+        # WHAT BINDING DOES NOT DO is the WHERE-clause caveat: `<col> = NULL` is never true in
+        # SQL, so a None reaching a condition matches nothing rather than raising. Use
+        # Specifiers.IS with Specifiers.NULL there -- build_where renders that pair as `IS NULL`.
         pairs = values if isinstance(values[0], tuple) else (tuple(values),)
         self.check_identifiers(table, [pair[0] for pair in pairs])
         parts, params = [], []
@@ -462,48 +482,10 @@ class Connector:
                 params.append(value)
         return ",".join(parts), params
 
-    @staticmethod
-    def convert_value(value: Union[float, int, str, Specifiers], quote: bool = True) -> str:
-        """
-        Method to convert the given value to a SQLite compatible string
-
-        :param value: The value to convert
-        :param quote: If true, strings will be quoted
-        :return: The converted value
-        """
-        # None FIRST, and it is a SQL keyword rather than a value. There was no branch for it at
-        # all until 2026-09-14: the method fell off the end, returned the Python None, and the
-        # caller's f-string rendered it as the bare word `None` -- which SQLite then read as a
-        # column name. `Inserter.set_image_scale(md5, None, None)` raised
-        # `OperationalError: no such column: None`, and EVERY nullable column had the same hole,
-        # not just that one: x_res, y_res, unit, associated, match and co_localized are all
-        # nullable by design, and writing NULL to any of them had no working route.
-        #
-        # CAVEAT, because this is the one place to write it down: `<col> = NULL` is never true in
-        # SQL, so a None reaching a WHERE clause now silently matches nothing where it used to
-        # raise. Use Specifiers.IS with Specifiers.NULL for that -- convert_where_statement already
-        # renders those two as `IS NULL`. A loud failure has been traded for a quiet one in a place
-        # no caller currently goes; the trade is worth it because the INSERT and UPDATE paths are
-        # the ones that exist and they were simply broken.
-        if value is None:
-            return "NULL"
-        # bool BEFORE int, because bool is a subclass of int: tested the other way round the int
-        # branch wins and True converts to "True" rather than "1". SQLite only accepts the bare
-        # TRUE/FALSE literals from 3.23 onwards and only while the value is interpolated unquoted,
-        # so the old order worked by two coincidences at once
-        elif isinstance(value, bool):
-            return f"{int(value)}"
-        elif isinstance(value, (float, int)):
-            return f"{value}"
-        elif isinstance(value, str):
-            if quote:
-                return f"\"{value}\""
-            else:
-                return value
-        elif isinstance(value, Specifiers):
-            if value is Specifiers.IS or value is Specifiers.NULL:
-                return f" {value.value} "
-            return f"{value.value}"
+    # convert_value was removed here on 2026-09-20, the last of the three renderers.
+    # It turned a Python value into SQL text; build_where and build_set bind their values
+    # instead, and nothing had called it since. The two behaviours it documented are
+    # recorded on build_set, because they are the ones sqlite now provides natively.
 
 
 class DatabaseInteractor:
