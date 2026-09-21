@@ -19,7 +19,7 @@ from core.detector_modules.AreaAndROIExtractor import extract_nuclei_from_maps, 
     extract_foci_from_blobs
 from core.detector_modules.FCNMapper import FCNMapper
 from core.detector_modules.FocusMapper import FocusMapper
-from core.detector_modules.ImageLoader import ImageLoader
+from core.detector_modules.ImageLoader import ImageData, ImageLoader
 from core.detector_modules.MapComparator import MapComparator
 from core.detector_modules.NucleusMapper import NucleusMapper
 from core.detector_modules.QualityTester import QualityTester
@@ -27,6 +27,68 @@ from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 
 LOGGER = get_logger(__name__)
+
+
+class AnalysisResult(ImageData, total=False):
+    """What ``Detector.analyse_image`` returns: the image metadata plus everything the analysis
+    produced.
+
+    **It extends ``ImageData`` rather than replacing it**, because the metadata really is part of
+    the result -- the caller writes the image row and the roi rows from the same dict. What it does
+    NOT do is let the analysis overwrite a metadata field with something of a different kind.
+
+    Until 2026-09-21 there was no type here at all: ``analyse_image`` grew fourteen keys onto a copy
+    of the metadata dict and returned it as ``Dict[str, Union[...]]``. **The cost was concentrated
+    in one key.** ``channels`` arrived from ``get_image_data`` meaning *how many channels this image
+    has* and was overwritten with *the channel image arrays*, so ``data["channels"]`` could not be
+    read without knowing which side of the assignment you were on -- and both meanings had live
+    readers: ``add_new_image`` writes the count into the ``images`` table, while
+    ``prepare_roihandler_for_database`` needs the arrays.
+
+    **The arrays now have their own key and the count survives.** Declaring the two separately is
+    what a checker can act on: PEP 589 forbids a subclass from changing an inherited field's type,
+    so ``channels: List[np.ndarray]`` here would be an error against ``ImageData``'s
+    ``channels: int``.
+
+    **That is a CHECKER rule and not a runtime one** -- verified rather than assumed, because the
+    first version of this docstring claimed the class "would not even define": Python accepts the
+    redeclaration at runtime and simply keeps the last annotation. So the enforcement is worth
+    exactly as much as the type checking that is run over this file, which today is none. The
+    naming is what carries it in the meantime.
+
+    ``total=False`` applies to the keys declared HERE, not to the inherited metadata ones. It is
+    honest rather than lax: the dict is populated by fourteen separate assignments spread over the
+    length of ``analyse_image``, so "present" is not a property any checker could establish at the
+    point of construction. What the declaration does buy is the key NAMES and their types, which is
+    what the collision cost.
+    """
+    #: The image id (md5), which is the primary key everything else is keyed by
+    id: str
+    #: The channel image arrays, one per channel. NOT ``channels`` -- see the class docstring
+    channel_arrays: List[np.ndarray]
+    #: Which channels the analysis ran on, and which one was the nucleus channel
+    active_channels: List[bool]
+    #: Index into ``names``/``channel_arrays``, not a position among the ACTIVE channels
+    main_channel: int
+    names: List[str]
+    #: The detected roi. The single largest thing in here
+    handler: ROIHandler
+    #: Pixels per micron, applied to this image -- a per-image override may differ from the run's
+    x_scale: float
+    y_scale: float
+    scale_unit: str
+    #: Raised by the PARENT, not here: a batch worker's logger is a NullHandler. Read with .get:
+    #: a stubbed result, or one produced before 2026-09-15, carries no verdict
+    plausibility: Dict[str, Union[int, float, bool]]
+    add_to_experiment: bool
+    experiment_details: Dict[str, str]
+    #: The settings this analysis actually ran with, after any per-image override
+    used_settings: Dict[str, Any]
+    #: Wall-clock seconds. A FIELD as well as log text, because the batch loop's remaining-time
+    #: estimate needs it and scraping it back out of the log would be parsing our own prose
+    duration: float
+    #: The buffered messages, so a worker process can hand its log to the parent
+    log: List[str]
 
 # The detection methods analyse_image knows how to dispatch. The strings come from the analysis
 # settings dialog, where they are the radio buttons' captions lowercased, so this set and those
@@ -73,8 +135,7 @@ class Detector:
 
     def analyse_image(self, path: str,
                       settings: Dict[str, Union[List, bool]], save_log: bool = True,
-                      progress: ProgressReporter = NO_PROGRESS) -> \
-            Dict[str, Union[ROIHandler, np.ndarray, Dict[str, str]]]:
+                      progress: ProgressReporter = NO_PROGRESS) -> AnalysisResult:
         """
         Method to extract rois from the image given by path
 
@@ -87,7 +148,7 @@ class Detector:
             direct use of this class -- need pass nothing. It is a parameter rather than an entry
             in ``settings`` on purpose: ``settings`` is deep-copied and stored as ``used_settings``,
             and a callable has no business being serialised into the database
-        :return: The analysis results as dict
+        :return: The analysis result -- see ``AnalysisResult`` for what is in it
         """
         # An analysis that raised would otherwise leave its channels and ROI behind until the next
         # one; clearing here as well as at the end keeps the invariant unconditional
@@ -115,13 +176,15 @@ class Detector:
         prg = {stage: progress.sub(*bounds[stage]) for stage in bounds}
         start = time.time()
         prg[LOAD](0.0, "Reading image metadata")
-        # Copied into a plain dict on purpose. get_image_data returns an ImageData (a TypedDict
-        # describing image METADATA); the twelve keys added below turn it into the analysis RESULT,
-        # which is a different thing with a different contract -- and ":206" even reuses "channels"
-        # for the channel arrays rather than the channel count. Mutating the metadata type in place
-        # would make ImageData claim to describe both. The copy is one shallow dict; the result
-        # contract itself is still undescribed, which is cause 3 of the type-baseline backlog
-        imgdat: Dict[str, Any] = dict(self.imageloader.get_image_data(path))
+        # Copied, and the copy is now an AnalysisResult: get_image_data returns an ImageData
+        # describing image METADATA, and the fourteen keys added below turn it into the analysis
+        # RESULT, which is a different thing with a different contract. Mutating the metadata type
+        # in place would make ImageData claim to describe both.
+        #
+        # AnalysisResult EXTENDS ImageData, so every metadata key keeps its declared type -- which
+        # is what stops "channels" being reused for the channel arrays, as it was until 2026-09-21.
+        # The arrays are "channel_arrays" and the count is left alone
+        imgdat: AnalysisResult = dict(self.imageloader.get_image_data(path))
         self.analysis_log["Analysed Images"].append(os.path.basename(path))
         self.analysis_log["Messages"][self.analysis_log["Analysed Images"][-1]] = []
         prg[LOAD](0.3, "Hashing image")
@@ -140,7 +203,8 @@ class Detector:
         if imgdat["id"] in per_image:
             analysis_settings = dict(analysis_settings)
             analysis_settings["dots_per_micron"] = per_image[imgdat["id"]]
-        # Check if only a grayscale image was provided
+        # Check if only a grayscale image was provided. This is the channel COUNT, from the
+        # metadata, and it stays the count for the whole life of the dict now
         if imgdat["channels"] == 1:
             self.add_log_message("Detector class can only analyse multichannel images, not grayscale!")
             raise ValueError("Detector class can only analyse multichannel images, not grayscale!")
@@ -319,11 +383,14 @@ class Detector:
         # is a NullHandler, so the warning has to be raised where the results are collected
         imgdat["plausibility"] = plausibility
         imgdat["names"] = analysis_settings["names"]
-        imgdat["channels"] = channels
-        imgdat["active channels"] = active
-        imgdat["main channel"] = main_channel
-        imgdat["add to experiment"] = settings["add_to_experiment"]
-        imgdat["experiment details"] = settings["experiment_details"]
+        # "channel_arrays", NOT "channels". The metadata's channel COUNT is still in "channels" and
+        # is still read -- add_new_image writes it into the images table -- so overwriting it here
+        # gave one key two kinds of value and no way to tell them apart at a call site
+        imgdat["channel_arrays"] = channels
+        imgdat["active_channels"] = active
+        imgdat["main_channel"] = main_channel
+        imgdat["add_to_experiment"] = settings["add_to_experiment"]
+        imgdat["experiment_details"] = settings["experiment_details"]
         # Remove logging function from settings
         del analysis_settings["log"]
         imgdat["used_settings"] = analysis_settings

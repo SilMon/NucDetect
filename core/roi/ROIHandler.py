@@ -5,13 +5,16 @@ Created on 09.04.2019
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Union, List, Tuple, Iterable
+from typing import Dict, Union, List, Tuple
 
 import numpy as np
 from numba.typed import List as numList
 
+from core.logging_config import get_logger
 from core.roi import AreaAnalysis
 from core.roi.ROI import ROI
+
+LOGGER = get_logger(__name__)
 
 
 class ROIHandler(Sequence):
@@ -171,24 +174,46 @@ class ROIHandler(Sequence):
         for hash_ in hashes:
             self.remove_roi_by_hash(hash_, cascade)
 
-    def create_hash_association_maps(self, shape: Tuple[int, int]) -> Iterable[np.ndarray]:
+    def create_hash_association_maps(self, shape: Tuple[int, int],
+                                     channels: Dict[str, int]) -> List[np.ndarray]:
         """
         Method to create arrays with labelling hashes for each saved ROI
 
+        **One map per IMAGE CHANNEL, indexed by the channel's database index** -- not one per
+        entry in `idents`. Until 2026-09-21 it was the latter, and that is what let
+        `ROIItem.channel_index` mean two different things: the editor sets it from the database
+        index when an item is drawn by hand and read it back as a position in `idents`, which agree
+        only when every channel carries a detection AND the orders match. With a channel
+        deactivated for the analysis they do not: `idents` is `analysis_settings["names"]`, the
+        ACTIVE channels, so a focus stored on one channel was offered under another and could be
+        saved there. Measured 2026-09-15: 1260 items on a channel they were not in.
+
+        The caller supplies the mapping because this class does not know it -- `idents` is a list
+        of names in arrival order, and only the editor holds name -> database index.
+
         :param shape: The shape of the original image
-        :return: The created maps
+        :param channels: Channel name -> its database/image channel index
+        :return: One map per channel index, positionally indexed by that index
         """
-        maps = []
-        # Create empty maps
-        for _ in range(len(self.idents)):
-            maps.append(np.zeros(shape, dtype="int64"))
+        # Sized from the mapping, not from len(idents): a channel with no detections still needs
+        # its slot, or every index above it shifts down -- which is the defect this signature
+        # exists to make impossible
+        maps = [np.zeros(shape, dtype="int64") for _ in range(max(channels.values(), default=-1) + 1)]
         for roi in self:
+            index = channels.get(roi.ident)
+            if index is None:
+                # A roi in a channel the editor was not given. Skipped loudly rather than imprinted
+                # into an arbitrary map -- the old code would have raised ValueError here, which at
+                # least failed; silently choosing a map would corrupt the geometry it writes
+                LOGGER.warning("No channel index for %r -- its roi are left out of the association "
+                               "maps", roi.ident)
+                continue
             # Create numba list
             num_area = numList()
             for x in roi.area:
                 num_area.append(x)
             # Create the channel maps using numba
-            AreaAnalysis.imprint_area_into_array(num_area, maps[self.idents.index(roi.ident)], hash(roi))
+            AreaAnalysis.imprint_area_into_array(num_area, maps[index], hash(roi))
         return maps
 
     def delete_rois(self, hashes: List[str]) -> None:

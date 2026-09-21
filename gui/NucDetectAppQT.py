@@ -1553,8 +1553,8 @@ class NucDetect(QMainWindow):
             # same argument the guard's own comment made for the first-analysis case.
             ins.delete_existing_image_data(key)
             # Check if image should be added to experiment
-            if data["add to experiment"]:
-                exp_data = data["experiment details"]
+            if data["add_to_experiment"]:
+                exp_data = data["experiment_details"]
                 ins.add_image_to_experiment(key, exp_data["name"], exp_data["details"],
                                             exp_data["notes"], "Standard")
             # Update channel info. Cleared first: the rows are keyed by (md5, index) and were only
@@ -1563,12 +1563,15 @@ class NucDetect(QMainWindow):
             ins.remove_channels_for_image(key)
             for ind in range(len(data["names"])):
                 ins.add_channel(key, ind, data["names"][ind],
-                                data["active channels"][ind], data["main channel"] == ind)
+                                data["active_channels"][ind], data["main_channel"] == ind)
             # Save scale and scale unit
             ins.set_image_scale(key, data["x_scale"], data["y_scale"])
             ins.set_image_scale_unit(key, data["scale_unit"])
             # Save data for detected ROI
-            roidat, pdat, elldat = NucDetect.prepare_roihandler_for_database(data["handler"], data["channels"])
+            # data["channel_arrays"], not data["channels"]: the latter is the channel COUNT
+            # from the image metadata and always was -- the analysis used to overwrite it here
+            roidat, pdat, elldat = NucDetect.prepare_roihandler_for_database(
+                data["handler"], data["channel_arrays"])
             # Check if there is any data to save
             if roidat:
                 # Save data to database. This ALSO sets `analysed` as a side effect, which is what

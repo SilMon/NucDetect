@@ -322,15 +322,14 @@ QHeaderView::down-arrow {
     image: url(@@CSS_DIR@@/arrow_down.png);
 }
 
-/* List widgets (if used) */
-QListWidget {
-    background-color: #1e1e1e;
-    alternate-background-color: #252526;
-    color: #ffffff;
-    border: 1px solid #3c4f7c;
-    selection-background-color: #205c9c;
-    selection-color: #ffffff;
-}
+/* QListWidget was styled here until 2026-09-21. The rule is deleted because it was REDUNDANT,
+   not because it was unused: StatisticsDialog._add_group_boxes creates a real QListWidget in
+   Python, so it does render under this sheet. A Qt type selector matches subclasses, and
+   QListWidget is a QListView, so the QTableView, QListView, QTreeView rule above already gives it
+   every property this one set -- plus gridline-color. Verified by rendering a populated,
+   checkable QListWidget with a selected row under both sheets: 34 distinct colours, pixel
+   identical, selection #205c9c and alternating rows #252526 both still delivered.
+   Do not re-add it: a second rule for a subclass only makes the two drift apart. */
 
 /* =======================================================================
    Progress bar

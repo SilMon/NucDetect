@@ -501,6 +501,7 @@ class EditorView(pg.GraphicsView):
         """
         self.roi.sort_roi_list()
         self.loading_timer = ROIDrawerTimer(self.roi, self.plot_item,
+                                            channels=self.active_channels,
                                             feedback=self.update_loading,
                                             processing=ROIDrawer.draw_roi)
 
@@ -525,14 +526,31 @@ class EditorView(pg.GraphicsView):
             for item in self.roi_items:
                 item.setVisible(True)
 
-    def get_roi_index(self, roi) -> int:
+    def _channel_name(self, index: int) -> str:
         """
-        Method to get the channel index for the given ROI
+        Method to get the channel name for a database channel index
 
-        :param roi: The ROI
-        :return: The channel index as int
+        The reverse of `self.active_channels`, which is name -> index. Needed because a hand-drawn
+        roi carries the INDEX and `ROI` stores the NAME, and since 2026-09-21 that index is the
+        database one rather than a position in `idents` -- so the old `self.roi.idents[index]`
+        would now read the wrong name whenever the two spaces disagree.
+
+        :param index: The database/image channel index
+        :return: The channel name
+        :raises KeyError: if no active channel carries that index
         """
-        return self.roi.idents.index(roi.ident)
+        for name, ind in self.active_channels.items():
+            if ind == index:
+                return name
+        # Loud, and deliberately not a fallback: the name is written into the database row for the
+        # roi being created, so guessing here would store an roi against the wrong channel -- which
+        # is the defect this whole change exists to remove
+        raise KeyError(f"No active channel has index {index}")
+
+    # get_roi_index was removed here on 2026-09-21. It returned `idents.index(roi.ident)` -- the
+    # wrong index space, the one this file no longer uses -- and it had NO callers, so it was a
+    # trap waiting for someone who needed a channel index and found a method offering one.
+    # `self.active_channels[roi.ident]` is the answer now.
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         super().keyPressEvent(event)
@@ -705,6 +723,12 @@ class EditorView(pg.GraphicsView):
             # How far the grip lies from the item's current angle. Subtracting it on every step
             # means the gesture turns the item BY the amount the mouse turns, rather than snapping
             # the item's axis onto the cursor the instant the grip is touched
+            # handle_at returns None unless BOTH selected_item and its edit_rect are set, and
+            # this line is unreachable without a handle -- so the invariant is the caller's, not a
+            # condition to test. Asserted rather than guarded: a guard here would silently abandon
+            # a rotation the user started, which is the failure mode that made this file's
+            # unguarded dereferences worth filing rather than blanket-guarding
+            assert self.selected_item is not None, "handle_at returned a handle with no selection"
             centre = self.selected_item.item_rect.center()
             offset = angle_from_vector(centre.x(), centre.y(),
                                        position.x(), position.y()) - self.selected_item.angle
@@ -823,6 +847,12 @@ class EditorView(pg.GraphicsView):
         :param scene_pos: The position to test, in scene coordinates
         :return: The item, or None
         """
+        # The three mouse handlers that reach this all test `active_channel != "Composite"`
+        # first, and the composite view has no entry in active_channels -- so this lookup depends
+        # on a caller-side condition rather than on anything visible here. Stated, because the
+        # failure would otherwise be a bare KeyError from inside a hit test.
+        assert self.active_channel in self.active_channels, (
+            f"roi_item_at needs a real channel, got {self.active_channel!r}")
         active_index = self.active_channels[self.active_channel]
         pixel = self.plot_vb.viewPixelSize()
         # scene().items() returns items in DESCENDING stacking order, so the first match is the
@@ -870,6 +900,11 @@ class EditorView(pg.GraphicsView):
                 ROIDrawer.MARKERS["invisible"]
             )
         else:
+            # Same caller-side condition as roi_item_at, and the consequence is worse here: this
+            # index is the channel a NEW roi is written to, so a wrong one stores it against the
+            # wrong channel -- the defect the index-space work removed on 2026-09-21
+            assert self.active_channel in self.active_channels, (
+                f"cannot create an item on channel {self.active_channel!r}")
             item = FocusItem(round(pos.x() - 2 * self.size_factor), round(pos.y() - 2 * self.size_factor),
                              round(4 * self.size_factor), round(4 * self.size_factor),
                              self.active_channels[self.active_channel], -1)
@@ -1004,8 +1039,11 @@ class EditorView(pg.GraphicsView):
         ignore.extend(self.delete)
         # Delete all items that can be ignored from ROIHandler
         self.roi.delete_rois(ignore)
-        # Create a hash association maps for each channel
-        return self.roi.create_hash_association_maps((self.image.shape[0], self.image.shape[1]))
+        # One map per IMAGE channel, keyed by the database channel index -- self.active_channels is
+        # name -> index, which is the space ROIItem.channel_index now uses everywhere. Passing it in
+        # is what stopped the maps being indexed by position in `idents`; see the method's docstring
+        return self.roi.create_hash_association_maps((self.image.shape[0], self.image.shape[1]),
+                                                     self.active_channels)
 
     def get_unassociated_foci(self) -> List[int]:
         """
@@ -1073,7 +1111,7 @@ class EditorView(pg.GraphicsView):
                     # has no "not set" key -- so a redraw of the handler after a manual focus was
                     # added raised KeyError: 'not set' in draw_focus, and the in-memory object
                     # disagreed with its own stored row
-                    roi = ROI(channel=self.roi.idents[item.channel_index],
+                    roi = ROI(channel=self._channel_name(item.channel_index),
                               main=isinstance(item, NucleusItem), auto=False,
                               method="manual")
                     roi.set_area(rle)
@@ -1125,8 +1163,8 @@ class EditorView(pg.GraphicsView):
         # With no main channel there is nothing to associate foci WITH, so the association step is
         # skipped rather than faked. Everything else in this method still runs: the drawn roi are
         # written, the deletions are applied, and the image is marked modified
-        if self.roi.main in self.roi.idents:
-            associations = self.create_associations(self.roi.idents.index(self.roi.main), maps,
+        if self.roi.main in self.active_channels:
+            associations = self.create_associations(self.active_channels[self.roi.main], maps,
                                                     unassociated, centers)
         else:
             LOGGER.warning("Image %s declares no main channel -- foci drawn on it cannot be "
@@ -1276,10 +1314,28 @@ class EditorView(pg.GraphicsView):
         """
         # Every nucleus a focus overlaps, as {focus hash: {nucleus hash}}
         overlaps: Dict[int, set] = {}
+        # Hoisted out of the loop, which is where it used to sit: `maps[main] != 0` does not depend
+        # on c, and recomputing it meant a full pass over the main channel for every OTHER channel.
+        # Found while measuring the 2026-09-21 index-space change rather than by reading -- it has
+        # been in this shape since the vectorised rewrite
+        main_mask = maps[main] != 0
         for c in range(len(maps)):
             if c == main:
                 continue
-            both = (maps[c] != 0) & (maps[main] != 0)
+            # EMPTINESS FIRST, and it is not a micro-optimisation. Since 2026-09-21 `maps` holds one
+            # array per IMAGE CHANNEL rather than one per channel that carries detections, so a
+            # 5-channel image with foci in two channels brings three all-zero maps through here.
+            # Building `both` for one of those allocated two boolean arrays and ANDed them --
+            # measured at 1.9 ms per empty channel on a 1384x1032 image, against 0.6 ms for this
+            # test, and +233 % on the whole method (2.5 ms -> 8.2 ms) before it was added.
+            # The comparison is REUSED rather than repeated: testing `maps[c].any()` and then
+            # computing `maps[c] != 0` walked the array twice, which cost the populated channels
+            # more than it saved on the empty ones. One pass answers both questions, and `any()`
+            # on the resulting boolean short-circuits at the first set pixel
+            channel_mask = maps[c] != 0
+            if not channel_mask.any():
+                continue
+            both = channel_mask & main_mask
             if not both.any():
                 continue
             pairs = np.unique(np.stack([maps[c][both], maps[main][both]]), axis=1)
@@ -1423,15 +1479,18 @@ class ROIDrawer:
             item.update_indicators(draw_additional)
 
     @staticmethod
-    # idents is a Sequence, not an Iterable: the body calls idents.index(), which no plain
-    # iterable has -- a generator or a set would raise AttributeError at that line
-    def draw_roi(view: pg.PlotItem, rois: Iterable[ROI], idents: Sequence[str]) -> List[QGraphicsEllipseItem]:
+    # channels is name -> DATABASE CHANNEL INDEX, not a Sequence of idents. It was the latter
+    # until 2026-09-21, and `idents.index(roi.ident)` is what gave a drawn roi a different index
+    # space from a hand-drawn one -- the two agree only when every channel carries a detection and
+    # the orders match, which stops being true the moment a channel is deactivated for the analysis
+    def draw_roi(view: pg.PlotItem, rois: Iterable[ROI],
+                 channels: Dict[str, int]) -> List[QGraphicsEllipseItem]:
         """
         Method to populate the given plot with the roi stored in the handler
 
         :param view: The PlotItem to populate
         :param rois: The ROIHandler
-        :param idents: List of available channels
+        :param channels: Channel name -> its database/image channel index
         :return: List of all created items
         """
         items = []
@@ -1455,7 +1514,14 @@ class ROIDrawer:
                 LOGGER.warning("Skipping a roi in channel %s: no points are stored for it. This "
                                "should have been discarded before drawing", roi.ident)
                 continue
-            ind = idents.index(roi.ident)
+            ind = channels.get(roi.ident)
+            if ind is None:
+                # A roi in a channel the editor was not given. Skipped for the same reason the
+                # association maps skip it: drawing it under an arbitrary index is what this
+                # change exists to prevent
+                LOGGER.warning("Skipping a roi in channel %s: it is not one of the editor's "
+                               "channels", roi.ident)
+                continue
             if roi.main:
                 items.append(ROIDrawer.draw_nucleus(view, roi, ind, False))
             else:
@@ -1742,6 +1808,12 @@ class ROIItem(QGraphicsEllipseItem):
         self.setRect(rect)
         self.setTransformOriginPoint(rect.center())
         self.setRotation(angle)
+        # add_to_view assigns edit_rect, and every caller of this method works on an item that
+        # is already on the view -- select_item_at_mouse_position, the drag machinery and
+        # reset_item all reach items drawn into the scene. Asserted rather than guarded because
+        # skipping the geometry update would leave the editing rectangle behind the item it
+        # describes, which looks like a redraw bug rather than a missing precondition
+        assert self.edit_rect is not None, "update_data before the item was added to a view"
         self.edit_rect.set_geometry(rect, angle)
 
     def reset_item(self) -> None:
@@ -1865,6 +1937,12 @@ class ROIItem(QGraphicsEllipseItem):
         :param enable: Bool
         :return: None
         """
+        # The item must be on the view already -- add_to_view is what creates edit_rect, and the
+        # call site at select_item_at_mouse_position says so in its own comment. Asserted rather
+        # than guarded: returning quietly would leave an item that looks selected but has no grab
+        # points, which is the shape of the 2026-09-13 defect where resize and rotate silently
+        # stopped working while the selection looked fine
+        assert self.edit_rect is not None, "enable_editing before the item was added to a view"
         if enable:
             self.setEnabled(enable)
             self.view.addItem(self.edit_rect)

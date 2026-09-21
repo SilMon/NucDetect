@@ -1,5 +1,5 @@
 import time
-from typing import Callable, Iterable, Sequence
+from typing import Callable, Dict, Iterable, Sequence
 
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QGraphicsView
@@ -103,7 +103,7 @@ class Loader(QTimer):
 
 class ROIDrawerTimer(Loader):
 
-    def __init__(self, items: ROIHandler, view: QGraphicsView,
+    def __init__(self, items: ROIHandler, view: QGraphicsView, channels: Dict[str, int],
                  batch_size: int = 25, batch_time: int = 50,
                  feedback: Callable = None, processing: Callable = None):
         """
@@ -111,6 +111,11 @@ class ROIDrawerTimer(Loader):
 
         :param items: The items to draw
         :param view: Graphicsview to draw the ROI on
+        :param channels: Channel name -> its database/image channel index, handed to `processing`
+            as its third argument. **Required, and not derived from `items.idents` any more**: the
+            handler's `idents` is a list of names in arrival order, and using a position in it as a
+            channel index is the defect fixed on 2026-09-21 -- an roi drawn from the database got a
+            different index from one drawn by hand
         :param batch_size: The number of images to load per batch
         :param batch_time: The time between consecutive loading approaches in milliseconds
         :param feedback: The function to call after loading. Has to accept a list of QStandardItems
@@ -123,6 +128,7 @@ class ROIDrawerTimer(Loader):
         # reads self.items.idents, which only a ROIHandler has
         self.items: ROIHandler = items
         self.view = view
+        self.channels = channels
         self.start(self.batch_time)
 
     def process_items(self, items: ROIHandler):
@@ -132,4 +138,4 @@ class ROIDrawerTimer(Loader):
         :param items: The items to process
         :return: The processed items
         """
-        return self.processing(self.view, items, self.items.idents)
+        return self.processing(self.view, items, self.channels)

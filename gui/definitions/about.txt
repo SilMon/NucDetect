@@ -1,4 +1,4 @@
-<b>Version:</b> 1.10.0.dev38<br>
+<b>Version:</b> 1.11.0.dev45<br>
 
 <br><b>GitHub</b>:<br>
 https://github.com/SilMon/NucDetect

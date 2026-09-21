@@ -3,6 +3,9 @@ import time
 from typing import List, Tuple
 
 import numpy as np
+from scipy.optimize import linear_sum_assignment
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
 from core.roi.ROI import ROI
@@ -137,6 +140,22 @@ class MapComparator:
         :return: The overlapping ROI as pairs of list indices, the matched roi in a, the matched roi in b,
         the unmatched roi in a, the unmatched roi in b
         """
+        # MINIMUM TOTAL DISTANCE OVER ALL PAIRINGS, not nearest-neighbour-first.
+        #
+        # Until 2026-09-21 this made a single greedy pass over foci_a: each focus took its nearest
+        # free candidate, and a focus that lost one to a closer competitor was DROPPED rather than
+        # offered another. Measured cost over 40 simulated images: 3024 pairs against an optimal
+        # 3028, 0.13 % short -- small, and never zero, and the cases it loses are exactly the
+        # crowded ones the comparison exists to resolve.
+        #
+        # The greedy pass could not be patched into correctness. "Re-offer a displaced focus" is
+        # the same choice again one level down: the re-offered focus can displace a third, and
+        # ordering the passes differently only moves which pairing is missed. The rule has to be
+        # stated over the whole set, and "minimum total distance" is that rule.
+        #
+        # scipy.optimize.linear_sum_assignment is the same function the verification harness has
+        # used as its reference since the finding was filed, so this makes the code agree with what
+        # the test already computed rather than introducing a second opinion.
         # An empty list is an ANSWER, not an error: one detection method found nothing in this
         # channel, so nothing can be matched and everything the other method found is unmatched --
         # which is what merge_overlapping_foci needs in order to keep it. cKDTree raises
@@ -147,53 +166,85 @@ class MapComparator:
                     np.zeros(len(foci_a), dtype=bool), np.zeros(len(foci_b), dtype=bool),
                     np.ones(len(foci_a), dtype=bool), np.ones(len(foci_b), dtype=bool))
         # Convert the focus list to centroids
-        centroids_a = [x.get_minimal_representation()[:2] for x in foci_a]
-        centroids_b = [x.get_minimal_representation()[:2] for x in foci_b]
-        # Create ckD Trees from both centroid lists
-        tree_a = cKDTree(centroids_a)
-        tree_b = cKDTree(centroids_b)
-        # Get the respective overlap between the foci lists
-        matches = tree_a.query_ball_tree(tree_b,
-                                         r=max_distance)
-        data_a = [(y, x) for y, x in tree_a.data]
-        data_b = [(y, x) for y, x in tree_b.data]
-        # Get all pairs
-        pairs = {
-            hash(x): [None, None, None] for x in foci_b
-        }
-        matched_a = np.zeros(len(data_a), dtype=bool)
-        matched_b = np.zeros(len(data_b), dtype=bool)
-        for ind, matches in enumerate(matches):
-            # Check if any point of B was matched
-            if not matches:
+        centroids_a = np.asarray([x.get_minimal_representation()[:2] for x in foci_a], dtype=float)
+        centroids_b = np.asarray([x.get_minimal_representation()[:2] for x in foci_b], dtype=float)
+        # Candidate pairs: everything within max_distance of each other. This is a filter, not a
+        # decision -- it says which pairings are ALLOWED, and the assignment below picks among them
+        candidates = cKDTree(centroids_a).query_ball_tree(cKDTree(centroids_b), r=max_distance)
+        rows = np.fromiter((i for i, cs in enumerate(candidates) for _ in cs), dtype=int)
+        cols = np.fromiter((j for cs in candidates for j in cs), dtype=int)
+        matched_a = np.zeros(len(foci_a), dtype=bool)
+        matched_b = np.zeros(len(foci_b), dtype=bool)
+        pairs: List[Tuple[int, int]] = []
+        if rows.size:
+            costs = np.linalg.norm(centroids_a[rows] - centroids_b[cols], axis=1)
+            for a_idx, b_idx in MapComparator._assign(rows, cols, costs,
+                                                      len(foci_a), len(foci_b)):
+                pairs.append((a_idx, b_idx))
+                matched_a[a_idx] = True
+                matched_b[b_idx] = True
+        # Sorted by a-index so the output does not depend on the kd-tree's traversal order. The
+        # greedy version returned pairs in foci_b insertion order, which was equally arbitrary;
+        # this one is at least reproducible from the inputs
+        pairs.sort()
+        return (pairs, matched_a, matched_b, np.invert(matched_a), np.invert(matched_b))
+
+    @staticmethod
+    def _assign(rows: np.ndarray, cols: np.ndarray, costs: np.ndarray,
+                n_a: int, n_b: int) -> List[Tuple[int, int]]:
+        """Choose the set of pairs with the smallest total distance, one partner each.
+
+        **Solved per CONNECTED COMPONENT of the candidate graph rather than over everything at
+        once**, for a reason that is about cost, not about the answer: the two give the same
+        result, because foci in different components cannot compete for the same partner. A dense
+        cost matrix over all foci is what is expensive -- measured at 3000 foci per list, building
+        it takes 0.203 s and 72 MB while the assignment itself takes 0.034 s. The candidate graph
+        has about one edge per focus, so its components are nearly all a single pair, and the
+        matrices built here are two or three wide.
+
+        :param rows: a-index of each candidate pair
+        :param cols: b-index of each candidate pair
+        :param costs: centre distance of each candidate pair
+        :param n_a: number of foci in the first list
+        :param n_b: number of foci in the second list
+        :return: the chosen (a-index, b-index) pairs
+        """
+        # One graph over both lists, b-indices offset past the a-indices, so an undirected
+        # component is exactly "these foci compete with one another and with nobody else"
+        graph = coo_matrix((np.ones(rows.size), (rows, cols + n_a)), shape=(n_a + n_b, n_a + n_b))
+        _, labels = connected_components(graph, directed=False)
+        chosen: List[Tuple[int, int]] = []
+        order = np.argsort(labels[rows], kind="stable")
+        edge_labels = labels[rows][order]
+        # Split the edge list into runs sharing a component label
+        bounds = np.flatnonzero(np.diff(edge_labels)) + 1
+        for group in np.split(order, bounds):
+            g_rows, g_cols, g_costs = rows[group], cols[group], costs[group]
+            a_ids = np.unique(g_rows)
+            b_ids = np.unique(g_cols)
+            if a_ids.size == 1 and b_ids.size == 1:
+                # The overwhelmingly common case: one focus, one candidate, no competition
+                chosen.append((int(a_ids[0]), int(b_ids[0])))
                 continue
-            else:
-                # Get the original point
-                point_a = data_a[ind]
-                # Sort the matches by distance
-                points_b = [data_b[x] for x in matches]
-                dists = np.linalg.norm(np.asarray(points_b) - np.asarray(point_a), axis=1)
-                # The distance TO THE NEIGHBOUR THAT WAS SELECTED. dists[0] is the distance to the
-                # first candidate in query_ball_tree's order, which is only the nearest by
-                # coincidence -- so the "keep the closer match" test below, and the distance it
-                # stored for later comparisons, both described a different focus
-                nearest = int(np.argmin(dists))
-                nearest_neighbor = matches[nearest]
-                nearest_distance = float(dists[nearest])
-                # Get the nearest neighbor as ROI
-                focus_b = foci_b[nearest_neighbor]
-                # Check if the nearest neighbor was already matched, else match it
-                if not matched_b[nearest_neighbor] or nearest_distance < pairs[hash(focus_b)][2]:
-                    matched_b[nearest_neighbor] = 1
-                    matched_a[ind] = 1
-                    # `is not None`: index 0 is a valid index and a falsy value, so a match against
-                    # the FIRST focus in the list was never displaced by a closer one
-                    if pairs[hash(focus_b)][0] is not None:
-                        matched_a[pairs[hash(focus_b)][0]] = 0
-                    pairs[hash(focus_b)] = [ind, nearest_neighbor, nearest_distance]
-        unmatched_a = np.invert(matched_a)
-        unmatched_b = np.invert(matched_b)
-        return ([(x[0], x[1]) for x in pairs.values() if x[0] is not None],
-                matched_a, matched_b,
-                unmatched_a,
-                unmatched_b)
+            # A real contest. Build the small matrix and let the assignment settle it -- this is
+            # the case the previous greedy pass got wrong: it walked foci_a once, and a focus that
+            # lost its nearest neighbour to a closer competitor was never offered a free one still
+            # in range. Measured: a-foci at columns 102, 101 against b-foci at 100, 105 left b[1]
+            # unmatched 3 px from an unmatched a-focus
+            # The sentinel must make MORE PAIRS always beat a shorter total distance, because
+            # linear_sum_assignment always fills min(rows, cols) cells and the only question is how
+            # many of them are real. max(cost) + 1 is NOT enough: it lets a rearrangement buy a
+            # blocked cell by shortening the others, and the calibration check caught it doing so
+            # -- 1519 pairs against the reference's 1522 over 20 simulated images. Scaling by the
+            # cell count makes one blocked cell cost more than every real cell put together, so a
+            # solution with fewer of them always wins
+            cells = int(a_ids.size) * int(b_ids.size)
+            blocked = (float(g_costs.max()) + 1.0) * cells
+            local = np.full((a_ids.size, b_ids.size), blocked, dtype=float)
+            local[np.searchsorted(a_ids, g_rows), np.searchsorted(b_ids, g_cols)] = g_costs
+            for i, j in zip(*linear_sum_assignment(local)):
+                # A pair the matrix never offered: padding, chosen only because the assignment
+                # must be square-ish. Those two foci simply have no partner
+                if local[i, j] < blocked:
+                    chosen.append((int(a_ids[i]), int(b_ids[j])))
+        return chosen
