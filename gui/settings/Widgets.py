@@ -53,7 +53,18 @@ class SettingsWidget(QWidget):
     """
     Base class for all settings widgets
     """
-    changed = pyqtSignal(str, list)
+    # (id, value) -- the value itself, NOT wrapped in a list.
+    #
+    # It was `pyqtSignal(str, list)` until 2026-09-20, and every widget wrapped its scalar in a
+    # one-element list that every receiver indexed straight back out: `menupoint_changed` stored
+    # the list shape into `self.changed`, and `accept()` did `value[0]` on the way to the database.
+    # So the wrapping was not confined to the signal -- it propagated into the dialog's own state,
+    # where a reader had to know it was there.
+    #
+    # RW's ruling, 2026-09-20: *"change the signal"*. No setting carries more than one value, so
+    # the list never described anything. `object` rather than a union, because the values really
+    # are heterogeneous -- str, int, float and bool all travel this signal.
+    changed = pyqtSignal(str, object)
 
     def __init__(self, _id, _type, value, ui_file, title="", desc="", parent=None, *, callback):
         # callback is keyword-only and mandatory: pyqtSignal.connect(None) raises TypeError, so a
@@ -79,7 +90,7 @@ class SettingsWidget(QWidget):
         self.ui.description.setText(self._description)
 
     def _change_emit(self):
-        self.changed.emit(self._id, [self.value])
+        self.changed.emit(self._id, self.value)
 
 
 class SettingsText(SettingsWidget):
@@ -253,6 +264,82 @@ class SettingsDecimalSpinner(_SettingsSpinnerWidget):
         # when they are set, and a later setDecimals does not restore the lost precision. This is
         # the whole reason the base class has this hook rather than one fixed setup order
         self.spin.setDecimals(self.decimals)
+
+
+class SettingsChannelNames(SettingsWidget):
+    """
+    Class to show one field per standard channel in the settings
+
+    Replaced a single `SettingsText` on 2026-09-20. The channel names were edited as one
+    semicolon-delimited string -- `Red;Green;Blue;Cyan;Magenta` -- with the format carried in the
+    description as prose, so the delimiter, the ordering and the count were all the user's
+    responsibility and nothing validated any of them. **A missing semicolon silently renamed two
+    channels into one.** RW raised it on 2026-08-22 and ruled on the shape on 2026-09-20:
+
+        *"the Settings widget should allow always to set the standard names of all 5 channels"*
+
+    So the field count is FIXED at five and does not follow the image: these are the program's
+    standard channel names, which an analysis offers before any image has been looked at.
+
+    **The stored format is unchanged** -- still `a;b;c;d;e` in one settings row -- because the
+    database column, `AnalysisSettingsDialog` and every consumer already read it that way. Only the
+    editing surface changed.
+    """
+    #: The standard channels this program names, in the order the analysis dialog lists them
+    CHANNELS = ("le_one", "le_two", "le_three", "le_four", "le_five")
+
+    def __init__(self, _id, value, parent=None, title="", desc="", *, callback):
+        super(SettingsChannelNames, self).__init__(_id, "ChannelNamesWidget", value,
+                                                   "menu_channels.ui", title, desc, parent,
+                                                   callback=callback)
+        self.fields = [getattr(self.ui, name) for name in self.CHANNELS]
+        for field, name in zip(self.fields, self._split(value)):
+            field.setText(name)
+            # editingFinished, matching SettingsText: it fires on focus loss and on Return, so a
+            # half-typed name does not reach the database on every keystroke
+            field.editingFinished.connect(self._on_value_changed)
+        self.value = self._join()
+
+    @classmethod
+    def _split(cls, value):
+        """
+        Method to read the stored string into exactly one name per standard channel
+
+        Short values are PADDED rather than rejected: the database legitimately holds three names
+        where the file holds five, which is the state RW met on 2026-08-22 -- the box went from
+        five names to three and there was no way to type the other two back without knowing the
+        delimiter. Surplus names are dropped, with a warning, because there is nowhere to show them.
+
+        :param value: The stored `a;b;c` string
+        :return: A list of exactly len(CHANNELS) names
+        """
+        names = str(value).split(";") if value else []
+        if len(names) > len(cls.CHANNELS):
+            LOGGER.warning(f"{len(names)} channel names stored, but the program has "
+                           f"{len(cls.CHANNELS)} standard channels -- the surplus is dropped")
+        names = names[:len(cls.CHANNELS)]
+        return names + [""] * (len(cls.CHANNELS) - len(names))
+
+    def _join(self):
+        """
+        Method to render the fields back into the stored format
+
+        Trailing empties are KEPT, not stripped. Dropping them would make "Red;Green;Blue;;" read
+        back as three names, and the next time the dialog opened the last two fields would be empty
+        for a different reason than the user left them -- the round trip has to be exact.
+
+        :return: The `a;b;c;d;e` string to store
+        """
+        return ";".join(field.text().strip() for field in self.fields)
+
+    def _on_value_changed(self):
+        joined = self._join()
+        # editingFinished fires on every focus change, including ones that altered nothing. Emitting
+        # regardless would mark the settings dirty for a user who only tabbed through the dialog
+        if joined == self.value:
+            return
+        self.value = joined
+        super(SettingsChannelNames, self)._change_emit()
 
 
 class SettingsComboBox(SettingsWidget):

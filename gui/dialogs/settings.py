@@ -21,6 +21,7 @@ from gui import Util
 from core.logging_config import get_logger, reset_log_file
 from gui.definitions.icons import Icon
 from gui.settings.Widgets import SettingsSlider, SettingsDial, SettingsSpinner, SettingsDecimalSpinner, \
+    SettingsChannelNames, \
     SettingsText, SettingsComboBox, SettingsCheckBox
 
 LOGGER = get_logger(__name__)
@@ -241,15 +242,25 @@ class AnalysisSettingsDialog(QDialog):
         # order. Explicit ids move that contract out of the .ui and into the code
         for index, button in enumerate(channel_main):
             self.ui.main_channel_btn_group.setId(button, index)
-        # Both values below come from a user-editable JSON file and index fixed-size widget lists
+        # Both values below come from a user-editable store and index fixed-size widget lists
         names = self.settings["names"].split(";")
         if len(names) > len(channels):
             LOGGER.warning(f"{len(names)} channel names configured, but the dialog has "
                            f"{len(channels)} channels -- the surplus is ignored")
-        for name in range(min(len(names), len(channels))):
-            channels[name].setChecked(True)
-            channel_names[name].setEnabled(True)
-            channel_names[name].setText(names[name])
+        # AN EMPTY NAME LEAVES ITS CHANNEL OFF, which is what makes the settings dialog's five
+        # always-present fields safe to leave blank. RW, 2026-09-20: the settings widget always
+        # offers all five standard channels and "the AnalysisSettings dialog should respect the set
+        # standard names" -- so a named channel is offered here and an unnamed one is not.
+        #
+        # Before that day the loop ran over however many names the string happened to split into,
+        # so three stored names left channels 4 and 5 unchecked, unnamed AND unreachable: there was
+        # no way to name them from this dialog, and the settings box gave no hint that more were
+        # possible. The count no longer decides anything; the content does.
+        for index in range(min(len(names), len(channels))):
+            name = names[index].strip()
+            channel_names[index].setText(name)
+            channels[index].setChecked(bool(name))
+            channel_names[index].setEnabled(bool(name))
         main_channel = self.settings["main_channel"]
         if not 0 <= main_channel < len(channel_main):
             LOGGER.warning(f"Configured main channel {main_channel} is outside the "
@@ -419,7 +430,7 @@ class SettingsDialog(QDialog):
     def accept(self):
         # Update the database to reflect the changes made
         for key, value in self.changed.items():
-            self.inserter.update_setting(key, value[0])
+            self.inserter.update_setting(key, value)
         self.inserter.commit()
         # THE JSON IS NOT WRITTEN. It used to be: save_menu_settings() copied every changed value
         # into the loaded JSON and dumped the file, which made that file a second, competing store
@@ -638,6 +649,19 @@ class SettingsDialog(QDialog):
                     parent=self,
                     callback=self.menupoint_changed
                 )
+            elif t == "channels":
+                # One field per standard channel, replacing the semicolon-delimited text box on
+                # 2026-09-20. Deliberately its own type rather than a flag on "text": the stored
+                # value is still one string, but the editing surface is five fields and the widget
+                # owns the encode/decode
+                p = SettingsChannelNames(
+                    _id=mp["id"],
+                    title=mp["title"],
+                    desc=mp["desc"],
+                    value=mp["value"],
+                    parent=self,
+                    callback=self.menupoint_changed
+                )
             elif t == "text":
                 p = SettingsText(
                     _id=mp["id"],
@@ -694,10 +718,12 @@ class SettingsDialog(QDialog):
         Method to detect value changes of the settings widgets
 
         :param _id: The id of the widget as str
-        :param value: The value of the widget, wrapped in a list by the widgets' signal
+        :param value: The value of the widget, as the widget holds it
         :return: None
         """
-        # self.changed keeps the signal's list shape -- accept() indexes [0] out of it
+        # Stored as it arrives. Until 2026-09-20 the signal wrapped every value in a one-element
+        # list and this kept that shape, so accept() had to index [0] back out on the way to the
+        # database -- see the signal's own comment in gui/settings/Widgets.py
         self.changed[_id] = value
         # self.data is nested per section, the shape add_menu_point builds. Writing self.data[_id]
         # here left two incompatible layouts in one dictionary, and a consumer walking it per
@@ -707,4 +733,4 @@ class SettingsDialog(QDialog):
             LOGGER.warning(f"Change reported for unknown setting '{_id}' -- not recorded in the "
                            f"section data")
             return
-        self.data[section][_id] = value[0]
+        self.data[section][_id] = value

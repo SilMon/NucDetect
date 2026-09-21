@@ -476,6 +476,24 @@ QSlider::handle:vertical {
     border-radius: 6px;
 }
 
+/* Added 2026-09-20 by the second sub-control audit -- the FOURTH instance of the same root cause,
+   after the check box, the radio button and the spin box. Styling the groove and the handle moves
+   the slider onto the stylesheet paint path, and the disabled state was never restored: a DISABLED
+   slider rendered pixel-for-pixel identical to an enabled one, so it looked draggable. Measured,
+   not assumed -- both states rendered to a QImage and diffed; unstyled they differ, styled they
+   did not.
+   Palette from QPushButton:disabled, as for the other three, so every disabled control reads
+   alike. Both orientations, because both are styled above. */
+QSlider::groove:horizontal:disabled,
+QSlider::groove:vertical:disabled {
+    background: #2e3a58;
+}
+
+QSlider::handle:horizontal:disabled,
+QSlider::handle:vertical:disabled {
+    background: #404f73;
+}
+
 /* =======================================================================
    Graphics view
    ======================================================================= */

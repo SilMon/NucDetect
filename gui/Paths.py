@@ -35,8 +35,27 @@ model_dir = os.path.join(gen, "fcn", "model")
 css_dir = os.path.join(gui, "definitions", "css")
 sql_dir = os.path.join(gen, "core", "database", "scripts")
 log_path = os.path.join(nuc_detect_dir, "logs", "nucdetect.log")
+# PROGRAM RESOURCES, NOT USER STATE -- it stays inside the package, and the dead alternative that
+# stood on the next line until 2026-09-20 must not be restored.
+#
+# That line read `os.path.join(nuc_detect_dir, "settings")`, and a finding filed 2026-07-26 asked
+# for it to be uncommented because "user settings are stored inside the installation directory".
+# **Both halves of that are now false, and acting on it would break the settings dialog outright:**
+#
+#   * this directory holds `Widgets.py`, `__init__.py`, EIGHT `.ui` templates and `settings.json`,
+#     every one of them version-controlled and shipped with the program. `Widgets.py` loads the
+#     templates from here (`uic.loadUi(os.path.join(gpaths.settings_path, ui_file))`), so pointing
+#     this at the user's home would look for `menu_slider.ui` in a directory that has never
+#     contained one;
+#   * nothing writes here at runtime -- no `json.dump`, no `open(..., "w")` anywhere under `gui/`
+#     or `core/`. `settings.json` describes the WIDGETS; the values an analysis runs with live in
+#     the database (`load_settings` -> `Requester.get_all_settings`). That has been true since
+#     2026-08-22, when `save_menu_settings` was deleted and the JSON stopped being a second,
+#     competing store of the settings.
+#
+# So there are no user settings in the installation directory to move. The user state that does
+# exist -- database, images, logs, thumbnails, results -- is already under `nuc_detect_dir` above.
 settings_path = os.path.join(gui, "settings")
-#settings_path = os.path.join(nuc_detect_dir, "settings")
 about_txt_path = os.path.join(gui, "definitions", "about.txt")
 # Inside the gui package on purpose. It used to sit at the project root and be resolved from
 # NucDetectAppQT's __file__, which works from a checkout but not from an installed copy: only files
