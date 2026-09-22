@@ -6,6 +6,7 @@ from typing import Tuple, Dict, List, Optional, Set, Union, Iterable, Any
 
 from core.detector_modules.ImageLoader import ImageLoader
 from core.logging_config import get_logger
+from core.database import schema_version, selection
 from gui import Paths
 from core.roi.ROI import ROI
 
@@ -44,8 +45,24 @@ class Specifiers(Enum):
 
 class Connector:
 
-    def __init__(self, protected: bool = True):
-        self.connection, self.cursor = self.connect_to_database(protected)
+    def __init__(self, protected: bool = True, path: str = None):
+        """
+        :param protected: If true, no concurrent access to the database is allowed
+        :param path: The database to open. Defaults to ``Paths.database``, the one used when no
+            experiment-specific database is chosen. It is a parameter so that per-experiment
+            databases -- RW, 2026-09-22 -- need no second connector class
+        """
+        # selection.get_active(), not Paths.database: the default follows the program's current
+        # choice of database, so every Requester()/Inserter() built without a connector -- nine of
+        # them across the dialogs -- moves with it. An explicit path still wins, which is what the
+        # converter needs to open a database it is not switching to
+        self.path = path or selection.get_active()
+        # Whether THIS call created the file. sqlite3.connect creates it silently, so the question
+        # can only be asked before connecting, and the answer is what decides whether the schema
+        # version is stamped: a new database is at the current version by construction, an
+        # existing one must not be stamped without the user asking. See schema_version
+        self.created = not os.path.isfile(self.path)
+        self.connection, self.cursor = self.connect_to_database(protected, self.path)
         # Set the cache size to 50000 pages (2 GB)
         self.cursor.execute("PRAGMA cache_size=50000;")
         # Load needed scripts
@@ -54,18 +71,20 @@ class Connector:
         self.table_info = self.get_table_info_from_database()
 
     @staticmethod
-    def connect_to_database(protected: bool = True) -> Tuple[sqlite3.Connection, sqlite3.Cursor]:
+    def connect_to_database(protected: bool = True,
+                            path: str = None) -> Tuple[sqlite3.Connection, sqlite3.Cursor]:
         """
-        Method to connect to the general database
+        Method to connect to a database
 
         :param protected: If true, no concurrent access to the database is allowed
+        :param path: The database to open, defaulting to ``Paths.database``
         :return: The connection and cursor to the database
         """
         # sqlite3.connect creates the database file but NOT the directory holding it, so a fresh
         # HOME raised "unable to open database file" here for anything using the core without the
         # GUI. Asking Paths for its directories is what makes a headless Connector work
         Paths.ensure_directories()
-        connection = sqlite3.connect(Paths.database, check_same_thread=protected)
+        connection = sqlite3.connect(path or selection.get_active(), check_same_thread=protected)
         return connection, connection.cursor()
 
     @staticmethod
@@ -149,7 +168,23 @@ class Connector:
 
         :return: None
         """
+        # Asked BEFORE the script runs, and asked of the SCHEMA rather than of the file.
+        #
+        # `self.created` -- whether this connector created the file -- is the obvious test and it
+        # is wrong: sqlite3.connect creates the file, while the schema is built here, so a
+        # Connector constructed and dropped without calling this leaves an empty unstamped file
+        # that no later open will ever stamp (it exists by then, so `created` is False). Caught by
+        # verify_database_switch, which did exactly that by accident.
+        #
+        # No user tables before the script + tables after = this call built the schema, so the
+        # database is at the current version by construction and may be stamped. An existing
+        # database is left alone, which is RW's "do not migrate the existing databases".
+        fresh = not self.cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1"
+        ).fetchone()
         self.cursor.executescript(self.commands["create_tables"])
+        if fresh:
+            schema_version.stamp_new(self.connection)
         self.table_info = self.get_table_info_from_database()
 
     def check_identifiers(self, table: str, columns) -> None:

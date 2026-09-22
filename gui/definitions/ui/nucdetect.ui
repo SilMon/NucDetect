@@ -525,40 +525,17 @@
      </widget>
     </item>
     <item>
-     <layout class="QHBoxLayout" name="hl_progress">
-      <item>
-       <widget class="QProgressBar" name="prg_bar">
-        <property name="toolTip">
-         <string>Shows the progress of the current task</string>
-        </property>
-        <property name="value">
-         <number>0</number>
-        </property>
-        <property name="alignment">
-         <set>Qt::AlignCenter</set>
-        </property>
-       </widget>
-      </item>
-      <item>
-       <widget class="QLabel" name="lbl_eta">
-        <property name="minimumSize">
-         <size>
-          <width>110</width>
-          <height>20</height>
-         </size>
-        </property>
-        <property name="toolTip">
-         <string>Estimated time until the running analysis finishes. Counts down once a second and jumps when a newly analysed image changes the estimate</string>
-        </property>
-        <property name="text">
-         <string/>
-        </property>
-        <property name="alignment">
-         <set>Qt::AlignCenter</set>
-        </property>
-       </widget>
-      </item>
-     </layout>
+     <widget class="QProgressBar" name="prg_bar">
+      <property name="toolTip">
+       <string>Shows the progress of the current task. While an analysis is running it also counts down the estimated time until it finishes</string>
+      </property>
+      <property name="value">
+       <number>0</number>
+      </property>
+      <property name="alignment">
+       <set>Qt::AlignCenter</set>
+      </property>
+     </widget>
     </item>
    </layout>
   </widget>

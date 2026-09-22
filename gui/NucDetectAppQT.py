@@ -46,6 +46,9 @@ from core.logging_config import configure_logging, get_logger, init_worker_loggi
 from core.progress import ProgressReporter, stage_bounds, ELLIPSE, DATABASE, TABLE
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
+import sqlite3
+
+from core.database import selection as db_selection
 from core.database.connections import Connector, Requester, Inserter
 from gui.definitions.icons import Icon, Color
 from core.detector_modules.ImageLoader import ImageLoader
@@ -60,6 +63,18 @@ pg.setConfigOptions(imageAxisOrder='row-major')
 # Reference to the main window, needed to report errors of worker threads. Set by main()
 _MAIN_WINDOW = None
 LOGGER = get_logger(__name__)
+
+#: What ``prg_bar`` shows when no countdown is running -- QProgressBar's own default, spelled out
+#: because ``_set_eta`` has to restore it. ``%p`` is the percentage; the second ``%`` is literal.
+PROGRESS_FORMAT = "%p%"
+
+#: The countdown, appended to the bar's own text while an analysis is running. It lives INSIDE the
+#: bar rather than in a widget beside it, which is the second arrangement this has had: a separate
+#: label was added on 2026-09-20 and removed on 2026-09-21, because a label in a row with the bar
+#: takes its width from the bar permanently. Measured at a 1280 px window: the bar lost 116 px
+#: while idle -- an empty QLabel still occupies its minimumWidth, and nothing hid it -- and 201 px
+#: while the countdown had text, so the bar visibly stepped narrower when a run started.
+ETA_FORMAT = PROGRESS_FORMAT + "  |  ETA {hours:02d}h:{minutes:02d}m:{seconds:02d}s"
 # If set, a ui operation running off the GUI thread raises instead of only being logged. Meant for
 # tests and debug runs -- in production a wrong thread should not turn into a hard crash by itself
 STRICT_THREAD_AFFINITY = os.environ.get("NUCDETECT_STRICT_THREAD_AFFINITY", "") == "1"
@@ -218,15 +233,12 @@ class NucDetect(QMainWindow):
         QMainWindow.__init__(self)
         # Create working directories
         self.create_required_dirs()
-        # Connect to database
-        self.connector = Connector()
-        # Create needed tables if necessary
-        self.connector.create_tables()
-        # Create standard settings if necessary
-        self.connector.create_standard_settings()
-        self.req_connector = Connector(protected=False)
-        self.requester = Requester(self.req_connector)
-        self.inserter = Inserter(self.connector)
+        # Connect to the active database, create its tables and standard settings if needed.
+        # Shared with switch_database on purpose: a switch that built its connectors differently
+        # from start-up would work against the default database and fail against a new one
+        self.connector = None
+        self.req_connector = None
+        self._open_connectors()
         # Load the settings from database
         self.settings = self.load_settings()
         # Create detector for analysis
@@ -291,6 +303,14 @@ class NucDetect(QMainWindow):
         created = gpaths.ensure_directories()
         if gpaths.images_path in created:
             shutil.copy2(gpaths.demo_image, os.path.join(gpaths.images_path, "demo.tif"))
+        # Databases moved from the NucDetect folder into NucDetect/data on 2026-09-22. A file left
+        # behind by an older build is renamed into place -- atomically, since both are under the
+        # same directory, so even a 749 MB database moves instantly and its contents are untouched.
+        # Announced rather than silent: the user's database appearing to have vanished from where
+        # they last saw it is worth one log line
+        moved = gpaths.relocate_legacy_database()
+        if moved:
+            LOGGER.info("Moved the database into the data directory: %s", moved)
 
     def load_settings(self) -> Dict:
         """
@@ -357,6 +377,107 @@ class NucDetect(QMainWindow):
         self._closing = True
         self.on_close()
         event.accept()
+
+    def switch_database(self, path: str) -> str:
+        """
+        Method to make another database the one the program works with
+
+        Added 2026-09-22 for RW's per-experiment databases. **This is the whole of a switch**: the
+        selection, the connectors and the view all move together, because leaving any one of them
+        behind is a program showing one database's images with another's results.
+
+        **THE ORDER BELOW IS LOAD-BEARING.** Existing connections are closed BEFORE the selection
+        changes, because a connection keeps talking to the file it was opened on -- SQLite binds
+        the file at connect time. Closing afterwards would leave a window in which a dialog
+        building its own `Requester()` gets the new database while this window's own connectors
+        still hold the old one, and the two would disagree without anything failing.
+
+        **A failed switch returns to where it started.** If the new database cannot be opened, the
+        old selection is restored and reconnected, so a mistyped path leaves a working program
+        rather than one with no connectors at all.
+
+        :param path: The database to switch to. It need not exist; a new one is created, given the
+            schema and stamped with the current version
+        :return: The path now in use
+        :raises ValueError: if the path is unusable -- see `core.database.selection.set_active`
+        """
+        self._assert_main_thread("switch_database")
+        previous = db_selection.get_active()
+        if os.path.abspath(path) == os.path.abspath(previous):
+            return previous
+        self._close_connectors()
+        try:
+            db_selection.set_active(path)
+            self._open_connectors()
+        except Exception:
+            # Back to the database that was working. The reconnect is what makes this a rollback
+            # rather than a message: without it the window has no connectors and every later action
+            # raises somewhere far from here
+            LOGGER.exception("Could not switch to %s -- returning to %s", path, previous)
+            db_selection.set_active(previous)
+            self._open_connectors()
+            raise
+        LOGGER.info("Switched database to %s", db_selection.describe_active())
+        self._refresh_after_switch()
+        return db_selection.get_active()
+
+    def _close_connectors(self) -> None:
+        """
+        Method to commit and close this window's database connections
+
+        Committing first: a switch is not a cancel, and unsaved work belongs to the database being
+        left rather than being silently dropped.
+
+        :return: None
+        """
+        for connector in (self.connector, self.req_connector):
+            if connector is None:
+                continue
+            try:
+                connector.commit_changes()
+            except sqlite3.DatabaseError:
+                # A read-only or already-broken connection cannot commit, and that must not stop
+                # the close -- leaking the handle is worse than losing a commit that was never
+                # going to happen
+                LOGGER.exception("Could not commit before closing %s", connector.path)
+            try:
+                connector.connection.close()
+            except sqlite3.DatabaseError:
+                LOGGER.exception("Could not close %s", connector.path)
+        self.connector = None
+        self.req_connector = None
+
+    def _open_connectors(self) -> None:
+        """
+        Method to build this window's database connections against the active database
+
+        The same sequence as the constructor, and it is a method so the two cannot drift: a switch
+        that skipped `create_tables` would work against the default database and fail against a
+        new per-experiment one, which is the case least likely to be tried first.
+
+        :return: None
+        """
+        self.connector = Connector()
+        self.connector.create_tables()
+        self.connector.create_standard_settings()
+        self.req_connector = Connector(protected=False)
+        self.requester = Requester(self.req_connector)
+        self.inserter = Inserter(self.connector)
+
+    def _refresh_after_switch(self) -> None:
+        """
+        Method to bring the view into agreement with the newly selected database
+
+        :return: None
+        """
+        # Settings live in the database, so a per-experiment one can carry its own
+        self.settings = self.load_settings()
+        self.roi_cache = None
+        self._forget_current_image()
+        # The images FOLDER is shared; which of those images the new database knows about is not,
+        # so the list is rebuilt rather than kept
+        self.reload()
+        self.ui.lbl_status.setText(f"Database: {db_selection.describe_active()}")
 
     def _setup_ui(self) -> None:
         """
@@ -2044,7 +2165,7 @@ class NucDetect(QMainWindow):
         for the benefit of one. `symbol` was passed `""` by all of them, so it was free.
 
         An `ETA:` symbol seeds the countdown and is NOT appended to the caption -- the countdown
-        owns that number now. **Anything else is appended exactly as before**, and an empty symbol
+        owns that number now, and shows it inside the bar. **Anything else is appended exactly as before**, and an empty symbol
         CLEARS the countdown, which is what ends it: every non-analysis emitter passes `""`, and so
         does the "Analysis finished" emit.
 
@@ -2071,6 +2192,11 @@ class NucDetect(QMainWindow):
         """
         Method to arm, re-arm or clear the ETA countdown
 
+        The countdown is the progress bar's own text, not a widget beside it. A label was tried
+        first, on 2026-09-20, and removed the next day: a QLabel sharing a row with the bar takes
+        its width off the bar for as long as it exists, and an empty one still occupies its
+        minimumWidth, so the bar was 116 px short while idle and 201 px short mid-run.
+
         :param seconds: Seconds remaining, or None to clear the countdown
         :return: None
         """
@@ -2078,7 +2204,7 @@ class NucDetect(QMainWindow):
         if seconds is None:
             self._eta_deadline = None
             self.eta_timer.stop()
-            self.ui.lbl_eta.setText("")
+            self.ui.prg_bar.setFormat(PROGRESS_FORMAT)
             return
         try:
             remaining = float(seconds)
@@ -2099,6 +2225,9 @@ class NucDetect(QMainWindow):
         """
         Method to repaint the ETA countdown, called once a second while an analysis is running
 
+        Writes ``prg_bar``'s format rather than a label's text. setFormat is cheap and the bar
+        repaints itself; there is no separate widget to keep in step.
+
         :return: None
         """
         if self._eta_deadline is None:
@@ -2110,8 +2239,9 @@ class NucDetect(QMainWindow):
         # also gives a countdown the right end: it reads 1 while any time at all remains and
         # reaches 0 exactly at the deadline. Caught by verify_progress_bar, not by reading
         remaining = math.ceil(max(self._eta_deadline - time.time(), 0))
-        self.ui.lbl_eta.setText(f"ETA {remaining // 3600:02d}h:"
-                                f"{remaining % 3600 // 60:02d}m:{remaining % 60:02d}s")
+        self.ui.prg_bar.setFormat(ETA_FORMAT.format(hours=remaining // 3600,
+                                                    minutes=remaining % 3600 // 60,
+                                                    seconds=remaining % 60))
 
     def save_results(self) -> None:
         """
