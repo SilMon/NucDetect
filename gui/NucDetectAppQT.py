@@ -18,7 +18,7 @@ if _PROJECT_ROOT not in sys.path:
 from concurrent.futures import ProcessPoolExecutor
 from copy import copy
 from threading import Thread
-from typing import Union, Dict, Iterable, List, Sequence, Tuple, Any, Callable
+from typing import Union, Dict, Iterable, List, Optional, Sequence, Tuple, Any, Callable
 
 # --- Import order below is load-bearing: TensorFlow MUST be imported before PyQt5 ---------
 # On Windows, loading Qt's DLLs first exhausts the process' static TLS budget. TensorFlow's
@@ -34,7 +34,6 @@ import PyQt5
 import numpy as np
 import pyqtgraph as pg
 from PyQt5 import QtCore, QtWidgets
-from PyQt5 import QtGui
 from PyQt5 import uic
 from PyQt5.QtCore import QSize, pyqtSignal, QItemSelectionModel, QSortFilterProxyModel, QModelIndex, \
     QAbstractListModel, QTimer, Qt
@@ -47,12 +46,15 @@ from core.logging_config import configure_logging, get_logger, init_worker_loggi
 from core.progress import ProgressReporter, stage_bounds, ELLIPSE, DATABASE, TABLE
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
+import sqlite3
+
+from core.database import selection as db_selection
 from core.database.connections import Connector, Requester, Inserter
 from gui.definitions.icons import Icon, Color
 from core.detector_modules.ImageLoader import ImageLoader
 from gui.dialogs.data import Editor, ExperimentDialog, StatisticsDialog, DataExportDialog
 from gui.dialogs.selection import ExperimentSelectionDialog
-from gui.dialogs.settings import AnalysisSettingsDialog, SettingsDialog
+from gui.dialogs.settings import AnalysisSettingsDialog, ImageScaleDialog, SettingsDialog
 from gui import Paths as gpaths
 from gui import Util
 PyQt5.QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, False)
@@ -61,6 +63,18 @@ pg.setConfigOptions(imageAxisOrder='row-major')
 # Reference to the main window, needed to report errors of worker threads. Set by main()
 _MAIN_WINDOW = None
 LOGGER = get_logger(__name__)
+
+#: What ``prg_bar`` shows when no countdown is running -- QProgressBar's own default, spelled out
+#: because ``_set_eta`` has to restore it. ``%p`` is the percentage; the second ``%`` is literal.
+PROGRESS_FORMAT = "%p%"
+
+#: The countdown, appended to the bar's own text while an analysis is running. It lives INSIDE the
+#: bar rather than in a widget beside it, which is the second arrangement this has had: a separate
+#: label was added on 2026-09-20 and removed on 2026-09-21, because a label in a row with the bar
+#: takes its width from the bar permanently. Measured at a 1280 px window: the bar lost 116 px
+#: while idle -- an empty QLabel still occupies its minimumWidth, and nothing hid it -- and 201 px
+#: while the countdown had text, so the bar visibly stepped narrower when a run started.
+ETA_FORMAT = PROGRESS_FORMAT + "  |  ETA {hours:02d}h:{minutes:02d}m:{seconds:02d}s"
 # If set, a ui operation running off the GUI thread raises instead of only being logged. Meant for
 # tests and debug runs -- in production a wrong thread should not turn into a hard crash by itself
 STRICT_THREAD_AFFINITY = os.environ.get("NUCDETECT_STRICT_THREAD_AFFINITY", "") == "1"
@@ -195,17 +209,25 @@ class NucDetect(QMainWindow):
     # and model access to happen on the GUI thread, so workers compute plain data and hand it over
     # here instead of touching the models themselves
     table_signal = pyqtSignal(list, list)
+    # The channel pairs the displayed images compared, the pair the table was built with (None for
+    # each image's first pair), and whether the view spans several images
+    coloc_signal = pyqtSignal(list, object, bool)
     row_signal = pyqtSignal(list)
     status_signal = pyqtSignal(bool)
-    # Labels are kept SHORT on purpose. The table has 13 columns, and a header section only shows
+    # Labels are kept SHORT on purpose. The table has 14 columns, and a header section only shows
     # its sort indicator if the label leaves room for it -- measured before this was shortened,
     # every one of the 13 sections was ~50 px wide against labels needing 52-238 px, so Qt elided
     # every label and clipped every arrow. The user could sort but had no way to see that they had.
+    #
+    # "Edge" was added 2026-09-15 and is a NUCLEUS-level column: it says whether the nucleus is cut
+    # off by the image border, which RW ruled is to be flagged rather than filtered. It is not in
+    # CHANNEL_LEVEL_COLUMNS, so it merges across a nucleus's channel rows like every other
+    # nucleus-level cell -- that behaviour follows from the header label, not from the position.
     STANDARD_TABLE_HEADER = ["Image Name", "Image ID",
                              "ROI ID", "Center Y",
-                             "Center X", "Area [px]", "Ellipt. [%]",
-                             "Angle [°]", "Maj. Axis", "Min. Axis",
-                             "Co-Loc. [%]", "Channel", "Foci"]
+                             "Center X", "Area [µm²]", "Ellipt. [%]",
+                             "Angle [°]", "Maj. [µm]", "Min. [µm]",
+                             "Co-Loc. [%]", "Edge", "Channel", "Foci"]
 
     def __init__(self):
         """
@@ -214,15 +236,12 @@ class NucDetect(QMainWindow):
         QMainWindow.__init__(self)
         # Create working directories
         self.create_required_dirs()
-        # Connect to database
-        self.connector = Connector()
-        # Create needed tables if necessary
-        self.connector.create_tables()
-        # Create standard settings if necessary
-        self.connector.create_standard_settings()
-        self.req_connector = Connector(protected=False)
-        self.requester = Requester(self.req_connector)
-        self.inserter = Inserter(self.connector)
+        # Connect to the active database, create its tables and standard settings if needed.
+        # Shared with switch_database on purpose: a switch that built its connectors differently
+        # from start-up would work against the default database and fail against a new one
+        self.connector = None
+        self.req_connector = None
+        self._open_connectors()
         # Load the settings from database
         self.settings = self.load_settings()
         # Create detector for analysis
@@ -233,6 +252,13 @@ class NucDetect(QMainWindow):
         self._signals_connected = False
         # Contains data for the associated experiment
         self.cur_exp = None
+        # The co-localization pair the result table shows, chosen in cmbx_coloc_pair. None means
+        # each image's first pair. Read by the worker that builds the table, written on the GUI
+        # thread -- a single attribute assignment, so there is no torn state to guard against
+        self._coloc_pair: Optional[Tuple[str, str]] = None
+        # What the table was last built from, so choosing another pair can rebuild the SAME view:
+        # the experiment shown, or None for a single image, which is then _displayed_keys[0]
+        self._table_experiment: Optional[str] = None
         # Contains data of the loaded image
         self.cur_img = None
         # Contains the associated roi for the loaded image
@@ -252,6 +278,16 @@ class NucDetect(QMainWindow):
         # Highest bar fraction shown so far during the running analysis, or None when no analysis
         # is in progress. See _set_progress for why the monotonicity clamp is opt-in
         self._prg_floor: Union[float, None] = None
+        # Wall-clock instant the running analysis is currently estimated to finish, or None when
+        # nothing is being estimated. Set from the ETA the analysis thread reports, and re-set every
+        # time a new one arrives -- which is what makes the display jump when the estimate changes
+        # and tick down in between, as RW asked for on 2026-09-13
+        self._eta_deadline: Union[float, None] = None
+        # Drives the countdown. GUI-thread timer: it is created here, in __init__, which runs on the
+        # GUI thread, and only _tick_eta touches the label
+        self.eta_timer = QTimer()
+        self.eta_timer.setInterval(1000)
+        self.eta_timer.timeout.connect(self._tick_eta)
         # Timer which polls running data exports. Instance attribute on purpose: as a class
         # attribute it was shared between windows and accumulated one connected slot per export
         self.check_timer = QTimer()
@@ -277,6 +313,14 @@ class NucDetect(QMainWindow):
         created = gpaths.ensure_directories()
         if gpaths.images_path in created:
             shutil.copy2(gpaths.demo_image, os.path.join(gpaths.images_path, "demo.tif"))
+        # Databases moved from the NucDetect folder into NucDetect/data on 2026-09-22. A file left
+        # behind by an older build is renamed into place -- atomically, since both are under the
+        # same directory, so even a 749 MB database moves instantly and its contents are untouched.
+        # Announced rather than silent: the user's database appearing to have vanished from where
+        # they last saw it is worth one log line
+        moved = gpaths.relocate_legacy_database()
+        if moved:
+            LOGGER.info("Moved the database into the data directory: %s", moved)
 
     def load_settings(self) -> Dict:
         """
@@ -343,6 +387,107 @@ class NucDetect(QMainWindow):
         self._closing = True
         self.on_close()
         event.accept()
+
+    def switch_database(self, path: str) -> str:
+        """
+        Method to make another database the one the program works with
+
+        Added 2026-09-22 for RW's per-experiment databases. **This is the whole of a switch**: the
+        selection, the connectors and the view all move together, because leaving any one of them
+        behind is a program showing one database's images with another's results.
+
+        **THE ORDER BELOW IS LOAD-BEARING.** Existing connections are closed BEFORE the selection
+        changes, because a connection keeps talking to the file it was opened on -- SQLite binds
+        the file at connect time. Closing afterwards would leave a window in which a dialog
+        building its own `Requester()` gets the new database while this window's own connectors
+        still hold the old one, and the two would disagree without anything failing.
+
+        **A failed switch returns to where it started.** If the new database cannot be opened, the
+        old selection is restored and reconnected, so a mistyped path leaves a working program
+        rather than one with no connectors at all.
+
+        :param path: The database to switch to. It need not exist; a new one is created, given the
+            schema and stamped with the current version
+        :return: The path now in use
+        :raises ValueError: if the path is unusable -- see `core.database.selection.set_active`
+        """
+        self._assert_main_thread("switch_database")
+        previous = db_selection.get_active()
+        if os.path.abspath(path) == os.path.abspath(previous):
+            return previous
+        self._close_connectors()
+        try:
+            db_selection.set_active(path)
+            self._open_connectors()
+        except Exception:
+            # Back to the database that was working. The reconnect is what makes this a rollback
+            # rather than a message: without it the window has no connectors and every later action
+            # raises somewhere far from here
+            LOGGER.exception("Could not switch to %s -- returning to %s", path, previous)
+            db_selection.set_active(previous)
+            self._open_connectors()
+            raise
+        LOGGER.info("Switched database to %s", db_selection.describe_active())
+        self._refresh_after_switch()
+        return db_selection.get_active()
+
+    def _close_connectors(self) -> None:
+        """
+        Method to commit and close this window's database connections
+
+        Committing first: a switch is not a cancel, and unsaved work belongs to the database being
+        left rather than being silently dropped.
+
+        :return: None
+        """
+        for connector in (self.connector, self.req_connector):
+            if connector is None:
+                continue
+            try:
+                connector.commit_changes()
+            except sqlite3.DatabaseError:
+                # A read-only or already-broken connection cannot commit, and that must not stop
+                # the close -- leaking the handle is worse than losing a commit that was never
+                # going to happen
+                LOGGER.exception("Could not commit before closing %s", connector.path)
+            try:
+                connector.connection.close()
+            except sqlite3.DatabaseError:
+                LOGGER.exception("Could not close %s", connector.path)
+        self.connector = None
+        self.req_connector = None
+
+    def _open_connectors(self) -> None:
+        """
+        Method to build this window's database connections against the active database
+
+        The same sequence as the constructor, and it is a method so the two cannot drift: a switch
+        that skipped `create_tables` would work against the default database and fail against a
+        new per-experiment one, which is the case least likely to be tried first.
+
+        :return: None
+        """
+        self.connector = Connector()
+        self.connector.create_tables()
+        self.connector.create_standard_settings()
+        self.req_connector = Connector(protected=False)
+        self.requester = Requester(self.req_connector)
+        self.inserter = Inserter(self.connector)
+
+    def _refresh_after_switch(self) -> None:
+        """
+        Method to bring the view into agreement with the newly selected database
+
+        :return: None
+        """
+        # Settings live in the database, so a per-experiment one can carry its own
+        self.settings = self.load_settings()
+        self.roi_cache = None
+        self._forget_current_image()
+        # The images FOLDER is shared; which of those images the new database knows about is not,
+        # so the list is rebuilt rather than kept
+        self.reload()
+        self.ui.lbl_status.setText(f"Database: {db_selection.describe_active()}")
 
     def _setup_ui(self) -> None:
         """
@@ -506,6 +651,8 @@ class NucDetect(QMainWindow):
         self.err_signal.connect(self._show_worker_error)
         self.enable_signal.connect(self._set_ui_enabled)
         self.table_signal.connect(self._apply_result_table)
+        self.coloc_signal.connect(self._apply_coloc_pairs)
+        self.ui.cmbx_coloc_pair.activated.connect(self._on_coloc_pair_chosen)
         self.row_signal.connect(self._append_result_row)
         self.status_signal.connect(self._apply_item_status)
         # The image list is lazy: rows revealed after the table was filled would carry no marker, so
@@ -837,6 +984,7 @@ class NucDetect(QMainWindow):
                 self._displayed_keys = []
                 self._mark_displayed_images()
                 self.set_experiment_status_label_text("")
+                self._apply_coloc_pairs([], None, False)
                 self.enable_buttons(False, ana_buttons=False)
         else:
             self.ui.btn_analyse.setEnabled(False)
@@ -1096,25 +1244,114 @@ class NucDetect(QMainWindow):
         self.loaded_files.clear()
         self._forget_current_image()
 
+    def settings_for_analysis_dialog(self, batch: bool = False) -> Dict:
+        """
+        Method to build the settings the analysis dialog opens with
+
+        **The main-channel nomination comes from the IMAGE when it has one.** RW, 2026-09-15:
+        *"The analysis settings dialog should also show the correct main channel selection for
+        images that were already analysed."* The dialog used to preselect `settings.main_channel`
+        -- the program-wide default from the settings table -- every time it opened, because
+        nothing writes a nomination back. So a user who analysed an image on Red met a dialog
+        offering Blue the next time, and re-analysing without noticing produced an analysis on a
+        channel they had not chosen.
+
+        The per-image nomination is already recorded: `channels.main` is written at the end of
+        every analysis, for whichever channel was used. This reads it back.
+
+        **Not for a batch run.** "Analyse all" covers many images, which can carry different
+        nominations, and one dialog cannot show several -- so the program-wide default is used
+        there and nothing is guessed.
+
+        **A COPY, never `self.settings` itself.** The dialog is handed a dict it reads freely and
+        this method overwrites a key in it; writing that into the loaded program settings would
+        make one image's nomination the default for every image afterwards, which is the opposite
+        of what was asked for.
+
+        :param batch: True when the run will cover every loaded image rather than the selected one
+        :return: The settings for the dialog
+        """
+        settings = dict(self.settings)
+        if batch or not self.cur_img:
+            return settings
+        # Columns are (md5, index_, name, active, main). An image that was never analysed has no
+        # channel rows at all, and one analysed before the main flag was written has none set --
+        # both leave the program-wide default in place rather than inventing a nomination
+        channel_rows = self.requester.get_channels(self.cur_img["key"])
+        # The co-localization pairs come back the same way, and for the same reason: re-analysing
+        # an image should offer the comparison it was analysed with. Stored by channel NAME, so
+        # they are mapped to indices through this image's own channel rows -- the program-wide
+        # names may since have changed. A pair whose channel is gone is dropped rather than guessed
+        index_of = {row[2]: row[1] for row in channel_rows}
+        stored = self.requester.get_colocalization_pairs(self.cur_img["key"])
+        pairs = [[index_of[a], index_of[b]] for a, b in stored if a in index_of and b in index_of]
+        if pairs:
+            settings["colocalization_pairs"] = pairs
+        nominated = [row for row in channel_rows if row[4]]
+        if not nominated:
+            return settings
+        settings["main_channel"] = nominated[0][1]
+        LOGGER.debug("Analysis dialog opens on channel %s (%s), the nomination stored for %s",
+                     nominated[0][1], nominated[0][2], self.cur_img["file_name"])
+        return settings
+
     def show_analysis_settings_dialog(self, show_redo_option: bool = False) -> Union[Dict, None]:
         """
         Method to show the analysis settings dialog
 
         :return: Bool which signifies if the dialog was confirmed or cancelled
         """
-        anal_sett_dial = AnalysisSettingsDialog(settings=self.settings,
-                                                all_=show_redo_option)
+        anal_sett_dial = AnalysisSettingsDialog(
+            settings=self.settings_for_analysis_dialog(batch=show_redo_option),
+            all_=show_redo_option)
         code = anal_sett_dial.exec()
         if code == QDialog.Accepted:
             settings = anal_sett_dial.get_data()
             an_sett = settings["analysis_settings"]
             settings["analysis_settings"].update({x: y for (x, y) in self.settings.items() if x not in an_sett})
+            # One factor for the run, or one per image. The checkbox lives in the settings dialog
+            # but the IMAGE LIST does not -- this window knows which images the run covers, so the
+            # second dialog is opened from here rather than from inside the first.
+            if not settings.get("uniform_scale", True):
+                per_image = self.ask_for_per_image_scale(
+                    settings["analysis_settings"]["dots_per_micron"],
+                    batch=show_redo_option)
+                if per_image is None:
+                    # Cancelled. Treated exactly like cancelling the settings dialog: an analysis
+                    # that would run with the wrong scale is worse than one that does not run
+                    self.ui.list_images.setEnabled(True)
+                    self.enable_buttons(True)
+                    return None
+                settings["analysis_settings"]["per_image_scale"] = per_image
             return settings
         else:
             # If the dialog was rejected, abort analysis
             self.ui.list_images.setEnabled(True)
             self.enable_buttons(True)
             return None
+
+    def ask_for_per_image_scale(self, default: float,
+                                batch: bool = False) -> Union[Dict[str, float], None]:
+        """
+        Method to collect a conversion factor for every image of the coming run
+
+        :param default: The factor from the analysis dialog, used to prefill every row
+        :param batch: True when the run covers every loaded image rather than the selected one
+        :return: The factor per image md5, or None if the user cancelled
+        """
+        paths = list(self.loaded_files) if batch else [self.cur_img["path"]]
+        rows = []
+        for path in paths:
+            md5 = ImageLoader.calculate_image_id(path)
+            # The value the FILE declares, offered as a suggestion and never applied on its own --
+            # get_image_scale answers None when the image has no stored factor, which is also the
+            # state this dialog exists to fix
+            declared = self.requester.get_image_scale(md5)
+            rows.append((md5, os.path.basename(path), declared[0] if declared else None))
+        dialog = ImageScaleDialog(rows, default=default, parent=self)
+        if dialog.exec() != QDialog.Accepted:
+            return None
+        return dialog.get_data()
 
     def analyze(self) -> None:
         """
@@ -1145,6 +1382,8 @@ class NucDetect(QMainWindow):
         self._displayed_keys = []
         self._mark_displayed_images()
         self.set_experiment_status_label_text("")
+        # ...and the pair selector, which describes the table and would otherwise outlive it
+        self._apply_coloc_pairs([], None, False)
         self.prg_signal.emit(f"Analysing {self.cur_img['file_name']}",
                              0, 100, "")
         thread = Thread(target=self._run_guarded,
@@ -1183,6 +1422,7 @@ class NucDetect(QMainWindow):
             path, settings=analysis_settings,
             save_log=bool(analysis_settings["analysis_settings"].get("logging", True)),
             progress=reporter)
+        self.report_plausibility(data)
         self.roi_cache = data["handler"]
         # Captured BEFORE the advance at the end of this method moves the selection off this image
         self._roi_cache_img = self.cur_img
@@ -1292,12 +1532,21 @@ class NucDetect(QMainWindow):
             maxi = len(paths)
             # Number of batches, rounded up -- the last one is short unless the count divides evenly
             total_batches = math.ceil(maxi / batch_size) if batch_size > 0 else 0
-            # Counts images actually finished. Kept separate from the 1-based display counter
-            # below: reusing one variable for both is what made the ETA undercount by one and go
-            # negative on the final batch of every run
+            # Counts images actually FINISHED, and the caption now reports this number directly.
+            # It used to be displayed as `done + 1` -- the image being worked on -- under a label
+            # reading "analysed", which is the off-by-one RW reported on 2026-09-13. The ETA is
+            # measured over the same counter, and reusing one variable for the count and a 1-based
+            # display is what made the ETA undercount by one and go negative on the final batch
             done = 0
-            # Empty until a batch has finished -- see where it is assigned
-            eta_text = ""
+            # Seeded so the per-batch log line below has values even if a batch yields nothing.
+            # There is no `eta_text` any more: the ETA is not written into the caption at all since
+            # 2026-09-20, it is emitted in `symbol` and counted down by the GUI thread. Until the
+            # FIRST IMAGE finishes there is no estimate, and the countdown label stays empty --
+            # only the "Starting multi image analysis" emit is ever shown in that state
+            h = m = s = 0
+            # Seconds of ANALYSIS reported by the workers, summed over finished images. The ETA is
+            # derived from this rather than from wall-clock-over-count -- see where it is used
+            work_done = 0.0
             # A plain slice loop. The previous start/stop/step arithmetic made the first batch
             # batch_size + 1 images long, and executed once even when there was nothing to analyse
             for batch_start in range(0, maxi, batch_size):
@@ -1312,15 +1561,6 @@ class NucDetect(QMainWindow):
                 # worker process instead of being pickled with every task
                 res = e.map(_analyse_in_worker, zip(tpaths, t_setts, t_savelog))
                 for r in res:
-                    # The bar counts BATCHES (RW, 2026-09-08), so its value does not move inside a
-                    # batch -- but the label does, because a batch is ~75 s and a caption frozen for
-                    # that long reads as a hang. Value and text are deliberately on different
-                    # granularities: the bar tracks what the ETA is measured over, the text tracks
-                    # what is happening
-                    self.prg_signal.emit(
-                        f"Batch {batch_start // batch_size + 1}/{total_batches}"
-                        f" -- analysed {done + 1}/{maxi} images{eta_text}",
-                        batch_start // batch_size, total_batches, "")
                     # Replay the log of the worker that analysed this image, if the user asked for
                     # analysis logging. The messages are discarded rather than buffered when off --
                     # they have already been produced, and holding them would only defer the cost
@@ -1329,6 +1569,9 @@ class NucDetect(QMainWindow):
                         # ~2400 of them around this run's eight progress lines. The file still gets
                         # everything, in image order, which is the point of the replay
                         log_messages(r.get("log", ()), console=False)
+                    # Outside the log_analysis branch above on purpose: the replayed record is
+                    # file-only and optional, the verdict is neither
+                    self.report_plausibility(r)
                     self.save_rois_to_database(r, all_=True)
                     # Get the image hash and file name
                     name = self.requester.get_image_filename(r["handler"].ident)
@@ -1340,19 +1583,60 @@ class NucDetect(QMainWindow):
                     self.row_signal.emit([name, r["handler"].ident,
                                           str(mnum), str(fnum), f"{fpn:.2f}"])
                     done += 1
-                images_left = maxi - done
-                # Not int(): truncating to whole seconds reports an ETA of zero for anything
-                # faster than a second per image
-                time_per_image = (time.time() - start_time) / done if done else 0
-                eta = int(images_left * time_per_image)
-                h = eta // 3600
-                m = eta % 3600 // 60
-                s = eta % 3600 % 60
-                # Kept for the NEXT batch's label. The ETA was computed here and written only to the
-                # log file, so the one number that answers "how much longer?" never reached the
-                # window. The first batch has none, which is honest -- there is nothing to
-                # extrapolate from until one batch has finished
-                eta_text = f" -- ETA {h:02d}h:{m:02d}m:{s:02d}s"
+                    # .get, because a stubbed or older result may not carry it -- see the fallback
+                    work_done += r.get("duration", 0.0) or 0.0
+                    # PER IMAGE, not per batch (RW, 2026-09-13: "the ETA should be updated with
+                    # every new image, it is of no real use if the ETA does not tick down during
+                    # the batch"). This used to run once the batch had finished and was carried
+                    # into the NEXT batch's caption, so at ten images a batch the figure stood
+                    # still for ~75 s.
+                    #
+                    # WORK PER IMAGE DIVIDED BY THE WORKERS DOING IT -- not elapsed time divided by
+                    # the count (RW, 2026-09-13: "the ETA starts really high and then only slowly
+                    # decreases. The first image analysis time can be used to extrapolate").
+                    # `elapsed / done` assumes images are processed one after another. They are not:
+                    # `workers` run at once, so after the first completion the elapsed time already
+                    # contains the pool's start-up AND the concurrent work of every image still in
+                    # flight and not yet counted. Simulated against RW's own per-image timings --
+                    # 22 images, 8 workers -- the old form showed 977 s against 74 s actually
+                    # remaining, +1220 %, and then collapsed as the count caught up rather than as
+                    # work completed. The form below showed +22 % on the same first image.
+                    images_left = maxi - done
+                    # No more parallelism is available than there is work left, so the tail of a run
+                    # must not be divided by the full worker count
+                    effective = min(workers, images_left) or 1
+                    if work_done > 0:
+                        # Not int(): truncating to whole seconds reports an ETA of zero for anything
+                        # faster than a second per image
+                        time_per_image = (work_done / done) / effective
+                    else:
+                        # Fallback for a result that carries no duration -- an older Detector, or a
+                        # stand-in. Wrong in the way described above, but a wrong estimate beats
+                        # none
+                        time_per_image = (time.time() - start_time) / done if done else 0
+                    eta = int(images_left * time_per_image)
+                    h = eta // 3600
+                    m = eta % 3600 // 60
+                    s = eta % 3600 % 60
+                    # h/m/s are for the LOG line below, which keeps the formatted figure because
+                    # a log has no clock to tick. The caption no longer carries the ETA at all
+                    # Emitted AFTER `done` is incremented, and reading `done` rather than
+                    # `done + 1`. The emit used to sit at the top of this loop and show the image
+                    # being WORKED ON under a label that says "analysed" -- so the first image of a
+                    # run reported "analysed 1/22" with nothing yet finished, and the last reported
+                    # the full count one image early (RW, 2026-09-13).
+                    #
+                    # The bar still counts BATCHES (RW, 2026-09-08), so its value does not move
+                    # inside a batch while the caption does: the bar tracks whole units of work, the
+                    # caption tracks what has actually been completed
+                    self.prg_signal.emit(
+                        f"Batch {batch_start // batch_size + 1}/{total_batches}"
+                        f" -- analysed {done}/{maxi} images",
+                        batch_start // batch_size, total_batches,
+                        # The ETA travels in `symbol` rather than in the caption, so the GUI thread
+                        # can count it down between images. See _set_progress for why this reuses an
+                        # existing parameter instead of widening prg_signal
+                        f"ETA:{eta}")
                 cur_batch = batch_start // batch_size + 1
                 msg = f"Analysed batch {cur_batch: 02d}/{total_batches: 02d} in {time.time() - s2: 09.3f} secs\t\t"\
                       f"Total: {time.time() - start_time: 09.3f} secs\t\t"\
@@ -1399,14 +1683,24 @@ class NucDetect(QMainWindow):
             # leave orphaned rows behind for an image whose earlier analysis was interrupted, and
             # the new results would be inserted alongside them.
             #
-            # A miss means analysis reached an image that add_image_information_to_database never
-            # registered; there is nothing saved for it, so nothing to clear. Indexing the result
-            # unconditionally is what raised IndexError there until 2026-08-15.
-            if req.get_info_for_image(key) is not None:
-                ins.delete_existing_image_data(key)
+            # UNCONDITIONAL since 2026-09-16. The guard tested whether the image is REGISTERED,
+            # and skipped the clearing when it is not -- but "no such image" is exactly the case
+            # that needs it least safely: a second analysis of an unregistered image then wrote
+            # its roi ALONGSIDE the first. Measured on 2026-09-15 by analysing demo.tif twice
+            # through this path without registering it: 30 nuclei on Blue and 8 on Red in one
+            # image, both sets of foci, and a result table of 76 rows mixing two analyses.
+            #
+            # Latent in the application, because add_image_information_to_database registers
+            # every image at load -- but it cost an investigation, having produced a database
+            # defect that does not exist in the running program.
+            #
+            # Deleting is free when there is nothing to delete: delete_existing_image_data issues
+            # DELETEs keyed on this image and is a no-op for a hash with no rows, which is the
+            # same argument the guard's own comment made for the first-analysis case.
+            ins.delete_existing_image_data(key)
             # Check if image should be added to experiment
-            if data["add to experiment"]:
-                exp_data = data["experiment details"]
+            if data["add_to_experiment"]:
+                exp_data = data["experiment_details"]
                 ins.add_image_to_experiment(key, exp_data["name"], exp_data["details"],
                                             exp_data["notes"], "Standard")
             # Update channel info. Cleared first: the rows are keyed by (md5, index) and were only
@@ -1415,18 +1709,28 @@ class NucDetect(QMainWindow):
             ins.remove_channels_for_image(key)
             for ind in range(len(data["names"])):
                 ins.add_channel(key, ind, data["names"][ind],
-                                data["active channels"][ind], data["main channel"] == ind)
+                                data["active_channels"][ind], data["main_channel"] == ind)
             # Save scale and scale unit
             ins.set_image_scale(key, data["x_scale"], data["y_scale"])
             ins.set_image_scale_unit(key, data["scale_unit"])
             # Save data for detected ROI
-            roidat, pdat, elldat = NucDetect.prepare_roihandler_for_database(data["handler"], data["channels"])
+            # data["channel_arrays"], not data["channels"]: the latter is the channel COUNT
+            # from the image metadata and always was -- the analysis used to overwrite it here
+            roidat, pdat, elldat = NucDetect.prepare_roihandler_for_database(
+                data["handler"], data["channel_arrays"])
             # Check if there is any data to save
             if roidat:
                 # Save data to database. This ALSO sets `analysed` as a side effect, which is what
                 # the editor's own save path relies on; the explicit call below is what covers the
                 # case where this branch is skipped
                 ins.save_roi_data_for_image(key, roidat, pdat, elldat)
+            # Per channel pair, and outside the `if roidat` on purpose: the pairs record what the
+            # analysis was configured to compare even when it found nothing, which is what the
+            # analysis dialog reads back for this image. .get, because a stubbed result or one
+            # from before 2026-09-24 carries none
+            ins.save_colocalization(key, data.get("colocalization_pairs", []),
+                                    data.get("colocalization_distance", 0.0),
+                                    data.get("colocalization", []))
             # Mark the image analysed WHETHER OR NOT anything was found.
             #
             # The flag used to be set only inside save_roi_data_for_image, above, so an analysis
@@ -1465,9 +1769,12 @@ class NucDetect(QMainWindow):
             # Get the channel of the roi
             stats = roi.calculate_statistics(channels[handler.idents.index(roi.ident)])
             asso = hash(roi.associated) if roi.associated else None
+            # match and co_localized are written NULL since 2026-09-24: co-localization is stored
+            # per channel pair in its own tables, and these two columns are read only for images
+            # analysed before that -- see Requester.colocalization_cells
             roidat.append((hash(roi), handler.ident, True, roi.ident,
                            str(dim["center_x"]), str(dim["center_y"]),
-                           dim["width"], dim["height"], asso, roi.detection_method, roi.match, roi.colocalized))
+                           dim["width"], dim["height"], asso, roi.detection_method, None, None))
             # TODO
             for p in roi.area:
                 pdat.append((hash(roi), p[0], p[1], p[2]))
@@ -1490,11 +1797,21 @@ class NucDetect(QMainWindow):
         self.prg_signal.emit(f"Loading data",
                              0, 100, "")
         # Get requester
+        # main comes from the channels table a few lines below, which records the nomination
+        # made when the image was analysed
         rois = ROIHandler(ident=md5)
         entries = self.requester.get_associated_roi(md5)
         names = self.requester.get_channels(md5)
         for name in names:
             rois.idents.insert(name[1], name[2])
+            # `main` from the channels table, not only from the roi. `ROIHandler.add_roi` is the
+            # only other thing that sets it, so an image whose analysis found NOTHING arrived at
+            # the editor with main="" -- and saving then raised `ValueError: '' is not in list`.
+            # The channels table records which channel was nominated whether or not anything was
+            # found in it, which is exactly the fact that was missing. Columns are
+            # (md5, index_, name, active, main)
+            if name[4]:
+                rois.main = name[2]
         processed_roi = self.process_roi_database_entries(entries)
         rois.add_rois(processed_roi)
         # Named from the md5 this method was asked for, not from cur_img: the two are the same image
@@ -1524,8 +1841,10 @@ class NucDetect(QMainWindow):
             self.prg_signal.emit(f"Loading ROI:  {ind}/{max_}",
                                  ind, max_, "")
             temproi = ROI(channel=entry[3], main=entry[8] is None,
-                          auto=bool(entry[2]), associated=entry[8], method=entry[9], match=entry[10])
-            stats = self.requester.get_statistics_for_roi(entry[0])
+                          auto=bool(entry[2]), associated=entry[8], method=entry[9])
+            # entry[1] is the roi table's image column -- the second half of its primary key. The
+            # row already carries it, so the image needs no threading through the signature
+            stats = self.requester.get_statistics_for_roi(entry[0], entry[1])
             # None means the roi has no statistics row. It used to be an empty tuple, which sliced
             # to another empty tuple and produced {} without anyone noticing; the ROI is still
             # usable -- its area comes from the points table below -- so the empty dict is kept as
@@ -1574,7 +1893,7 @@ class NucDetect(QMainWindow):
         ellip = statistics[18]
         return center_x, center_y, major, minor, angle, area, ov_x, ov_y, ellip
 
-    def create_result_table(self, experiment: str = None) -> None:
+    def create_result_table(self, experiment: str = None, image_key: str = None) -> None:
         """
         Method to create the result table
 
@@ -1592,6 +1911,7 @@ class NucDetect(QMainWindow):
         directly.
 
         :param experiment: The experiment to load
+        :param image_key: The image to show when no experiment is, if not the selected one
         :return: None
         """
         self.prg_signal.emit(f"Create Result Table",
@@ -1600,14 +1920,102 @@ class NucDetect(QMainWindow):
         header = copy(NucDetect.STANDARD_TABLE_HEADER)
         if experiment:
             header.insert(2, "Group")
-        rows = self.prepare_main_table_rows(experiment)
+        # The pairs offered are those the SHOWN images compared, so they are collected before the
+        # rows are built. A pair chosen for a previous view that none of these images compared
+        # falls back to each image's first pair rather than filling the column with n/a
+        if experiment:
+            keys = list(self.requester.get_associated_images_for_experiment(experiment))
+        else:
+            key = image_key or (self.cur_img["key"] if self.cur_img else None)
+            keys = [key] if key else []
+        pairs = self.collect_colocalization_pairs(keys)
+        pair = self._coloc_pair if self._coloc_pair in pairs else None
+        self._table_experiment = experiment
+        rows = self.prepare_main_table_rows(experiment, pair=pair, image_key=image_key)
+        self.coloc_signal.emit([list(x) for x in pairs], list(pair) if pair else None,
+                               bool(experiment))
         self.table_signal.emit(header, rows)
 
-    def prepare_main_table_rows(self, experiment: Union[str, None] = None) -> List[List[str]]:
+    def collect_colocalization_pairs(self, keys: List[str]) -> List[Tuple[str, str]]:
+        """
+        Method to collect every channel pair the given images were analysed with
+
+        :param keys: The md5 hashes of the images
+        :return: The pairs, sorted and without repetition
+        """
+        pairs = set()
+        for key in keys:
+            pairs.update(self.requester.get_colocalization_pairs(key))
+        return sorted(pairs)
+
+    def _apply_coloc_pairs(self, pairs: List[List[str]], selected: Optional[List[str]],
+                           several: bool) -> None:
+        """
+        Method to offer the displayed images' channel pairs in cmbx_coloc_pair. Connected to
+        coloc_signal, thus always executed on the main thread
+
+        **Hidden when there is nothing to choose** -- no pair at all, which is every image analysed
+        before pairs existed and every image with a single foci channel. RW asked for the ETA
+        label to take space only when it showed something, and the same holds here.
+
+        An experiment gets one extra entry, first: each image's own first pair. That is not the
+        same as any single pair once the images differ, and it is the only choice under which an
+        image analysed before pairs existed shows its stored value -- see
+        Requester.colocalization_cells. A single image has no use for it: its first pair IS the
+        first entry.
+
+        :param pairs: The pairs, as [channel_a, channel_b]
+        :param selected: The pair the table was built with, or None for each image's first pair
+        :param several: True when the table shows an experiment rather than one image
+        :return: None
+        """
+        self._assert_main_thread("_apply_coloc_pairs")
+        combo = self.ui.cmbx_coloc_pair
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            if several:
+                combo.addItem("Each image's first pair", None)
+            for a, b in pairs:
+                combo.addItem(f"{a} / {b}", (a, b))
+            index = combo.findData(tuple(selected)) if selected else 0
+            combo.setCurrentIndex(max(0, index))
+        finally:
+            combo.blockSignals(False)
+        visible = bool(pairs)
+        combo.setVisible(visible)
+        self.ui.lbl_coloc_pair.setVisible(visible)
+
+    def _on_coloc_pair_chosen(self, index: int) -> None:
+        """
+        Method to rebuild the result table for the pair chosen in cmbx_coloc_pair
+
+        Rebuilds the view that is ON SCREEN, which is not necessarily the selected image: after an
+        analysis the selection advances while the table keeps showing the image just analysed.
+
+        :param index: The chosen entry
+        :return: None
+        """
+        data = self.ui.cmbx_coloc_pair.itemData(index)
+        self._coloc_pair = tuple(data) if data else None
+        experiment = self._table_experiment
+        if not experiment and not self._displayed_keys:
+            return
+        image_key = None if experiment else self._displayed_keys[0]
+        threading.Thread(target=self._run_guarded,
+                         args=(self.create_result_table, experiment, image_key),
+                         daemon=True).start()
+
+    def prepare_main_table_rows(self, experiment: Union[str, None] = None,
+                                pair: Optional[Tuple[str, str]] = None,
+                                image_key: Optional[str] = None) -> List[List[str]]:
         """
         Method to prepare the rows of the result table on the main UI
 
         :param experiment: Name of the experiment to show. None if only the current image should be shown
+        :param pair: The channel pair for the Co-Loc. column; None for each image's first pair
+        :param image_key: The image to show when no experiment is, if not the selected one -- a
+            pair change rebuilds whatever is on screen, which after an analysis is not the selection
         :return: The prepared rows
         """
         # The label and the list marker both answer "what am I looking at?", which stopped being
@@ -1618,7 +2026,7 @@ class NucDetect(QMainWindow):
             # Get all assigned images
             num_imgs = self.requester.get_number_of_associated_images_for_experiment(experiment)
             # Load data for experiment
-            rows = self.get_table_data_from_database(experiment)
+            rows = self.get_table_data_from_database(experiment, pair)
             # Sort rows according to group
             rows = sorted(rows, key=lambda x: x[1])
             self.set_experiment_status_label_text(
@@ -1629,11 +2037,14 @@ class NucDetect(QMainWindow):
             self._displayed_keys = list(
                 self.requester.get_associated_images_for_experiment(experiment))
         else:
-            rows = self.get_table_data_for_image(self.cur_img["key"])
+            key = image_key or self.cur_img["key"]
+            name = (self.cur_img["file_name"] if self.cur_img and key == self.cur_img["key"]
+                    else self.requester.get_image_filename(key))
+            rows = self.get_table_data_for_image(key, pair)
             self.set_experiment_status_label_text(
-                f"Showing image: {self.cur_img['file_name']}\nExperiment: None"
+                f"Showing image: {name}\nExperiment: None"
             )
-            self._displayed_keys = [self.cur_img["key"]]
+            self._displayed_keys = [key]
         return rows
 
     def create_table_rows(self, rows: List[List[str]], append: bool = True) -> Union[None, List[List[QStandardItem]]]:
@@ -1676,11 +2087,13 @@ class NucDetect(QMainWindow):
             return
         return item_row
 
-    def get_table_data_from_database(self, experiment: str) -> List[List[str]]:
+    def get_table_data_from_database(self, experiment: str,
+                                     pair: Optional[Tuple[str, str]] = None) -> List[List[str]]:
         """
         Method to load the data of an experiment from the database
 
         :param experiment: The name of the experiment to get the data for
+        :param pair: The channel pair for the Co-Loc. column; None for each image's first pair
         :return: List of row to created for display
         """
         # Get images associated with experiment
@@ -1691,7 +2104,7 @@ class NucDetect(QMainWindow):
             # Check if the image is already analysed
             if not self.requester.check_if_image_was_analysed(img):
                 continue
-            row = self.get_table_data_for_image(img)
+            row = self.get_table_data_for_image(img, pair)
             # Check if the image was assigned to a group
             group = self.requester.get_associated_group_for_image(img, experiment)
             for row_ in row:
@@ -1699,17 +2112,45 @@ class NucDetect(QMainWindow):
             rows.extend(row)
         return rows
 
-    def get_table_data_for_image(self, img: str) -> List[List[str]]:
+    @staticmethod
+    def report_plausibility(result: Dict) -> None:
+        """
+        Method to raise the detector's plausibility verdict for one analysed image
+
+        The Detector cannot do this itself. In a batch run it executes in a ProcessPoolExecutor
+        worker, whose logger is a NullHandler by design, so anything it logs directly is dropped --
+        it therefore reports the figures into its own buffered analysis log and hands the verdict
+        back with the result. This is the parent side of that: it runs for single and batch
+        analyses alike, and it is NOT gated on the "logging" setting, because that setting governs
+        the per-image analysis record and this is a warning about the result itself.
+
+        :param result: One analysis result, as returned by Detector.analyse_image
+        :return: None
+        """
+        # .get, because a stubbed result or one produced before 2026-09-15 carries no verdict
+        plausibility = result.get("plausibility")
+        if not plausibility or not plausibility.get("implausible"):
+            return
+        LOGGER.warning("Implausible detection result for %s: %s -- %d nuclei, %d below and %d "
+                       "above the size bounds, %d touching the image border",
+                       result.get("id", "unknown image"),
+                       plausibility.get("reason", "see the analysis log"),
+                       plausibility["nuclei"], plausibility["below_min_area"],
+                       plausibility["above_max_area"], plausibility["border"])
+
+    def get_table_data_for_image(self, img: str,
+                                 pair: Optional[Tuple[str, str]] = None) -> List[List[str]]:
         """
         Method to get the table data for the specified image
 
         :param img: The md5 hash of the image to get the data for
+        :param pair: The channel pair for the Co-Loc. column; None for the image's first pair
         :return: List of rows created for display
         """
         # Convert key to file name
         name = self.requester.get_image_filename(img)
         self.prg_signal.emit(f"Creating result table for image {name}", 0, 100, "")
-        rows = self.requester.get_table_data_for_image(img, name)
+        rows = self.requester.get_table_data_for_image(img, name, pair)
         self.prg_signal.emit(f"Creating result table for image {name}", 100, 100, "")
         return rows
 
@@ -1848,18 +2289,90 @@ class NucDetect(QMainWindow):
         The clamp is opt-in rather than global because this method also serves loading, export and
         ROI progress, which legitimately restart at low values without passing through zero.
 
+        **`symbol` also carries the ETA**, in the form `ETA:<seconds>`. That is a reuse of an
+        existing parameter rather than a widening of `prg_signal`, at RW's instruction
+        (2026-09-20): the signal is `(str, float, float, str)` and serves loading, export and ROI
+        progress as well as analysis, so adding a field would touch every one of its 22 emitters
+        for the benefit of one. `symbol` was passed `""` by all of them, so it was free.
+
+        An `ETA:` symbol seeds the countdown and is NOT appended to the caption -- the countdown
+        owns that number now, and shows it inside the bar. **Anything else is appended exactly as before**, and an empty symbol
+        CLEARS the countdown, which is what ends it: every non-analysis emitter passes `""`, and so
+        does the "Analysis finished" emit.
+
         :param text: The text to show above the bar
         :param progress: The value of the bar
         :param maxi: The max value of the bar
-        :param symbol: The symbol printed after the displayed values
+        :param symbol: `ETA:<seconds>` to drive the countdown, `""` to clear it, or a symbol to
+            print after the displayed values
         :return: None
         """
         if self._prg_floor is not None:
             progress = max(progress, self._prg_floor * maxi)
             self._prg_floor = progress / maxi if maxi else 0.0
+        if symbol.startswith("ETA:"):
+            self._set_eta(symbol[4:])
+            symbol = ""
+        elif not symbol:
+            self._set_eta(None)
         self.ui.lbl_status.setText(f"{text} -- {(progress / maxi) * 100:.2f}% {symbol}")
         self.ui.prg_bar.setMaximum(int(maxi))
         self.ui.prg_bar.setValue(int(progress))
+
+    def _set_eta(self, seconds: Union[str, float, None]) -> None:
+        """
+        Method to arm, re-arm or clear the ETA countdown
+
+        The countdown is the progress bar's own text, not a widget beside it. A label was tried
+        first, on 2026-09-20, and removed the next day: a QLabel sharing a row with the bar takes
+        its width off the bar for as long as it exists, and an empty one still occupies its
+        minimumWidth, so the bar was 116 px short while idle and 201 px short mid-run.
+
+        :param seconds: Seconds remaining, or None to clear the countdown
+        :return: None
+        """
+        self._assert_main_thread("_set_eta")
+        if seconds is None:
+            self._eta_deadline = None
+            self.eta_timer.stop()
+            self.ui.prg_bar.setFormat(PROGRESS_FORMAT)
+            return
+        try:
+            remaining = float(seconds)
+        except (TypeError, ValueError):
+            # A malformed ETA must not take down the analysis it is describing -- the same rule the
+            # focus-detection log line was rewritten under on 2026-09-13
+            LOGGER.warning("Unreadable ETA %r -- countdown cleared", seconds)
+            self._set_eta(None)
+            return
+        self._eta_deadline = time.time() + max(remaining, 0)
+        # Painted immediately rather than waiting up to a second for the first tick, which is what
+        # makes the display JUMP when a new estimate arrives instead of drifting to it
+        self._tick_eta()
+        if not self.eta_timer.isActive():
+            self.eta_timer.start()
+
+    def _tick_eta(self) -> None:
+        """
+        Method to repaint the ETA countdown, called once a second while an analysis is running
+
+        Writes ``prg_bar``'s format rather than a label's text. setFormat is cheap and the bar
+        repaints itself; there is no separate widget to keep in step.
+
+        :return: None
+        """
+        if self._eta_deadline is None:
+            self.eta_timer.stop()
+            return
+        # CEIL, not int(). The deadline is set from `now + seconds`, so by the time this runs even
+        # a few microseconds later the difference is already just under the whole number -- an ETA
+        # of 125 s painted as 124 immediately, losing a second before the clock had moved. Ceiling
+        # also gives a countdown the right end: it reads 1 while any time at all remains and
+        # reaches 0 exactly at the deadline. Caught by a test, not by reading the code
+        remaining = math.ceil(max(self._eta_deadline - time.time(), 0))
+        self.ui.prg_bar.setFormat(ETA_FORMAT.format(hours=remaining // 3600,
+                                                    minutes=remaining % 3600 // 60,
+                                                    seconds=remaining % 60))
 
     def save_results(self) -> None:
         """
@@ -2125,7 +2638,7 @@ class NucDetect(QMainWindow):
         :return: None
         """
         # Guarded here as well as in the range form it delegates to. This is a public entry point
-        # called from three places, and the invariant verify_thread_affinity enforces is that every
+        # called from three places, and the invariant the thread-affinity test enforces is that every
         # ui-mutating entry point carries the guard -- not that some caller further down does
         self._assert_main_thread("check_all_item_statuses")
         self.check_item_statuses_in_range(0, self.ui.list_images.model().rowCount() - 1)

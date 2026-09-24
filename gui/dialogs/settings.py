@@ -8,16 +8,20 @@
 import json
 import os
 from functools import partial
-from typing import Any, Dict, NotRequired, Optional, TypedDict, Union, List
+from typing import Any, Dict, NotRequired, Optional, Tuple, TypedDict, Union, List
 
 from PyQt5 import uic, QtCore
-from PyQt5.QtWidgets import QDialog, QWidget, QScrollArea, QSizePolicy, QVBoxLayout, QMessageBox
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import (QDialog, QWidget, QScrollArea, QSizePolicy, QVBoxLayout, QMessageBox,
+                             QTableWidget, QTableWidgetItem, QHeaderView, QDoubleSpinBox,
+                             QPushButton, QDialogButtonBox, QLabel, QCheckBox, QHBoxLayout)
 
 import gui.Paths as gpaths
 from gui import Util
 from core.logging_config import get_logger, reset_log_file
 from gui.definitions.icons import Icon
 from gui.settings.Widgets import SettingsSlider, SettingsDial, SettingsSpinner, SettingsDecimalSpinner, \
+    SettingsChannelNames, \
     SettingsText, SettingsComboBox, SettingsCheckBox
 
 LOGGER = get_logger(__name__)
@@ -76,6 +80,10 @@ class AnalysisSettingsDialog(QDialog):
         """
         return {
             "re-analyse": self.cbx_reanalyse.isChecked(),
+            # Checked means one conversion factor for the whole run, which is the common case and
+            # the default. Unchecked, the caller asks for a factor per image before starting --
+            # it is the caller that knows WHICH images the run covers, not this dialog
+            "uniform_scale": self.ui.cbx_uniform.isChecked(),
             "add_to_experiment": self.ui.cbx_experiment.isChecked(),
             "experiment_details": {
                 "name": self.ui.le_name.text(),
@@ -97,6 +105,7 @@ class AnalysisSettingsDialog(QDialog):
                 self.ui.cbx_five.isChecked()
             ],
             "main": self.get_main_channel_index(),
+            "colocalization_pairs": self.get_colocalization_pairs(),
             "analysis_settings": {
                 "method": self.get_detection_method(),
                 "dots_per_micron": self.spbx_mmpd.value(),
@@ -172,6 +181,91 @@ class AnalysisSettingsDialog(QDialog):
             return 0
         return index
 
+    def get_colocalization_pairs(self) -> List[List[int]]:
+        """
+        Method to get the channel pairs chosen for co-localization
+
+        **Only ENABLED boxes count.** A box is disabled when either of its channels is inactive or
+        is the main channel, and Qt leaves a disabled box checked -- the same trap the main-channel
+        radio buttons fell into. Filtering here keeps a tick the user can no longer act on from
+        reaching the analysis, and keeps it in place should the channel come back.
+
+        :return: The pairs as [lower index, higher index], in the index space of ``"main"``
+        """
+        return [[i, j] for (i, j), box in sorted(self.pair_boxes.items())
+                if i < j and box.isEnabled() and box.isChecked()]
+
+    def update_pair_availability(self, *_) -> None:
+        """
+        Method to enable exactly the pair boxes whose two channels are both active foci channels
+
+        Takes and ignores the arguments of the signals it is connected to.
+
+        :return: None
+        """
+        main = self.ui.main_channel_btn_group.checkedId()
+        active = [box.isChecked() for box in self.channel_activation]
+        for (i, j), box in self.pair_boxes.items():
+            box.setEnabled(active[i] and active[j] and main not in (i, j))
+
+    def _add_pair_boxes(self, rows: List[QHBoxLayout]) -> None:
+        """
+        Method to add the co-localization pair boxes beside each channel
+
+        RW, 2026-09-21: *"A new set of widgets besides to set pairs for each selected channel.
+        Standard pairing should be channel 1 and 2 with three beeing the main channel."* Each
+        channel row gets one box per OTHER channel, labelled with that channel's number, and the
+        two boxes describing one pair are kept in step -- ticking 2 in channel 1's row ticks 1 in
+        channel 2's. A symmetric matrix rather than a list of pairs because it is what "besides
+        each channel" describes, and because "compare every channel with every other", RW's other
+        option, is then simply every box ticked.
+
+        Built here rather than in the .ui: twenty boxes wired in pairs would be twenty entries in
+        Designer that the code has to name individually anyway.
+
+        :param rows: The layout of each channel row, in channel order
+        :return: None
+        """
+        count = len(rows)
+        self.pair_boxes: Dict[Tuple[int, int], QCheckBox] = {}
+        for i, row in enumerate(rows):
+            label = QLabel("Pair with:")
+            label.setToolTip("The channels whose foci are compared with this channel's for "
+                             "co-localization")
+            row.addWidget(label)
+            for j in range(count):
+                if i == j:
+                    continue
+                box = QCheckBox(str(j + 1))
+                box.setToolTip(f"Compare the foci of channel {i + 1} with those of channel "
+                               f"{j + 1} for co-localization")
+                row.addWidget(box)
+                self.pair_boxes[(i, j)] = box
+        for (i, j), box in self.pair_boxes.items():
+            box.toggled.connect(self.pair_boxes[(j, i)].setChecked)
+
+    def _preselect_pairs(self) -> None:
+        """
+        Method to tick the pairs the dialog opens with
+
+        The image's own pairs when it has been analysed with some -- read back by the caller, the
+        same way the main-channel nomination is -- and otherwise the ruled default: the first two
+        active channels that are not the main one. That is channel 1 and 2 against a main
+        channel 3, and it is what the detector compared before pairs existed.
+
+        :return: None
+        """
+        configured = self.settings.get("colocalization_pairs")
+        if configured is None:
+            main = self.ui.main_channel_btn_group.checkedId()
+            foci = [i for i, box in enumerate(self.channel_activation)
+                    if box.isChecked() and i != main]
+            configured = [foci[:2]] if len(foci) >= 2 else []
+        for pair in configured:
+            i, j = (int(x) for x in pair)
+            if (i, j) in self.pair_boxes:
+                self.pair_boxes[(i, j)].setChecked(True)
+
     def get_detection_method(self) -> str:
         """
         Method to get the selected detection method
@@ -234,15 +328,25 @@ class AnalysisSettingsDialog(QDialog):
         # order. Explicit ids move that contract out of the .ui and into the code
         for index, button in enumerate(channel_main):
             self.ui.main_channel_btn_group.setId(button, index)
-        # Both values below come from a user-editable JSON file and index fixed-size widget lists
+        # Both values below come from a user-editable store and index fixed-size widget lists
         names = self.settings["names"].split(";")
         if len(names) > len(channels):
             LOGGER.warning(f"{len(names)} channel names configured, but the dialog has "
                            f"{len(channels)} channels -- the surplus is ignored")
-        for name in range(min(len(names), len(channels))):
-            channels[name].setChecked(True)
-            channel_names[name].setEnabled(True)
-            channel_names[name].setText(names[name])
+        # AN EMPTY NAME LEAVES ITS CHANNEL OFF, which is what makes the settings dialog's five
+        # always-present fields safe to leave blank. RW, 2026-09-20: the settings widget always
+        # offers all five standard channels and "the AnalysisSettings dialog should respect the set
+        # standard names" -- so a named channel is offered here and an unnamed one is not.
+        #
+        # Before that day the loop ran over however many names the string happened to split into,
+        # so three stored names left channels 4 and 5 unchecked, unnamed AND unreachable: there was
+        # no way to name them from this dialog, and the settings box gave no hint that more were
+        # possible. The count no longer decides anything; the content does.
+        for index in range(min(len(names), len(channels))):
+            name = names[index].strip()
+            channel_names[index].setText(name)
+            channels[index].setChecked(bool(name))
+            channel_names[index].setEnabled(bool(name))
         main_channel = self.settings["main_channel"]
         if not 0 <= main_channel < len(channel_main):
             LOGGER.warning(f"Configured main channel {main_channel} is outside the "
@@ -273,6 +377,113 @@ class AnalysisSettingsDialog(QDialog):
         # nominated, with nothing in the log or the results recording the substitution
         for index, checkbox in enumerate(channels):
             checkbox.toggled.connect(partial(self.on_channel_activation_changed, index))
+        # Co-localization pairs. Connected AFTER the activation handler above, and Qt calls slots
+        # in connection order: deactivating the main channel hands the nomination on first, and
+        # only then is it known which boxes the new main channel disables
+        self._add_pair_boxes([self.ui.horizontalLayout_2, self.ui.horizontalLayout_3,
+                              self.ui.horizontalLayout_4, self.ui.horizontalLayout_5,
+                              self.ui.horizontalLayout_6])
+        for checkbox in channels:
+            checkbox.toggled.connect(self.update_pair_availability)
+        self.ui.main_channel_btn_group.idToggled.connect(self.update_pair_availability)
+        self.update_pair_availability()
+        self._preselect_pairs()
+
+class ImageScaleDialog(QDialog):
+    """
+    Class to collect a conversion factor for each image of an analysis run
+
+    Shown when the analysis settings dialog's "uniform" box is unchecked, and also the place to
+    supply a factor for an image that has none. One factor per image, not one per axis: non-square
+    pixels are rare, an area conversion needs only the product, and two boxes per row is a lot of
+    typing for a case nobody here has met.
+
+    The value a file DECLARES is shown beside each row but is never applied on its own -- RW,
+    2026-09-14: *"not all microscopes really save meaningful data in these fields, so the user
+    should still be required to set the values themself."* Clicking "use" copies it into the box,
+    which is a decision the user makes rather than one made for them.
+    """
+
+    def __init__(self, images, default: float, parent=None):
+        """
+        :param images: One (md5, display name, declared factor or None) per image
+        :param default: The factor from the analysis dialog, used to prefill every row
+        :param parent: The parent of this dialog
+        """
+        super(ImageScaleDialog, self).__init__(parent)
+        self.images = list(images)
+        self.default = default
+        self.boxes = {}
+        self.setWindowTitle("Conversion factor per image")
+        self.setWindowIcon(Icon.get_icon("LOGO"))
+        self.setStyleSheet(Util.load_stylesheet("main.css"))
+        self.initialize_ui()
+
+    def initialize_ui(self) -> None:
+        """
+        Method to build the dialog
+
+        :return: None
+        """
+        layout = QVBoxLayout(self)
+        hint = QLabel("Pixels per micrometre, for each image of this run. The value a file declares "
+                      "is shown where it has one -- it is a suggestion, not a measurement.")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        table = QTableWidget(len(self.images), 3, self)
+        table.setHorizontalHeaderLabels(["Image", "Declared by the file", "Pixels per µm"])
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for row, (md5, name, declared) in enumerate(self.images):
+            item = QTableWidgetItem(name)
+            item.setFlags(item.flags() & ~Qt.ItemIsEditable)
+            item.setToolTip(md5)
+            table.setItem(row, 0, item)
+            shown = QTableWidgetItem("-" if declared is None else f"{declared:.4f}")
+            shown.setFlags(shown.flags() & ~Qt.ItemIsEditable)
+            table.setItem(row, 1, shown)
+            box = QDoubleSpinBox(self)
+            box.setDecimals(4)
+            box.setMaximum(100.0)
+            # The analysis dialog's value, not the declared one -- see the class docstring
+            box.setValue(self.default)
+            self.boxes[md5] = box
+            table.setCellWidget(row, 2, box)
+        table.resizeColumnsToContents()
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        layout.addWidget(table)
+
+        use_declared = QPushButton("Use the declared values where there are any", self)
+        use_declared.clicked.connect(self.apply_declared)
+        layout.addWidget(use_declared)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self.resize(640, min(200 + 28 * len(self.images), 700))
+
+    def apply_declared(self) -> None:
+        """
+        Method to copy every declared value into its spin box
+
+        One deliberate action rather than a silent default, which is the whole point of the
+        distinction. Rows whose file declares nothing are left as they are.
+
+        :return: None
+        """
+        for md5, _name, declared in self.images:
+            if declared:
+                self.boxes[md5].setValue(float(declared))
+
+    def get_data(self) -> Dict[str, float]:
+        """
+        Method to get the entered factors
+
+        :return: The conversion factor per image md5
+        """
+        return {md5: box.value() for md5, box in self.boxes.items()}
+
 
 class SettingsDialog(QDialog):
     """
@@ -316,7 +527,7 @@ class SettingsDialog(QDialog):
     def accept(self):
         # Update the database to reflect the changes made
         for key, value in self.changed.items():
-            self.inserter.update_setting(key, value[0])
+            self.inserter.update_setting(key, value)
         self.inserter.commit()
         # THE JSON IS NOT WRITTEN. It used to be: save_menu_settings() copied every changed value
         # into the loaded JSON and dumped the file, which made that file a second, competing store
@@ -535,6 +746,19 @@ class SettingsDialog(QDialog):
                     parent=self,
                     callback=self.menupoint_changed
                 )
+            elif t == "channels":
+                # One field per standard channel, replacing the semicolon-delimited text box on
+                # 2026-09-20. Deliberately its own type rather than a flag on "text": the stored
+                # value is still one string, but the editing surface is five fields and the widget
+                # owns the encode/decode
+                p = SettingsChannelNames(
+                    _id=mp["id"],
+                    title=mp["title"],
+                    desc=mp["desc"],
+                    value=mp["value"],
+                    parent=self,
+                    callback=self.menupoint_changed
+                )
             elif t == "text":
                 p = SettingsText(
                     _id=mp["id"],
@@ -551,7 +775,7 @@ class SettingsDialog(QDialog):
                 # so it never did. Kept rather than deleted, and made to read
                 # from "values" the way every other branch does. A list, not a delimited string:
                 # JSON has lists, and SettingsComboBox iterates what it is given -- which is how
-                # verify_gui_dialogs' checks 23/24 already construct it
+                # the dialog tests already construct it
                 dat = values["data"]
                 p = SettingsComboBox(
                     _id=mp["id"],
@@ -591,10 +815,12 @@ class SettingsDialog(QDialog):
         Method to detect value changes of the settings widgets
 
         :param _id: The id of the widget as str
-        :param value: The value of the widget, wrapped in a list by the widgets' signal
+        :param value: The value of the widget, as the widget holds it
         :return: None
         """
-        # self.changed keeps the signal's list shape -- accept() indexes [0] out of it
+        # Stored as it arrives. Until 2026-09-20 the signal wrapped every value in a one-element
+        # list and this kept that shape, so accept() had to index [0] back out on the way to the
+        # database -- see the signal's own comment in gui/settings/Widgets.py
         self.changed[_id] = value
         # self.data is nested per section, the shape add_menu_point builds. Writing self.data[_id]
         # here left two incompatible layouts in one dictionary, and a consumer walking it per
@@ -604,4 +830,4 @@ class SettingsDialog(QDialog):
             LOGGER.warning(f"Change reported for unknown setting '{_id}' -- not recorded in the "
                            f"section data")
             return
-        self.data[section][_id] = value[0]
+        self.data[section][_id] = value

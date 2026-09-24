@@ -31,13 +31,15 @@ class ROI:
         "id",
         "marked",
         "detection_method",
-        "match",
-        "colocalized"
     ]
+    # `match` and `colocalized` were removed from this list on 2026-09-24. They held ONE
+    # co-localization result per ROI -- a percentage on a nucleus, a partner hash on a focus -- and
+    # could not express more than one channel pair. The result is now returned by
+    # MapComparator.colocalize and stored per pair in its own tables
 
     def __init__(self, main: bool = True, channel: str = "Blue", auto: bool = True,
                  associated: Union[int, None] = None, marked: bool = False,
-                 method: str = "Not Set", match: float = 0):
+                 method: str = "Not Set"):
         """
         Constructor of ROI class
 
@@ -48,7 +50,7 @@ class ROI:
                            An identifier, NOT a ROI object -- associate_roi reads it out of the
                            nucleus hash map, so it arrives as a numpy int64, and every live
                            consumer treats it as a number: the database column stores it, and
-                           MapComparator uses it directly as a dict key. It was annotated as a
+                           the co-localization query groups by it. It was annotated as a
                            ROI for years while never holding one; the only two methods that
                            expected an object were a CSV export superseded in 2020 and removed.
                            A focus is always associated with a nucleus -- one that ends up
@@ -66,12 +68,6 @@ class ROI:
         self.associated = associated
         self.marked = marked
         self.detection_method = method
-        self.match = match
-        # NOT a flag, despite this initial value. MapComparator writes hash() of the focus this one
-        # co-localizes with, so the attribute -- and the roi.co_localized column it is written to --
-        # holds False for most ROI and a 64-bit identifier for the rest. `if roi.colocalized` is
-        # therefore not a safe test for "is co-localized": it is false for a partner hashing to 0.
-        self.colocalized = False
         self.id = None
 
     # __add__ was removed here. It delegated to what is now intersect_with, so `a + b` read as a
@@ -79,16 +75,38 @@ class ROI:
     # None. It had no callers. Use intersect_with, whose name states what actually happens.
 
     def __eq__(self, other: Union[int, ROI]):
-        if isinstance(other, ROI):
-            return set(self.area) == set(other.area)
-        elif isinstance(other, int):
-            return self.id == other
+        """
+        ONE definition of identity, shared with __hash__ -- RW's ruling, 2026-09-15:
+        *"__eq__ should use the md5 hash to consolidate both functions."*
 
-    def __ne__(self, other):
-        if not isinstance(other, ROI):
-            return True
-        else:
-            return not self.__eq__(other)
+        Until then the two disagreed. `__hash__` derives from the channel AND the run list, while
+        this compared `set(self.area)` alone: two roi with identical pixels on DIFFERENT channels
+        compared equal and hashed differently, which breaks the invariant every set and dict
+        relies on. **The hash could not be the side that moves** -- it is the stored row identity
+        in `roi`, `points` and `statistics`, so changing it would orphan every stored roi.
+
+        **The rest of the program already agreed with the hash**: MapComparator keys all of its
+        dictionaries by `hash(x)` and QualityTester.delete_unassociated_foci compares hashes, so
+        this closes a gap rather than opening one. The only place two roi are compared with `==`
+        is `ROIHandler.remove_roi`, where being channel-aware is strictly safer.
+
+        Comparing the hashes rather than `(ident, area)` is deliberate: `hash` is the cached
+        value, so repeated comparisons cost one md5 per roi rather than one per comparison.
+
+        :param other: A ROI, or an identifier to compare against this roi's own
+        :return: True if the two are the same roi; NotImplemented for anything else, so Python
+                 falls back to identity instead of this silently returning None
+        """
+        if isinstance(other, ROI):
+            return hash(self) == hash(other)
+        if isinstance(other, int):
+            return self.id == other
+        return NotImplemented
+
+    # __ne__ was REMOVED here, 2026-09-15, rather than updated. It read
+    # `if not isinstance(other, ROI): return True`, which contradicted __eq__'s int branch: a roi
+    # was both equal to its own identifier and unequal to it. Python derives != from __eq__ when
+    # __ne__ is absent, which is correct for every case this handled and for that one too.
 
     def __gt__(self, other):
         if not isinstance(other, ROI):
@@ -113,12 +131,27 @@ class ROI:
         else:
             return self.length
 
+    # ONE identifier space, chosen 2026-09-13. Until then `self.id` held the full 128-bit md5 while
+    # `hash(roi)` returned what CPython made of it, and the two are different numbers -- so every
+    # `*_by_hash` lookup on a freshly built ROI silently found nothing, and an edited ROI lost every
+    # pixel overlapping its own former area (a 1 px nudge kept 0.5 % of the nucleus; a shrink, or
+    # committing unchanged geometry, kept none of it and deleted the row).
+    #
+    # The reduction is MODULO 2**61 - 1, not a truncation to 64 bits: CPython hashes an
+    # arbitrary-precision int as `n % (2**61 - 1)`. Masking to 64 bits would produce a different
+    # number and make every stored hash unreachable -- verified against the real database, whose
+    # largest stored hash is 2305842721531669066, just under this modulus. Computing the residue
+    # here reproduces the stored values exactly, so no migration is needed.
+    HASH_MODULUS = 2 ** 61 - 1
+
     def __hash__(self):
-        if not self.id:
+        # `is None`, not `not self.id`: 0 is a legitimate residue, and a falsy test recomputed the
+        # hash of any ROI that happened to carry it -- including one loaded from the database
+        if self.id is None:
             md5 = hashlib.md5()
             ident = f"{self.ident}{self.area}".encode()
             md5.update(ident)
-            self.id = int(f"0x{md5.hexdigest()}", 0)
+            self.id = int(f"0x{md5.hexdigest()}", 0) % ROI.HASH_MODULUS
         return self.id
 
     def intersect_with(self, roi: ROI) -> bool:
@@ -185,11 +218,25 @@ class ROI:
         """
         if not rle:
             return
+        # SORTED, so the run list is in scanline order whatever built it -- (row, first column,
+        # length) tuples compare in exactly that order. `__hash__` derives from the repr of this
+        # list, so the identity of a roi depended on a convention held separately by four
+        # encoders (the detector's scan, the blob encoder, the editor's lexsort and the
+        # intersection) and by the physical row order SQLite happens to return from `points`.
+        # Any future encoder emitting the same pixels in another order would have created a
+        # SECOND identity for the same roi.
+        #
+        # **IT CHANGES NO STORED HASH, and that was measured rather than argued** (2026-09-15,
+        # read-only against the live database): all **225 720** stored roi reproduce their stored
+        # hash from their channel and points, all 225 720 are already in scanline order, and
+        # sorting leaves all 225 720 hashes identical. The convention was always held; it is now
+        # enforced in the one place that can enforce it.
+        #
         # Copy rather than store the caller's list by reference, and do not clear() first: the
         # clear() mutated the list this ROI held *previously*, which any other holder of it would
         # have seen emptied, and it was pointless anyway given the rebind on the next line.
         # Same aliasing hazard already fixed in ImageListModel.set_paths.
-        self.area = list(rle)
+        self.area = sorted(rle)
         self.reset_stored_values()
 
     def intersect_area(self, rle) -> bool:
@@ -210,11 +257,14 @@ class ROI:
         # Get the intersecting area
         intersect = AreaAnalysis.get_rle_area_intersection(self.area, rle)
         if intersect:
-            self.area = intersect
+            # Through set_area, not by assigning self.area: it is the one place the run list is
+            # canonicalised and the cached values are dropped, and this was the only writer that
+            # went around it -- so a merged roi's identity depended on the order
+            # get_rle_area_intersection happened to emit
+            self.set_area(intersect)
             # Kept as "Merged" rather than renamed with the methods: the value is persisted in the
             # roi table, so changing it would invalidate stored results.
             self.detection_method = "Merged"
-            self.reset_stored_values()
             return True
         else:
             return False
@@ -311,6 +361,30 @@ class ROI:
                 # selectively, and is_valid() above is the check this condition was duplicating
                 raise ValueError(f"ROI {self.id} associated to {self.associated} does not contain any points!")
         return self.dims
+
+    def touches_border(self, shape: Tuple[int, int]) -> bool:
+        """
+        Method to check whether this roi is cut off by the edge of the image it was detected on
+
+        A nucleus clipped by the image border is measured as though it were whole: it is roughly
+        half the size of an uncut one -- median 3648 px against 6956 px, over the 42 of 166 nuclei
+        that touch an edge on the seven reference images -- so it drags down every area- and
+        intensity-derived statistic and inflates the count. RW ruled on 2026-09-15 that such nuclei
+        are to be FLAGGED rather than dropped, which is what this answers; nothing filters on it.
+
+        The bounding box is used rather than the run list itself, and that is exact here: a roi
+        touches an edge exactly when its bounding box does.
+
+        `maxY` and `maxX` are EXCLUSIVE -- calculate_dimensions builds them as minimum + extent,
+        and get_bounding_box measures the width to one past the last pixel because a run is
+        half open. So the far edges are `>= height` and `>= width`, not `>= height - 1`.
+
+        :param shape: The (height, width) of the image this roi was detected on
+        :return: True if the roi touches any of the four image edges
+        """
+        dims = self.calculate_dimensions()
+        return (dims["minY"] <= 0 or dims["minX"] <= 0
+                or dims["maxY"] >= shape[0] or dims["maxX"] >= shape[1])
 
     def extract_area_intensity(self,
                                channel: np.ndarray) -> List[Union[int, float]]:

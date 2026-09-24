@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="UTF-8") as fh:
 
 setuptools.setup(
     name="NucDetect",
-    version="1.7.0",
+    version="1.11.0",
     description=("Module to quantify intranuclear foci on basis of "
                  "immunofluorescence images."),
     author="Romano Weiss",
@@ -21,7 +21,15 @@ setuptools.setup(
         "Development Status :: 5 - Production/Stable",
         "Intended Audience :: Developers",
         "Intended Audience :: Science/Research",
-        "Programming Language :: Python :: 3.12"
+        # 3.13 as of 2026-09-21, corrected from 3.12 at RW's report that this number was outdated.
+        # It is what the project is developed and verified on -- .venv is 3.13.2 and the whole
+        # harness suite runs there. README.md carries the same claim in prose and moves with it;
+        # a version-consistency check asserts the two agree, because this is the second pair of
+        # version literals in this project with nothing keeping them in step.
+        #
+        # NOTE THIS DROPS THE 3.12 CLAIM rather than adding to it. Nothing tests 3.12, so listing
+        # both would assert support nobody has verified. Add it back only alongside a run.
+        "Programming Language :: Python :: 3.13"
     ],
     include_package_data=True,
     packages=setuptools.find_packages(),

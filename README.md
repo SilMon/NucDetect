@@ -4,7 +4,7 @@ NucDetect - A python package for Detection and Quantification of DNA Doublestran
 ============
 
 NucDetect is a Python package for the detection and quantification of γH2AX and 53BP1 foci inside nuclei. Its written in 
-pure Python 3.12, obeys the PEP 8 style guidelines and includes PEP 484 type hints as well as Epytext docstrings.
+pure Python 3.13, obeys the PEP 8 style guidelines and includes PEP 484 type hints as well as Epytext docstrings.
 
 ![Result](https://github.com/SilMon/NucDetect_Additional_Data/blob/main/WIKI/result.png)
 

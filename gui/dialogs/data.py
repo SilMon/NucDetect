@@ -5,43 +5,44 @@ import traceback
 
 from matplotlib import font_manager
 from threading import Thread
-from typing import List, Tuple, Dict, Any, Optional, Union, Callable, Iterable, cast
+from typing import List, Tuple, Dict, Any, Optional, Union, Callable, Iterable
 
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
 from PyQt5 import uic, QtCore, QtGui
-from PyQt5.QtCore import QRectF, Qt, QPoint, QPointF, QItemSelection, QAbstractTableModel, QVariant, pyqtSignal, QTimer
-from PyQt5.QtGui import QKeyEvent, QPen, QColor, QMouseEvent, QBrush, QStandardItemModel, QStandardItem
-from PyQt5.QtWidgets import QDialog, QGraphicsItem, QGraphicsRectItem, QGraphicsEllipseItem, QInputDialog, \
-    QSizePolicy, QMessageBox, QSpinBox, QHBoxLayout, QVBoxLayout, QHeaderView, \
-    QMenuBar, QMenu, QAction, QComboBox, QListWidget, QAbstractItemView, QListWidgetItem, \
-    QAbstractScrollArea, QWidget
-from scipy import ndimage as ndi
-from skimage.draw import line
-from skimage.segmentation import watershed
+from PyQt5.QtCore import QRectF, Qt, QItemSelection, QAbstractTableModel, QVariant, pyqtSignal, QTimer
+from PyQt5.QtGui import QKeyEvent, QStandardItemModel, QStandardItem
+from PyQt5.QtWidgets import (
+                             QDialog, QInputDialog, QSizePolicy, QMessageBox, QSpinBox,
+                             QHBoxLayout, QVBoxLayout, QHeaderView, QMenuBar, QMenu, QAction,
+                             QComboBox, QListWidget, QAbstractItemView, QListWidgetItem,
+                             QAbstractScrollArea, QWidget)
 from matplotlib.backends.backend_qt5 import NavigationToolbar2QT as NavigationToolbar
 
 from gui import Plots
 from gui import Util
-from core.DataProcessing import euclidean_distance, perform_statistical_analysis_on_groups, convert_p_values
+from core.DataProcessing import perform_statistical_analysis_on_groups
 from gui.Plots import PlotCanvas
 from gui.Util import create_image_item_list_from
-from core.database.connections import Inserter, Requester
+from core.database.connections import Inserter, Requester, NO_COLOCALIZATION
 from core.logging_config import get_logger
-from gui.definitions.icons import Icon, Color
-from core.detector_modules import AreaAndROIExtractor
-from gui.dialogs.GraphicsItems import EditorView, ROIItem
+from gui.definitions.icons import Icon
+from gui.dialogs.GraphicsItems import EditorView, ROIDrawer, ROIItem
 from gui.dialogs.selection import ImageSelectionDialog, ExperimentSelectionDialog
 from gui import Paths
 from gui.loader import Loader
-from core.roi.AreaAnalysis import imprint_area_into_array
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
 
 # Excel's own limit on a worksheet title. openpyxl only warns above it, but the workbook is then
 # unreadable for some applications, so the export truncates rather than relying on the warning
 MAX_SHEET_NAME_LENGTH = 31
+#: Longest file STEM an export writes. Not a filesystem limit -- NTFS allows 255 per component --
+#: but a cap that keeps the full path clear of MAX_PATH once the results folder, the extension and
+#: a de-duplication suffix are added. Deliberately separate from MAX_SHEET_NAME_LENGTH: Excel's 31
+#: is a property of Excel, and applying it to file names would rename files nothing else renames
+MAX_FILE_STEM_LENGTH = 120
 
 
 LOGGER = get_logger(__name__)
@@ -58,8 +59,15 @@ class DataExportDialog(QDialog):
         "All analysed Images",
         "All defined Experiments"
     )
-    STANDARD_HEADER = ["Image Name", "Image Identifier", "ROI Identifier", "Center Y", "Center X", "Area [px]",
-                       "Ellipticity[%]", "Or. Angle [deg]", "Maj. Axis", "Min. Axis", "match"]
+    # Areas and axes are in micrometres, centres in pixels -- RW, 2026-09-14: a centre is a
+    # literal coordinate in the image and converting it would help nobody. An image with no stored
+    # conversion factor reports these three columns in pixels instead, and the log says which image.
+    # "Edge" was added 2026-09-15, with the column of the same name on the main result table: the
+    # rows come from Requester.get_table_data_for_image, so the two headers describe one row shape
+    # and adding a cell there without adding it here miscounts every column after it
+    STANDARD_HEADER = ["Image Name", "Image Identifier", "ROI Identifier", "Center Y", "Center X",
+                       "Area [µm²]", "Ellipticity[%]", "Or. Angle [deg]", "Maj. Axis [µm]",
+                       "Min. Axis [µm]", "match", "Edge"]
 
     def __init__(self, current_image: Union[str, None] = None, display_name: Union[str, None] = None):
         """
@@ -72,8 +80,53 @@ class DataExportDialog(QDialog):
         self.errors: List[str] = []
         self.cur_img = current_image
         self.disp_name = display_name
-        self.req = Requester(protected=False)
+        # File stems already handed out by this export run, and the lock that guards them.
+        # The non-workbook path starts ONE THREAD PER IMAGE, so reserving a name is a genuine
+        # race: two images sharing a file name would otherwise both be told they may use it
+        self._used_file_stems = set()
+        self._stem_lock = threading.Lock()
+        # ONE REQUESTER PER THREAD, handed out by the `req` property below. This used to be a
+        # single `Requester(protected=False)` shared by every export thread -- and `protected` is
+        # what `connect_to_database` passes to sqlite3's `check_same_thread`, so the guard against
+        # exactly this sharing had been switched OFF to make it possible. Several threads then
+        # drove one connection and one cursor concurrently, which sqlite does not support: a
+        # cursor's result set belongs to whoever last executed on it.
+        self._local = threading.local()
         self.ui = self.initialize_ui()
+
+    @property
+    def req(self) -> Requester:
+        """
+        The calling thread's own Requester, created on first use
+
+        A property rather than an argument threaded through eight call sites: every reader below
+        keeps saying `self.req` and gets a connection it is allowed to use. `protected` is left at
+        its default, so sqlite enforces the one-thread-per-connection rule again instead of being
+        told to ignore it.
+
+        Closed by `_run_export`, which is the single funnel every export thread goes through; the
+        dialog's own (main-thread) requester lives as long as the dialog.
+        """
+        requester = getattr(self._local, "requester", None)
+        if requester is None:
+            requester = Requester()
+            self._local.requester = requester
+        return requester
+
+    def _release_thread_requester(self) -> None:
+        """
+        Method to close the calling thread's Requester, if it made one
+
+        Without this an export run leaks one sqlite connection per image -- the non-workbook path
+        starts a thread per image -- and they would only be released when the garbage collector
+        happened to reach them.
+
+        :return: None
+        """
+        requester = getattr(self._local, "requester", None)
+        if requester is not None:
+            requester.connector.close_connection()
+            self._local.requester = None
 
     def accept(self) -> None:
         self.save_data()
@@ -103,6 +156,20 @@ class DataExportDialog(QDialog):
         ui.btn_export.clicked.connect(self.accept)
         ui.btn_cancel.clicked.connect(self.close)
         ui.cbx_xlsx.stateChanged.connect(lambda: ui.cbx_xlsx_single.setEnabled(ui.cbx_xlsx.isChecked()))
+        # The single-file option combines XLSX and NOTHING else -- csv and html are written once per
+        # image whatever it says, because a csv cannot hold 116 tables. That is what "if possible"
+        # in the label was carrying on its own, and it carried it invisibly: RW ticked the box,
+        # found a file per image in the results folder and reported it as a defect (2026-09-13).
+        #
+        # Shown only while the option is actually IN FORCE -- ticked AND reachable -- so it explains
+        # the state the user is in rather than standing there as permanent small print. Both signals
+        # are needed: unticking XLSX leaves this box checked but disabled, and the note must go with
+        # the behaviour, not with the tick
+        # Zero-argument lambdas, as the line above uses: `stateChanged` emits the Qt check STATE
+        # as an int, and connecting the method directly fed that int into its `ui` parameter --
+        # `AttributeError: 'int' object has no attribute 'lbl_single_file_note'`
+        ui.cbx_xlsx.stateChanged.connect(lambda: self.update_single_file_note())
+        ui.cbx_xlsx_single.stateChanged.connect(lambda: self.update_single_file_note())
         # Fill the combobox
         cbx_cont = []
         if self.cur_img:
@@ -111,7 +178,21 @@ class DataExportDialog(QDialog):
             cbx_cont.extend(DataExportDialog.STANDARD_OPTIONS[1:])
         cbx_cont.extend(self.req.get_all_experiments())
         ui.cbx_choice.addItems(cbx_cont)
+        self.update_single_file_note(ui)
         return ui
+
+    def update_single_file_note(self, ui: Any = None) -> None:
+        """
+        Method to show the single-file note exactly while that option is in force
+
+        :param ui: The loaded ui. Only passed from initialize_ui, which runs BEFORE self.ui exists
+        :return: None
+        """
+        ui = ui if ui is not None else self.ui
+        # setVisible, not setText: an empty label still occupies its row and the dialog would
+        # change height for no visible reason
+        ui.lbl_single_file_note.setVisible(ui.cbx_xlsx.isChecked()
+                                           and ui.cbx_xlsx_single.isChecked())
 
     def save_data(self):
         """
@@ -119,6 +200,10 @@ class DataExportDialog(QDialog):
 
         :return: None
         """
+        # A fresh run may legitimately reuse every name, because it overwrites its own previous
+        # output. The reservations only have to be unique WITHIN one export
+        with self._stem_lock:
+            self._used_file_stems.clear()
         # Get the selection
         selection = self.ui.cbx_choice.currentText()
         # Save the selected image
@@ -173,6 +258,10 @@ class DataExportDialog(QDialog):
             worker(*args)
         except Exception:
             self.errors.append(traceback.format_exc())
+        finally:
+            # In the finally, so a failed export releases its connection too. This runs on the
+            # export thread, which is the only thread allowed to close that connection
+            self._release_thread_requester()
 
     def export_goes_into_one_workbook(self) -> bool:
         """
@@ -249,6 +338,59 @@ class DataExportDialog(QDialog):
                 return candidate
             counter += 1
 
+    @staticmethod
+    def clean_file_stem(name: str) -> str:
+        """
+        Method to turn the given name into a file stem the file system accepts
+
+        Separate from `get_valid_sheet_name`, and the two must not be merged: Excel rejects
+        `[]:*?/\\` and caps names at 31 characters, while Windows rejects `<>:"/\\|?*` plus the
+        control characters and allows 255. Cleaning a file name with Excel's rules would mangle
+        names the file system is perfectly happy with, and cleaning a sheet name with the file
+        system's would let `[` through into a workbook, which raises.
+
+        :param name: The name to derive a file stem from
+        :return: A stem safe to write to disk, never empty
+        """
+        illegal = set('<>:"/\\|?*')
+        cleaned = "".join("_" if c in illegal or ord(c) < 32 else c for c in str(name))
+        # Trailing dots and spaces are silently dropped by Windows, which would make two distinct
+        # stems collide again after they were checked for collision
+        cleaned = cleaned.strip().rstrip(". ")
+        return cleaned[:MAX_FILE_STEM_LENGTH] or "export"
+
+    def reserve_file_stem(self, name: str) -> str:
+        """
+        Method to claim a unique file stem for this export run
+
+        **Two images can carry the same file name in different folders**, and both are exported.
+        The workbook path has de-duplicated its SHEET names since 2026-08-xx, but the csv and html
+        outputs -- which are written per image whatever the single-file box says -- kept using the
+        raw image name, so the second image silently overwrote the first.
+
+        Measured on the live database 2026-09-13, exporting "All analysed Images":
+        **116 analysed images produced 108 csv and 108 html files.** Eight images from two folders
+        sharing file names lost their output with no error of any kind.
+
+        Reserved under a lock because the non-workbook path runs one thread per image.
+
+        :param name: The name to derive the stem from
+        :return: A cleaned stem not yet used by this run
+        """
+        stem = self.clean_file_stem(name)
+        with self._stem_lock:
+            if stem not in self._used_file_stems:
+                self._used_file_stems.add(stem)
+                return stem
+            counter = 2
+            while True:
+                suffix = f"_{counter}"
+                candidate = f"{stem[:MAX_FILE_STEM_LENGTH - len(suffix)]}{suffix}"
+                if candidate not in self._used_file_stems:
+                    self._used_file_stems.add(candidate)
+                    return candidate
+                counter += 1
+
     def export_image_as_table(self, md5: str,
                               xlsx_name: str = None,
                               include_header: bool = True,
@@ -287,11 +429,29 @@ class DataExportDialog(QDialog):
         """
         # Get general table header
         header = copy.copy(self.STANDARD_HEADER)
-        # Get the channels for this image
-        chans = sorted(self.req.get_channel_names(md5, False))
-        header.extend(chans)
+        # ("Channel", "Foci"), exactly as _export_experiment_as_table does, because both render the
+        # SAME rows -- get_table_data_for_image emits one row per nucleus PER CHANNEL, ending in
+        # the channel name and that channel's focus count.
+        #
+        # This used to append one column per non-main channel, a WIDE layout the rows have never
+        # had. It matched only by coincidence, when an image has exactly two non-main channels:
+        # the two channel NAMES then fill the "Channel" and "Foci" slots and the widths agree.
+        # 115 of the 116 analysed images in the testing database have exactly two. The fifth
+        # channel of `demo_5channel` gives four, and pandas refused the export with
+        # `ValueError: Writing 14 cols but got 16 aliases` -- which in the single-workbook path
+        # aborts the WHOLE run, so every image after it is silently missing. Reported from real
+        # use 2026-09-15. Reconstructed with the pre-Edge-column constants it was
+        # `Writing 13 cols but got 15 aliases`, so the defect predates that column by exactly two
+        # aliases and was not caused by it.
+        #
+        # Whether this export should instead BE the wide table its header promised -- one column
+        # per channel, one row per nucleus -- is a separate question for RW, and a different
+        # change: it would have to reshape the rows, not the header.
+        header.extend(("Channel", "Foci"))
         # Get the data for the given image
         rows = self.get_data_for_image(md5)
+        # The nucleus is the third cell of an image row
+        self.append_pair_columns(header, rows, nucleus_column=2)
         # Try to get the name of the image
         img_name = self.req.get_image_filename(md5)
         self.save_table_to_disk(img_name, rows, header,
@@ -346,12 +506,48 @@ class DataExportDialog(QDialog):
         header.extend(("Channel", "Foci"))
         # Get the data for the given image
         rows = self.req.get_table_data_for_experiment(experiment)
+        # The nucleus is the fourth cell of an experiment row, after the inserted Group
+        self.append_pair_columns(header, rows, nucleus_column=3)
         self.save_table_to_disk(experiment,
                                 rows, header,
                                 include_header=include_header,
                                 sheet_name=sheet_name if sheet_name else experiment,
                                 xlsx_name=xlsx_name,
                                 writer=writer)
+
+    def append_pair_columns(self, header: List[str], rows: List[List],
+                            nucleus_column: int) -> None:
+        """
+        Method to add one co-localization column per channel pair to an export, in place
+
+        The match column keeps holding each image's FIRST pair -- the row shape is shared with the
+        result table and the statistics dialog, and all three would have to change together. The
+        per-pair columns are appended AFTER Channel and Foci instead, so every existing column keeps
+        its position and nothing that reads an older export by index breaks.
+
+        One column per pair that ANY exported image compared. An image that did not compare a pair
+        gets n/a in that column, as does a nucleus with no focus in either of its channels.
+
+        :param header: The export's header, extended by one label per pair
+        :param rows: The export's rows, each extended by one cell per pair. The image md5 is the
+            second cell of every row
+        :param nucleus_column: Where the nucleus hash sits in a row
+        :return: None
+        """
+        images = sorted({row[1] for row in rows})
+        per_image = {image: self.req.get_colocalization_pairs(image) for image in images}
+        pairs = sorted({pair for image_pairs in per_image.values() for pair in image_pairs})
+        if not pairs:
+            return
+        # Once per image and pair, not per row: a row repeats its nucleus once per channel
+        shares = {(image, pair): self.req.get_colocalization_by_nucleus(image, pair)
+                  for image, image_pairs in per_image.items() for pair in image_pairs}
+        header.extend(f"Co-Loc. {a}/{b} [%]" for a, b in pairs)
+        for row in rows:
+            nucleus = int(row[nucleus_column])
+            for pair in pairs:
+                share = shares.get((row[1], pair), {}).get(nucleus)
+                row.append(NO_COLOCALIZATION if share is None else f"{share * 100:.2f}")
 
     def get_data_for_image(self, image: str) -> List[List]:
         """
@@ -385,7 +581,19 @@ class DataExportDialog(QDialog):
         :return: None
         """
         # Create a pandas dataframe
-        df = pd.DataFrame(rows)
+        # columns=header when there are no rows, and this is not defensive tidying. An image can be
+        # analysed and carry NO roi -- detection found nothing, or the quality check removed
+        # everything -- and `pd.DataFrame([])` is then (0, 0). Handing 13 column aliases to a frame
+        # with no columns raises `ValueError: Writing 0 cols but got 13 aliases`, and in the
+        # single-workbook path that takes the WHOLE export down: one thread writes every image into
+        # one ExcelWriter, so the run stops at the empty image and every later one is silently
+        # absent. Measured 2026-09-13 on the live database -- the empty image is number 55 of 116,
+        # and 61 images never reached the workbook.
+        #
+        # A header-only table is written instead of skipping the image, at RW's instruction: a sheet
+        # with headers and no rows says "analysed, nothing found", where an absent sheet is
+        # indistinguishable from an export that lost it
+        df = pd.DataFrame(rows) if len(rows) else pd.DataFrame(columns=list(header))
         # The results folder is not guaranteed to exist: it is created by Paths.ensure_directories,
         # which the GUI calls at start-up -- but a user who deletes it while the program is running,
         # or any entry point that has not called it, would otherwise get a bare FileNotFoundError
@@ -393,11 +601,19 @@ class DataExportDialog(QDialog):
         # Paths rather than calling makedirs here keeps directory creation in the module that
         # declares the directories
         Paths.ensure_directories()
+        # ONE stem for all three outputs of this item, reserved once, so `image.csv`, `image.html`
+        # and `image.xlsx` keep matching names -- and so a second image with the same file name
+        # gets `image_2` rather than overwriting the first. Claimed only when a FILE is actually
+        # written: an item that only contributes a sheet to a shared workbook needs no stem, and
+        # reserving one would push the next duplicate to `_3`
+        writes_file = (self.ui.cbx_csv.isChecked() or self.ui.cbx_html.isChecked()
+                       or (self.ui.cbx_xlsx.isChecked() and writer is None))
+        stem = self.reserve_file_stem(xlsx_name if xlsx_name else name) if writes_file else None
         if self.ui.cbx_csv.isChecked():
-            df.to_csv(os.path.join(Paths.result_path, f"{name}.csv"),
+            df.to_csv(os.path.join(Paths.result_path, f"{stem}.csv"),
                       header=header if include_header else False, index=False)
         if self.ui.cbx_html.isChecked():
-            df.to_html(os.path.join(Paths.result_path, f"{name}.html"),
+            df.to_html(os.path.join(Paths.result_path, f"{stem}.html"),
                        header=header if include_header else False, index=False)
         if self.ui.cbx_xlsx.isChecked():
             if writer is not None:
@@ -407,8 +623,7 @@ class DataExportDialog(QDialog):
                 df.to_excel(writer, header=header if include_header else False, index=False,
                             sheet_name=self.get_valid_sheet_name(sheet_name, writer.sheets))
             else:
-                fname = name if not xlsx_name else xlsx_name
-                df.to_excel(os.path.join(Paths.result_path, f"{fname}.xlsx"),
+                df.to_excel(os.path.join(Paths.result_path, f"{stem}.xlsx"),
                             header=header if include_header else False, index=False,
                             sheet_name=self.get_valid_sheet_name(sheet_name, ()))
 
@@ -461,8 +676,52 @@ class Editor(QDialog):
         self.y_scale = y_scale
         self.initialize_ui()
 
+    def mark_main_channel_in_combo_box(self) -> None:
+        """
+        Method to mark the main channel in the channel selector, so it is identifiable at a glance
+
+        RW, 2026-09-15: *"The editor channel selection should use color to highlight the main
+        channel if possible. This would allow the user to easily identify the main channel."*
+        Asked for after a re-analysis on a different channel was read as having run on the old
+        one -- nothing on this screen said which channel the nuclei belong to, and nuclei stay
+        drawn on EVERY channel (ROIDrawer.change_channel keeps them active while "show additional"
+        is on), so the view itself cannot answer it either.
+
+        **THE ITEM TEXT IS NOT TOUCHED, and that is a constraint rather than a preference.**
+        `show_channel` is connected to `currentIndexChanged` and looks `currentText()` up in
+        `EditorView.active_channels`, which is keyed by the bare channel name -- appending
+        "(main)" to the label would raise KeyError on every selection of that entry. The mark is
+        therefore colour, weight and a tooltip, all of which live in item DATA.
+
+        The colour is TAKEN FROM the nucleus pen rather than repeated as a literal, so the entry
+        matches what a nucleus actually looks like in the view and cannot drift from it if that
+        pen is ever restyled.
+
+        :return: None
+        """
+        main = self.editor.main_channel
+        index = self.ui.cbx_channel.findText(main)
+        # -1 means the nominated channel is not offered -- the combo is built from the channels
+        # the loaded ARRAY has, and Editor.__init__ drops database rows beyond that. It already
+        # logs the mismatch; there is simply nothing to mark here
+        if index < 0:
+            LOGGER.warning("Main channel %s is not among the offered channels %s -- not marking it",
+                           main, [self.ui.cbx_channel.itemText(i)
+                                  for i in range(self.ui.cbx_channel.count())])
+            return
+        font = self.ui.cbx_channel.font()
+        font.setBold(True)
+        colour = ROIDrawer.MARKERS["nucleus_auto"].color()
+        self.ui.cbx_channel.setItemData(index, QtGui.QBrush(colour), Qt.ForegroundRole)
+        self.ui.cbx_channel.setItemData(index, font, Qt.FontRole)
+        self.ui.cbx_channel.setItemData(index, f"{main} is the main channel -- the nuclei were "
+                                               f"detected on it", Qt.ToolTipRole)
+
     def accept(self) -> None:
-        self.editor.apply_all_changes()
+        # The editor answers False when the user cancels the confirmation for foci that lie outside
+        # every nucleus. Closing anyway would discard the very edits they went back to correct
+        if not self.editor.apply_all_changes():
+            return
         super().accept()
 
     def initialize_ui(self) -> None:
@@ -492,9 +751,6 @@ class Editor(QDialog):
         self.ui.btn_view.setIcon(Icon.get_icon("EYE"))
         self.ui.btn_add.setIcon(Icon.get_icon("PLUS_CIRCLE"))
         self.ui.btn_edit.setIcon(Icon.get_icon("EDIT"))
-        self.ui.btn_auto.setIcon(Icon.get_icon("MAGIC"))
-        # TODO fix
-        self.ui.btn_auto.setVisible(False)
         self.ui.btn_show.setIcon(Icon.get_icon("CIRCLE"))
         self.ui.btn_coords.setIcon(Icon.get_icon("MOUSE"))
         # Explicit ids, so the mapping to EditorView's modes stops depending on the order the
@@ -529,6 +785,7 @@ class Editor(QDialog):
         for _, name in sorted(self.active_channels, key=lambda channel: channel[0]):
             self.ui.cbx_channel.addItem(name)
         self.ui.cbx_channel.addItem("Composite")
+        self.mark_main_channel_in_combo_box()
         self.ui.cbx_channel.setCurrentText("Composite")
         self.ui.cbx_channel.currentIndexChanged.connect(
             lambda: self.editor.show_channel(self.ui.cbx_channel.currentText())
@@ -552,7 +809,6 @@ class Editor(QDialog):
         self.ui.spb_sizeFactor.valueChanged.connect(
             lambda: self.change_size_factor(self.ui.spb_sizeFactor.value())
         )
-        self.ui.btn_auto.clicked.connect(self.auto_edit)
         # Setup editing boxes
         sy, sx, _ = self.image.shape
         self.connect_spinboxes_to_change_function()
@@ -608,10 +864,12 @@ class Editor(QDialog):
         :param connect: If false, the spinbox will be disconnected
         :return: None
         """
+        # set_changes, not the preview_changes that stood here until 2026-09-13. The two built the
+        # same rectangle and called the same method; the duplicate is gone and this is the survivor
         if connect:
-            spin.valueChanged.connect(self.preview_changes)
+            spin.valueChanged.connect(self.set_changes)
         else:
-            spin.valueChanged.disconnect(self.preview_changes)
+            spin.valueChanged.disconnect(self.set_changes)
 
     def change_opacity(self, new_value: float) -> None:
         """
@@ -621,29 +879,6 @@ class Editor(QDialog):
         :return: None
         """
         self.editor.set_item_opacity(new_value)
-
-    def auto_edit(self) -> None:
-        """
-        Method to open the auto edit dialog
-
-        :return: None
-        """
-        auto_edit_dialog = AutoEdit(main=self.image[..., self.roi.idents.index(self.roi.main)],
-                                    roi=self.roi, img_name=self.img_name)
-        code = auto_edit_dialog.exec()
-        if code == QDialog.Accepted:
-            # Get newly created roi
-            rois = auto_edit_dialog.extracted_roi
-            # Remove all involved old roi. by_hash, because deletion_list holds hashes -- the
-            # comment below has always said so, but add_existing_nuclei_centers used to append
-            # whole ROI objects, which remove_rois happened to accept and editor.delete did not
-            self.roi.remove_rois_by_hash(auto_edit_dialog.deletion_list)
-            # extend, not append: deletion_list is a LIST of roi ids, and appending nested it, so
-            # the membership test in delete_items_in_list never matched its contents and
-            # Inserter.delete_roi_from_database received a list where sqlite expects a scalar
-            self.editor.delete.extend(auto_edit_dialog.deletion_list)
-            self.roi.add_rois(rois)
-            self.editor.clear_and_update()
 
     def change_size_factor(self, new_value: float) -> None:
         """
@@ -659,11 +894,21 @@ class Editor(QDialog):
         """
         Method to apply the values in the editing spin boxes to the selected item
 
-        Reached from the **A** hotkey. The Preview and Accept buttons this also served were removed
-        on 2026-09-08 (RW: *"Both can be removed"*) -- they were `enabled=false` in the .ui and
-        nothing ever enabled them, so they had never been clickable. With them went the
-        `sender() == btn_preview` test, which was the only thing that ever decided preview from
-        commit, and the `override` parameter that existed to bypass it.
+        Reached from the **A** hotkey, which is now the only one. The Preview and Accept buttons
+        this also served were removed on 2026-09-08 (RW: *"Both can be removed"*) -- they were
+        `enabled=false` in the .ui and nothing ever enabled them, so they had never been clickable.
+        With them went the `sender() == btn_preview` test, which was the only thing that ever
+        decided preview from commit, and the `override` parameter that existed to bypass it.
+
+        **A second hotkey, P, was removed on 2026-09-13.** It called a `preview_changes` that built
+        the same rectangle and called the same method, so P had never previewed anything -- it did
+        what A does. Two keys for one behaviour, neither documented anywhere, is worse than one, and
+        A is the honest name for a commit. In practice the geometry is already applied before either
+        key is pressed, because the spin boxes commit on `valueChanged`; the key is a way to apply a
+        value typed and left unconfirmed.
+
+        If a REAL preview is ever wanted for typed values, P is the place for it -- the drag path
+        already has one, since every step of a drag previews and Escape puts the item back.
 
         :return: None
         """
@@ -671,19 +916,6 @@ class Editor(QDialog):
         x, y = self.ui.spb_x.value(), self.ui.spb_y.value(),
         width, height = self.ui.spb_width.value(), self.ui.spb_height.value()
         rect = QRectF(x - width / 2, y - height / 2, width, height)
-        angle = self.ui.spb_angle.value()
-        self.editor.set_changes(rect, angle)
-
-    def preview_changes(self) -> None:
-        """
-        Method to preview the changes made during editing
-
-        :return: None
-        """
-        # Define QRect to adjust position of item
-        rect = QRectF(self.ui.spb_x.value() - self.ui.spb_width.value()/2,
-                      self.ui.spb_y.value() - self.ui.spb_height.value()/2,
-                      self.ui.spb_width.value(), self.ui.spb_height.value())
         angle = self.ui.spb_angle.value()
         self.editor.set_changes(rect, angle)
 
@@ -711,7 +943,7 @@ class Editor(QDialog):
         Method to write the given item's geometry into the five editing spin boxes
 
         The spin boxes are disconnected while they are written and reconnected afterwards, because
-        setValue emits valueChanged -- without that, filling the boxes would drive preview_changes,
+        setValue emits valueChanged -- without that, filling the boxes would drive set_changes,
         which reads the boxes and pushes the result straight back onto the item
 
         :param item: The item to read the geometry from
@@ -784,8 +1016,6 @@ class Editor(QDialog):
             self.ui.btn_coords.setChecked(not self.ui.btn_coords.isChecked())
         elif event.key() == Qt.Key_5:
             self.ui.btn_show.setChecked(not self.ui.btn_show.isChecked())
-        elif event.key() == Qt.Key_P:
-            self.preview_changes()
         elif event.key() == Qt.Key_A:
             self.set_changes()
         elif event.key() == Qt.Key_Shift:
@@ -836,732 +1066,6 @@ class Editor(QDialog):
         :return: None
         """
         self.ui.lbl_status.setText(status)
-
-
-class AutoEdit(QDialog):
-
-    edit_rect_pen = QPen(QColor(255, 0, 0), 5, Qt.DashLine)
-
-    def __init__(self, main: np.ndarray, roi: ROIHandler, img_name: str = ""):
-        super(AutoEdit, self).__init__()
-        self.img_name = img_name
-        self.main = main
-        self.handler = roi
-        self.roi = self.get_main_roi(roi)
-        self.edit_rect = QGraphicsRectItem(0, 0, self.main.shape[1], self.main.shape[0])
-        self.edit_rect.setPen(self.edit_rect_pen)
-        self.img_item = pg.ImageItem()
-        self.plot_item = pg.PlotItem()
-        self.main_map = self.get_main_map(main.shape, self.roi)
-        # The BINARY map, not the intensity channel: distance_transform_edt measures the distance
-        # to the nearest zero pixel, so on raw intensities it measures the distance to the nearest
-        # pixel that happens to be exactly 0 -- camera noise. The medial ridge peaking at each
-        # nucleus centre, which is the surface the watershed is seeded from and flooded over, only
-        # exists over the mask. main_map is also what the watershed already uses as its mask
-        # (perform_adjusted_watershed), so the two used to disagree about which surface is meant
-        # cast, because distance_transform_edt is typed as returning the distances, the indices,
-        # both, or None, depending on its two boolean flags -- a union the checker cannot narrow
-        # from the call. With the defaults (return_distances=True, return_indices=False) it
-        # returns exactly one array, which is what every use of self.edm here assumes
-        self.edm: np.ndarray = cast(np.ndarray, ndi.distance_transform_edt(self.main_map))
-        self.map_index = 0
-        # Create a working map to enable undo
-        self.temp_main = np.copy(self.main)
-        self.temp_map = np.copy(self.main_map)
-        self.temp_edm = np.copy(self.edm)
-        self.centers: List[AutoEditCenterItem] = []
-        # The centers that seed the watershed. Only filled while the image is locked -- see
-        # add_center_to_plot for why the lock state has to be tracked
-        self.active_centers: List[AutoEditCenterItem] = []
-        self.locked = False
-        self.removed_centers: List[AutoEditCenterItem] = []
-        self.extracted_roi = []
-        self.deletion_list: List[int] = []
-        self.plot_view = AutoEditGraphicsView()
-        self.plot_vb = self.plot_item.vb
-        # Annotated Any deliberately -- see DataExportDialog.initialize_ui above
-        self.ui: Any = uic.loadUi(Paths.ui_editor_auto_dial, self)
-        self.initialize_ui()
-
-    def initialize_ui(self) -> None:
-        """
-        Method to initalize the UI of this dialog
-
-        :return: None
-        """
-        self.setWindowTitle(f"Semi-Automatical Nucleus Extraction of {self.img_name}")
-        self.setWindowIcon(Icon.get_icon("MAGIC"))
-        self.setWindowFlags(self.windowFlags() |
-                            QtCore.Qt.WindowSystemMenuHint |
-                            QtCore.Qt.WindowMinMaxButtonsHint |
-                            QtCore.Qt.Window)
-        self.plot_item.addItem(self.img_item)
-        self.img_item.setImage(self.temp_main)
-        self.plot_item.addItem(self.edit_rect)
-        self.plot_view.setCentralWidget(self.plot_item)
-        self.plot_vb.setAspectLocked(True)
-        self.plot_vb.invertY(True)
-        self.ui.vl_data.addWidget(self.plot_view)
-
-        self.ui.spb_x.setMinimum(0)
-        self.ui.spb_x.setMaximum(self.main.shape[1])
-        self.ui.spb_x.setValue(self.main.shape[1] / 2)
-        self.ui.spb_y.setMinimum(0)
-        self.ui.spb_y.setMaximum(self.main.shape[0])
-        self.ui.spb_y.setValue(self.main.shape[0] / 2)
-
-        self.ui.spb_height.setMinimum(0)
-        self.ui.spb_height.setMaximum(self.main.shape[0])
-        self.ui.spb_height.setValue(self.main.shape[0])
-        self.ui.spb_width.setMinimum(0)
-        self.ui.spb_width.setMaximum(self.main.shape[1])
-        self.ui.spb_width.setValue(self.main.shape[1])
-        self.ui.spb_x.valueChanged.connect(self.change_edit_rectangle)
-        self.ui.spb_y.valueChanged.connect(self.change_edit_rectangle)
-        self.ui.spb_width.valueChanged.connect(self.change_edit_rectangle)
-        self.ui.spb_height.valueChanged.connect(self.change_edit_rectangle)
-        # Set icons for all buttons
-        self.ui.btn_lock.setIcon(Icon.get_icon("LOCK"))
-        self.ui.btn_reset.setIcon(Icon.get_icon("UNDO"))
-        self.ui.btn_channel.setIcon(Icon.get_icon("IMAGE"))
-        self.ui.btn_binmap.setIcon(Icon.get_icon("IMAGE"))
-        self.ui.btn_edm.setIcon(Icon.get_icon("IMAGE"))
-        self.ui.btn_reset.clicked.connect(self.restore_maps)
-        self.ui.btn_channel.toggled.connect(
-            lambda: self.change_map_mode(0)
-        )
-        self.ui.btn_binmap.toggled.connect(
-            lambda: self.change_map_mode(1)
-        )
-        self.ui.btn_edm.toggled.connect(
-            lambda: self.change_map_mode(2)
-        )
-        self.ui.btn_lock.clicked.connect(self.lock_image)
-        self.add_existing_nuclei_centers()
-        self.set_status("Please adjust the editing rectangle to fit the zone you want to edit")
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        if not event.button() == Qt.LeftButton:
-            return
-        # Check if the position aligns with a center
-        items = self.plot_view.get_items_at_mapped_position(self.plot_view.raw_mouse_position, AutoEditCenterItem)
-        if items:
-            # Delete items
-            for item in items:
-                self.plot_item.removeItem(item)
-                self.centers.remove(item)
-                # Un-seed it as well: an item taken off the plot must not still mark a basin
-                if item in self.active_centers:
-                    self.active_centers.remove(item)
-                if item.reference:
-                    self.removed_centers.append(item.reference)
-        else:
-            # Check if the new center lies within the editing rectangle
-            pos = self.plot_view.mapped_mouse_position
-            posx, posy = pos.x(), pos.y()
-            x, y, width, height = self.get_editing_rectangle_dimensions()
-            if y <= posy < y + height and x <= posx <= x + width:
-                # Add new item
-                center = self.get_center_at_position(pos.x(), pos.y())
-                self.add_center_to_plot(center)
-
-    def perform_adjusted_watershed(self) -> np.ndarray:
-        """
-        Method to use the defined centers to perform watershed segmentation
-
-        :return: None
-        """
-        # Get list of adjusted centers
-        adj_cent = self.adjust_centers_to_edm()
-        # Adjust the edm
-        adj_edm = -self.adjust_edm(adj_cent)
-        # Create a mask for watershed
-        mask = np.zeros(shape=adj_edm.shape)
-        for p in adj_cent:
-            mask[p[0]][p[1]] = 1
-        # Label individual centers on the mask
-        markers, _ = ndi.label(mask)
-        # Perform watershed
-        segmap = watershed(adj_edm, markers, mask=self.temp_map)
-        # Check if areas align with the map edge and delete them
-        del_list = []
-        height, width = segmap.shape
-        for y in range(height):
-            for x in range(width):
-                # Parenthesised: `and` binds tighter than `or`, so the != 0 guard applied only
-                # to the left/right edges and every value on the top and bottom rows -- 0
-                # included -- was added to the deletion set
-                if ((y == 0 or y == height - 1) or (x == 0 or x == width - 1)) and segmap[y][x] != 0:
-                    del_list.append(segmap[y][x])
-        del_list = set(del_list)
-        for y in range(height):
-            for x in range(width):
-                if segmap[y][x] in del_list:
-                    segmap[y][x] = 0
-        # Adjust segmentation map to size of original image
-        adj_segmap = np.zeros(shape=self.main_map.shape)
-        x, y, width, height = self.get_current_editing_rect()
-        # [y, x], matching crop_image's slice (~:1041). The axes were swapped here, which raised
-        # ValueError for any non-square editing rectangle and silently wrote a square one to the
-        # wrong place
-        adj_segmap[y: y + height, x: x + width] = segmap
-        # The second deletion pass that used to sit here has been removed. It walked self.centers
-        # -- which still holds the items lock_image took off the plot -- and marked every one whose
-        # centre fell on adj_segmap == 0, a condition that is true EVERYWHERE outside the crop by
-        # construction. So it re-collected exactly the nuclei that should never have been touched.
-        # get_replaced_roi now answers the same question once, from the editing rectangle
-        return adj_segmap
-
-    def get_replaced_roi(self) -> List[int]:
-        """
-        Method to get the hashes of the roi this dialog replaces
-
-        Derived here, at accept time, from the rectangle the segmentation actually ran on. It used
-        to be accumulated in add_existing_nuclei_centers, which runs from initialize_ui while the
-        editing rectangle still covers the whole image -- so every nucleus in the image was marked
-        for deletion, shrinking the rectangle afterwards never revisited the list, and only the
-        nuclei inside the crop were re-created. Their foci went with them: apply_all_changes
-        deletes every focus of a deleted nucleus that no new nucleus adopts
-
-        get_current_editing_rect is the same rectangle perform_adjusted_watershed writes the new
-        segmentation into, which is the one that decides where replacements can appear
-
-        :return: The hashes of all main roi inside the editing rectangle
-        """
-        x, y, width, height = self.get_current_editing_rect()
-        replaced = []
-        for roi in self.roi:
-            center = roi.calculate_dimensions()["center"]
-            if y <= center[0] < y + height and x <= center[1] < x + width:
-                replaced.append(hash(roi))
-        return replaced
-
-    def accept(self) -> None:
-        # Built here rather than accumulated as the centers are drawn -- see get_replaced_roi
-        self.deletion_list = self.get_replaced_roi()
-        segmap = self.perform_adjusted_watershed()
-        roi_areas = self.extract_roi_from_segmentationmap(segmap)
-        for index, area in roi_areas.items():
-            # Create new roi
-            roi = ROI(channel=self.handler.main, auto=False)
-            roi.set_area(area)
-            self.extracted_roi.append(roi)
-        super().accept()
-
-    @staticmethod
-    def extract_roi_from_segmentationmap(map_: np.ndarray) -> Dict[int, List[Tuple[int, int, int]]]:
-        """
-        Method to extract roi from a segmentation map
-
-        :param map_: The segmentation map
-        :return: A list of extracted ROI
-        """
-        return AreaAndROIExtractor.encode_areas(map_)
-
-    def adjust_centers_to_edm(self) -> List[Tuple[int, int]]:
-        """
-        Method to adjust the position of the defined centers to the maxima of the EDM
-
-        Reads temp_edm, the CROPPED map: lock_image rewrites the centers into crop coordinates,
-        and both consumers of the returned list -- adjust_edm and the watershed marker mask --
-        are cropped as well. Indexing the full sized self.edm with those coordinates read the
-        wrong part of the map, and could return a point outside the mask it is written into
-
-        :return: A list of adjusted centers as (y, x), in the coordinates of the cropped maps
-        """
-        # Adjust center values using the EDM
-        adj_rad = 15
-        adj_cent = []
-        edm = self.temp_edm
-        for center_item in self.active_centers:
-            cent_y, cent_x = center_item.current_center()
-            # A center outside the locked region has no position on the cropped maps
-            if not (0 <= cent_y < edm.shape[0] and 0 <= cent_x < edm.shape[1]):
-                continue
-            # Iterate over neighborhood of center, keeping the MAXIMUM: the watershed is flooded
-            # over the negated EDM (perform_adjusted_watershed), so its basins form at the EDM
-            # maxima, which is what the docstring above promises. Keeping the smallest value
-            # instead moved every seed onto a background pixel at distance 0
-            y_min, y_max = max(0, cent_y - adj_rad), min(edm.shape[0], cent_y + adj_rad + 1)
-            x_min, x_max = max(0, cent_x - adj_rad), min(edm.shape[1], cent_x + adj_rad + 1)
-            neighborhood = edm[y_min:y_max, x_min:x_max]
-            off_y, off_x = np.unravel_index(int(np.argmax(neighborhood)), neighborhood.shape)
-            # A center placed on the background has no maximum to snap to. Leave it where the user
-            # put it rather than moving it to whichever corner of the neighborhood argmax returns
-            if neighborhood[off_y][off_x] > 0:
-                adj_cent.append((y_min + int(off_y), x_min + int(off_x)))
-            else:
-                adj_cent.append((cent_y, cent_x))
-        return adj_cent
-
-    @staticmethod
-    def get_nearest_center(center: Tuple[int, int], index: int,
-                           centers: List[Tuple[int, int]]) -> Tuple[int, int]:
-        """
-        Method to get the center with the smallest distance to the given center
-
-        :param center: The center
-        :param index: The index of the center in the given list of centers
-        :param centers: List of all possible centers including the given center
-        :return: The nearest center
-        """
-        smallest_dist = 150
-        nearest_center = None
-        for index2 in range(index + 1, len(centers), 1):
-            center2 = centers[index2]
-            dist = euclidean_distance(center, center2)
-            if dist < smallest_dist:
-                smallest_dist = dist
-                nearest_center = center2
-        return nearest_center
-
-    def adjust_edm(self, adj_centers: List[Tuple[int, int]]) -> np.ndarray:
-        """
-        Method to separate the centers on the edm to improve watershed quality
-
-        :param adj_centers: List of adjusted centers to use for EDM adjustment
-        :return: None
-        """
-        adj_edm = np.copy(self.temp_edm)
-        for index, center in enumerate(adj_centers):
-            center = adj_centers[index]
-            nearest_center = self.get_nearest_center(center, index, adj_centers)
-            if nearest_center:
-                # Calculate central point between both centers
-                c3 = round((center[0] + nearest_center[0]) / 2), round((center[1] + nearest_center[1]) / 2)
-                # adj_edm, not self.edm: the centers are in the coordinates of the CROPPED map,
-                # which is the map this method reads and writes everywhere else
-                if adj_edm[c3[0]][c3[1]]:
-                    # Get vector between center and the central point
-                    v = center[0] - c3[0], center[1] - c3[1]
-                    # Get orthogonal vector and normalize
-                    max_coord = max(abs(v[0]), abs(v[1]))
-                    # Two centers that snap to the same maximum, or that are a single pixel apart
-                    # -- round() takes the midpoint of (0, 0) and (0, 1) to (0, 0) -- leave no
-                    # direction to cut along, and dividing by that zero took the dialog down
-                    if not max_coord:
-                        continue
-                    c_orth = v[1] / max_coord, -v[0] / max_coord
-                    rr, cc = line(center[0], center[1],
-                                  nearest_center[0], nearest_center[1])
-                    line_bc = zip(rr, cc)
-                    brakes = self.get_end_points_of_separation_lines(adj_edm, line_bc, c_orth)
-                    if brakes:
-                        rr, cc = line(brakes[0][0], brakes[0][1], brakes[1][0], brakes[1][1])
-                        adj_edm[rr, cc] = 0
-        return adj_edm
-
-    @staticmethod
-    def walk_to_border(edm: np.ndarray, start: Tuple[int, int],
-                       step: Tuple[float, float]) -> Tuple[int, int]:
-        """
-        Method to walk from the given point along the given direction, up to the background or the
-        border of the map
-
-        The point returned is the last one still inside the nucleus, so it is always a valid index
-        -- the caller draws a line through it and writes into the map along that line
-
-        :param edm: The euclidean distance map to walk over
-        :param start: The point to start the walk at, as (y, x)
-        :param step: The direction to walk in, as (y, x)
-        :return: The last point before the background or the border, as (y, x)
-        """
-        # No straight walk that stays inside the map can be longer than this, so exhausting the
-        # range means the direction is degenerate rather than that the map is large. The original
-        # loop had no bound at all, and see below for how it failed to find one
-        limit = edm.shape[0] + edm.shape[1]
-        last = start
-        for counter in range(1, limit):
-            point = start[0] + round(step[0] * counter), start[1] + round(step[1] * counter)
-            # BOTH bounds are tested. Testing only '>= shape' let a NEGATIVE index through, numpy
-            # then read the opposite edge of the map instead of stopping, and the walk wrapped
-            # around: over a region that is foreground all the way across, no end point was ever
-            # found and the loop ran forever -- with the GUI thread inside it, since this is
-            # reached from accept(). The out-of-range point was also returned as an end point,
-            # and writing the separation line through it raises IndexError
-            if not (0 <= point[0] < edm.shape[0] and 0 <= point[1] < edm.shape[1]):
-                return last
-            if edm[point[0]][point[1]] == 0:
-                return last
-            last = point
-        return last
-
-    @staticmethod
-    def get_end_points_of_separation_lines(edm: np.ndarray, linepoints,
-                                           orth: Tuple[float, float]) -> Optional[Tuple[Tuple[int, int],
-                                                                                        Tuple[int, int]]]:
-        """
-        Method to get the end points of the shortest line that separates two touching nuclei
-
-        Walks orthogonally away from every point on the line connecting the two centers and keeps
-        the narrowest crossing, which is where the two nuclei touch
-
-        :param edm: The euclidean distance map to search on
-        :param linepoints: The points on the line connecting both centers, as (y, x)
-        :param orth: The direction orthogonal to that line, as (y, x)
-        :return: Both end points of the separation line, or None if the connecting line leaves the
-        nucleus
-        """
-        # A MINIMUM tracker: the narrowest crossing is the one to cut. It was called max_distance
-        # and seeded with 10000000, which named the initial value rather than the intent
-        shortest_distance = float("inf")
-        brakes = None
-        for line_point in linepoints:
-            # If the point is in the background, stop progression
-            if edm[line_point[0]][line_point[1]] == 0:
-                return None
-            left_brake = AutoEdit.walk_to_border(edm, line_point, (-orth[0], -orth[1]))
-            right_brake = AutoEdit.walk_to_border(edm, line_point, orth)
-            cur_dist = euclidean_distance(left_brake, right_brake)
-            if cur_dist < shortest_distance:
-                shortest_distance = cur_dist
-                brakes = left_brake, right_brake
-        return brakes
-
-    @staticmethod
-    def get_center_at_position(x: int, y: int, reference: int = None) -> QGraphicsEllipseItem:
-        """
-        Method to get an ellipse item with the given center
-
-        :param x: The x position
-        :param y: The y position
-        :param reference: Signifies if this center is linked to an existing ROI
-        :return: The center as QGraphicsEllipseItem
-        """
-        center = AutoEditCenterItem(x, y, 15, 15, reference)
-        center.setPen(QPen(Color.BRIGHT_RED))
-        center.setBrush(QBrush(Color.BRIGHT_RED))
-        return center
-
-    def add_existing_nuclei_centers(self) -> None:
-        """
-        Function to add existing nuclei from the given ROIHandler
-
-        :return: None
-        """
-        # Get dimensions of editing rectangle
-        x, y, width, height = self.get_editing_rectangle_dimensions()
-        for roi in self.roi:
-            # Get the center of the roi
-            pos = roi.calculate_dimensions()["center"]
-            # hash(roi), not roi.id: ROI.__init__ sets id to None and only __hash__ fills it in,
-            # so roi.id is None for any ROI nothing has hashed yet -- and `if item.reference:`
-            # in perform_adjusted_watershed then skips the center silently. hash() is also what
-            # the deletion list holds, so the reference and the list entry are the same value
-            center = self.get_center_at_position(pos[1], pos[0], hash(roi))
-            # Check if roi is inside the editing rectangle
-            if y <= pos[0] <= y + height:
-                if x <= pos[1] <= x + width:
-                    # Drawing a centre no longer marks its nucleus for deletion. This runs from
-                    # initialize_ui, when the rectangle still covers the whole image, so every
-                    # nucleus in the image ended up in deletion_list and nothing revisited it when
-                    # the rectangle was shrunk. get_replaced_roi builds that list at accept time
-                    self.add_center_to_plot(center)
-
-    def add_center_to_plot(self, center: QGraphicsEllipseItem) -> None:
-        """
-        Method to add the given center to the plot
-
-        :param center: The center as QGraphicsEllipseItem
-        :return: None
-        """
-        self.centers.append(center)
-        # Centers placed after the lock are exactly the ones the dialog asks the user for -- and
-        # they are already in crop coordinates, like the ones lock_image rewrote. lock_image was
-        # the only place that ever filled active_centers, so every center clicked afterwards was
-        # drawn on the image and then ignored by the watershed
-        if self.locked:
-            self.active_centers.append(center)
-        self.plot_item.addItem(center)
-
-    def add_nucleus_center(self, event: QMouseEvent) -> None:
-        """
-        Method to add a new nucleus center to the image
-
-        :return: None
-        """
-        # Check of the defined position is inside the editing rectangle
-
-        # Define Nucleus center
-        center = self.get_center_at_position(event.pos().x(), event.pos().y())
-        self.add_center_to_plot(center)
-
-    def remove_center(self, center: QGraphicsEllipseItem) -> None:
-        """
-        Method to remove an added center
-
-        :param center: The center to remove
-        :return: None
-        """
-        self.centers.remove(center)
-        # Same invariant as the deletion path in mousePressEvent: an item that is not in centers
-        # must not be in active_centers either, or it keeps seeding the watershed after removal
-        if center in self.active_centers:
-            self.active_centers.remove(center)
-        self.plot_item.removeItem(center)
-
-    def change_edit_rectangle(self) -> None:
-        """
-        Method to change the editing rectangle
-
-        :return: None
-        """
-        # '// 2', matching get_current_editing_rect. round(w / 2) disagrees with w // 2 for an odd
-        # size -- round(3.5) is 4, 7 // 2 is 3 -- so the drawn rectangle and the offset the new
-        # segmentation is written back at sat one pixel apart for odd widths and heights
-        centerX = self.ui.spb_x.value() - self.ui.spb_width.value() // 2
-        centerY = self.ui.spb_y.value() - self.ui.spb_height.value() // 2
-        self.edit_rect.setRect(centerX,
-                               centerY,
-                               self.ui.spb_width.value(),
-                               self.ui.spb_height.value())
-        self.edit_rect.setPen(self.edit_rect_pen)
-
-    def lock_image(self) -> None:
-        """
-        Method to lock the image and hinder further editing. Prepares the image for analysis.
-
-        :return: None
-        """
-        enabled = self.ui.btn_lock.isChecked()
-        self.locked = enabled
-        self.enable_buttons(enabled)
-        #self.edit_rect.setPen(QPen(Color.INVISIBLE))
-        # Get current adjustment points
-        x, y, width, height = self.get_editing_rectangle_dimensions()
-        # Rebuilt rather than extended: btn_lock is checkable, so locking, unlocking and locking
-        # again appended every center a second time and seeded the watershed twice per position
-        self.active_centers = []
-        # Add all items at adjusted position
-        for item in self.centers:
-            # Get current item position
-            rect = item.boundingRect()
-            posx, posy = rect.x(), rect.y()
-            if y <= posy < y + height and x <= posx <= x + width:
-                # Define new bounding rect for item
-                b_rect = QRectF(posx - x, posy - y, 15, 15)
-                item.setRect(b_rect)
-                self.active_centers.append(item)
-            else:
-                self.plot_item.removeItem(item)
-        self.crop_image()
-        self.edit_rect.setRect(QRectF(0, 0, width, height))
-        self.enable_spinboxes(False)
-        self.set_status("Image locked, please select nuclei centers by clicking ont the image")
-
-    def get_editing_rectangle_dimensions(self) -> Tuple[int, int, int, int]:
-        """
-        Function to get the dimensions of the editing rectangle
-
-        :return: Tuple with x, y, width, height
-        """
-        rect = self.edit_rect.rect()
-        return int(rect.x()), int(rect.y()), int(rect.width()), int(rect.height())
-
-    def crop_image(self) -> None:
-        """
-        Method to crop the image to the size of the editing rectangle
-
-        :return: None
-        """
-        # Get rect of the editing rectangle
-        x, y, width, height = self.get_editing_rectangle_dimensions()
-        # Sliced from the PRISTINE arrays, not from temp_*. Cropping temp_* in place made the
-        # operation non-idempotent: btn_lock is checkable, so locking, unlocking and locking again
-        # cropped an already-cropped array and the second rectangle was interpreted relative to
-        # the first crop's origin
-        self.temp_edm = self.edm[y: y + height, x: x + width]
-        self.temp_map = self.main_map[y: y + height, x: x + width]
-        self.temp_main = self.main[y: y + height, x: x + width]
-        self.img_item.setImage(self.temp_main)
-
-    def enable_spinboxes(self, enabled: bool = True) -> None:
-        """
-        Method to enable/disable the editing rectangle spinboxes
-
-        :param enabled: Enable status of the spinboxes
-        :return: None
-        """
-        self.ui.spb_x.setEnabled(enabled)
-        self.ui.spb_y.setEnabled(enabled)
-        self.ui.spb_width.setEnabled(enabled)
-        self.ui.spb_height.setEnabled(enabled)
-
-    def set_status(self, status: str) -> None:
-        """
-        Method to display a status to the user
-
-        :param status: The status to display
-        :return: None
-        """
-        self.ui.lbl_status.setText(status)
-
-    def get_current_editing_rect(self):
-        x, y = self.ui.spb_x.value(), self.ui.spb_y.value()
-        width, height = self.ui.spb_width.value(), self.ui.spb_height.value()
-        return x - width // 2, y - height // 2, width, height
-
-    def enable_buttons(self, enabled: bool) -> None:
-        """
-        Method to enable/disable all editing buttons
-
-        :param enabled: bool
-        :return: None
-        """
-        self.ui.btn_binmap.setEnabled(enabled)
-        self.ui.btn_channel.setEnabled(enabled)
-        self.ui.btn_edm.setEnabled(enabled)
-
-    def change_map_mode(self, index: int) -> None:
-        """
-        Method to change the shown map
-
-        :param index: The index of the map
-        :return: None
-        """
-        self.map_index = index
-        self.show_map()
-
-    def restore_maps(self) -> None:
-        """
-        Method to restore the original map
-
-        :return: None
-        """
-        self.enable_buttons(True)
-        self.enable_spinboxes(True)
-        # np.copy, as the constructor does. Assigning the originals directly made temp_* aliases
-        # of them, so every later in-place edit -- the watershed working map, the center removal --
-        # wrote straight through into self.main / self.main_map / self.edm, and there was nothing
-        # left to restore from the next time round
-        self.temp_main = np.copy(self.main)
-        self.temp_map = np.copy(self.main_map)
-        self.temp_edm = np.copy(self.edm)
-        self.show_map()
-        # The maps are uncropped again and reset_position puts every rect back into full image
-        # coordinates, so nothing here is a valid seed any more. lock_image refills this
-        self.locked = False
-        self.active_centers = []
-        # Re-Add all removed centers
-        for item in self.centers:
-            item.reset_position()
-            self.plot_item.addItem(item)
-        # Reset the position of the editing rectangle
-        self.change_edit_rectangle()
-
-    def show_map(self) -> None:
-        """
-        Method to show the current working map
-
-        :return: None
-        """
-        if self.map_index == 0:
-            self.img_item.setImage(self.temp_main)
-        elif self.map_index == 1:
-            self.img_item.setImage(self.temp_map)
-        else:
-            self.img_item.setImage(self.temp_edm)
-
-    @staticmethod
-    def get_main_roi(roi: ROIHandler) -> List[ROI]:
-        """
-        Method to get all roi that are labelled as main
-
-        :param roi: The handler containing all roi
-        :return: List of all main roi
-        """
-        return [x for x in roi if x.main]
-
-    @staticmethod
-    def get_main_map(shape: Tuple[int, int], rois: List[ROI]) -> np.ndarray:
-        """
-        Method to create a binary map containing all roi
-
-        :param shape: The shape of the map
-        :param rois: The roi to imprint into the map
-        :return: The created map
-        """
-        map_ = np.zeros(shape)
-        for roi in rois:
-            imprint_area_into_array(roi.area, map_, 1)
-        return map_
-
-
-class AutoEditGraphicsView(pg.GraphicsView):
-    """
-    Class to track mouse movement over the graphicsview
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.mapped_mouse_position = QPoint()
-        self.raw_mouse_position = None
-
-    def mouseMoveEvent(self, ev):
-        if self.centralWidget:
-            new_pos = self.centralWidget.vb.mapSceneToView(ev.pos())
-            self.raw_mouse_position = ev.pos()
-            self.mapped_mouse_position.setX(round(new_pos.x()))
-            self.mapped_mouse_position.setY(round(new_pos.y()))
-        # This override only RECORDS the position; without handing the event on, pyqtgraph never
-        # saw it and pan/drag in the auto-edit view did nothing at all
-        super().mouseMoveEvent(ev)
-
-    def get_items_at_mapped_position(self, pos: QPointF, matching_type: Any) -> List[Any]:
-        """
-        Method to get all visible items at the specified position
-
-        :param pos: The position to look at
-        :param matching_type: If not None, only items with the same class will be returned
-        :return: All found items
-        """
-        if matching_type:
-            return [x for x in self.scene().items(self.mapToScene(pos)) if isinstance(x, matching_type)]
-        else:
-            return self.scene().items(self.mapToScene(pos))
-
-
-class AutoEditCenterItem(QGraphicsEllipseItem):
-
-    def __init__(self, posx, posy, width, height, reference: int = None):
-        """
-        Constructor for this item
-
-        :param posx: The center X positon
-        :param posy: The center Y position
-        :param width: The width of the item
-        :param height: The height of the item
-        :param reference: Hash of the ROI this center was derived from
-        """
-        super().__init__(posx - width//2, posy - height//2, width, height)
-        self.center = posy, posx
-        self.orig_rect = QRectF(posx - width//2, posy - height//2, width, height)
-        self.reference = reference
-
-    def current_center(self) -> Tuple[int, int]:
-        """
-        Method to get the center of this item in its current coordinate space
-
-        The constructor stores the rect at (posx - width // 2, posy - height // 2), so recovering
-        the center means ADDING the half extent back. It lives here, next to the subtraction it
-        inverts, because the two have to agree; adjust_centers_to_edm used to subtract a second
-        time and place every seed 14 px up and left of the nucleus the user clicked
-
-        Not to be confused with self.center, which is the position this item was CREATED at.
-        lock_image rewrites the rect into crop coordinates, and self.center does not follow
-
-        :return: The current center of this item as (y, x)
-        """
-        rect = self.rect()
-        return int(rect.y() + rect.height() // 2), int(rect.x() + rect.width() // 2)
-
-    def reset_position(self) -> None:
-        """
-        Function to restore the original position of this item
-
-        :return: None
-        """
-        self.setRect(self.orig_rect)
 
 
 def ask_for_name(parent: QWidget, title: str, label: str) -> Tuple[str, bool]:
@@ -2457,6 +1961,22 @@ class StatisticsDialog(QDialog):
                             columns=data_header)
         # Remove the unnecessary columns
         data = data[["Group", "Channel", "Foci"]]
+        # THE CHANNEL SELECTION IS APPLIED HERE, and until 2026-09-20 it was applied nowhere:
+        # active_channels was accepted by __init__, reassigned on every experiment change and read
+        # by nothing, so ticking the boxes in ExperimentSelectionDialog changed neither the table
+        # nor the plot. Reported from real use twice -- UI rows 7 and 8 -- before it was wired up.
+        #
+        # Filtered at the single point where the frame is built, so the table, the plot, the
+        # statistics and the CSV export all see the same rows; every one of them reads self.data.
+        # The dialog's boxes carry the non-main channel names, which is exactly what the Channel
+        # column holds (get_table_data_for_image takes them from get_channel_names(image, False)).
+        active = [name for name, selected in self.active_channels.items() if selected]
+        # An empty mapping means "nobody has chosen", not "choose nothing": StatisticsDialog can be
+        # built directly with {}, and filtering to nothing there would silently empty a dialog that
+        # used to show everything. An empty SELECTION cannot arrive here at all -- the selection
+        # dialog refuses to close on one.
+        if active:
+            data = data[data["Channel"].isin(active)]
         # Tell pandas which dtypes to use
         data["Foci"] = pd.to_numeric(data["Foci"], errors="coerce")
         return data
@@ -2715,23 +2235,50 @@ class PlotSettingsDialog(QDialog):
                             QtCore.Qt.WindowMinMaxButtonsHint)
 
     def _connect_widgets_to_update_timer(self):
-        self.ui.spb_h_size.valueChanged.connect(self.update_timer.start)
-        self.ui.spb_v_size.valueChanged.connect(self.update_timer.start)
-        self.ui.spb_dpi.valueChanged.connect(self.update_timer.start)
-        self.ui.cmbx_font.currentTextChanged.connect(self.update_timer.start)
-        self.ui.spb_title_size.valueChanged.connect(self.update_timer.start)
-        self.ui.spb_axis_size.valueChanged.connect(self.update_timer.start)
-        self.ui.spb_tick_size.valueChanged.connect(self.update_timer.start)
-        self.ui.cmbx_palette.currentTextChanged.connect(self.update_timer.start)
-        self.ui.cbx_show_legend.stateChanged.connect(self.update_timer.start)
-        self.ui.spb_legend_font_size.valueChanged.connect(self.update_timer.start)
-        self.ui.cbx_grid_show.stateChanged.connect(self.update_timer.start)
-        self.ui.cbx_ticks_minor.stateChanged.connect(self.update_timer.start)
-        self.ui.spb_steps_major.valueChanged.connect(self.update_timer.start)
-        self.ui.spb_steps_minor.valueChanged.connect(self.update_timer.start)
-        self.ui.cmbx_orientation.currentTextChanged.connect(self.update_timer.start)
-        self.ui.cbx_violin_split.stateChanged.connect(self.update_timer.start)
-        self.ui.cmbx_violin_inner.currentTextChanged.connect(self.update_timer.start)
+        """
+        Method to make every settings widget schedule one delayed redraw
+
+        Each connection goes through `_schedule_redraw`, which takes no arguments, rather than
+        straight to `QTimer.start`. That indirection is the whole point: `start` accepts an
+        optional interval in milliseconds and **overrides the configured one**, so connecting a
+        value-carrying signal to it hands the widget's own value in as the delay. Measured against
+        real widgets and a timer configured exactly as this one is: a DPI spin box at 2500 made the
+        preview wait 2.5 seconds, a step count of 0 fired on the next event-loop pass, and every
+        check box and combo box drove the interval to 0 or 2 ms -- re-rendering on every tick,
+        which is precisely what the 300 ms debounce exists to prevent.
+
+        The check boxes are the same `stateChanged`-emits-an-int trap that has now produced four
+        defects in this project. `toggled` would carry a bool, but the argument is unwanted here
+        either way, so all seventeen are uniform.
+        """
+        self.ui.spb_h_size.valueChanged.connect(self._schedule_redraw)
+        self.ui.spb_v_size.valueChanged.connect(self._schedule_redraw)
+        self.ui.spb_dpi.valueChanged.connect(self._schedule_redraw)
+        self.ui.cmbx_font.currentTextChanged.connect(self._schedule_redraw)
+        self.ui.spb_title_size.valueChanged.connect(self._schedule_redraw)
+        self.ui.spb_axis_size.valueChanged.connect(self._schedule_redraw)
+        self.ui.spb_tick_size.valueChanged.connect(self._schedule_redraw)
+        self.ui.cmbx_palette.currentTextChanged.connect(self._schedule_redraw)
+        self.ui.cbx_show_legend.stateChanged.connect(self._schedule_redraw)
+        self.ui.spb_legend_font_size.valueChanged.connect(self._schedule_redraw)
+        self.ui.cbx_grid_show.stateChanged.connect(self._schedule_redraw)
+        self.ui.cbx_ticks_minor.stateChanged.connect(self._schedule_redraw)
+        self.ui.spb_steps_major.valueChanged.connect(self._schedule_redraw)
+        self.ui.spb_steps_minor.valueChanged.connect(self._schedule_redraw)
+        self.ui.cmbx_orientation.currentTextChanged.connect(self._schedule_redraw)
+        self.ui.cbx_violin_split.stateChanged.connect(self._schedule_redraw)
+        self.ui.cmbx_violin_inner.currentTextChanged.connect(self._schedule_redraw)
+
+    def _schedule_redraw(self) -> None:
+        """
+        Method to restart the redraw debounce at its configured interval
+
+        Takes no arguments on purpose -- see `_connect_widgets_to_update_timer`. Do not connect a
+        widget signal to `self.update_timer.start` directly.
+
+        :return: None
+        """
+        self.update_timer.start()
 
     #: The system font names, resolved once per process. Registering them is global and
     #: cumulative -- matplotlib's font manager keeps every font ever added -- so doing it on every
@@ -3095,9 +2642,17 @@ class GroupDialog(QDialog):
                                    " This action cannot be reversed!",
                                    QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel)
         if clk == QMessageBox.Yes:
-            # Remove list item
+            # THE MODEL, AND ONLY THE MODEL -- RW, 2026-09-16: *"consolidate add and remove"*.
+            #
+            # This used to delete the group's rows and commit here, while `add_group` and
+            # `add_images_to_group` only touch the model and rely on the save path. So Cancel
+            # undid every addition and kept every deletion, which is the opposite of what a
+            # Cancel button promises.
+            #
+            # The immediate write was also REDUNDANT: `ExperimentDialog.save_changes` calls
+            # `remove_group_associations_for_experiment` and rewrites every association from this
+            # model, so a group removed from the model is removed from the database on OK
+            # whether or not anything was deleted here. Dropping the write is therefore all that
+            # is needed to put both halves on one contract -- the model is the pending state, and
+            # OK applies it.
             self.group_model.removeRow(index)
-            # Update images in database
-            for key in data["keys"]:
-                self.inserter.remove_image_from_group(key, self.data["name"])
-            self.inserter.commit()

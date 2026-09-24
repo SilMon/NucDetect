@@ -137,19 +137,6 @@
            </attribute>
           </widget>
          </item>
-         <item>
-          <widget class="QPushButton" name="btn_auto">
-           <property name="enabled">
-            <bool>false</bool>
-           </property>
-           <property name="toolTip">
-            <string>Opens a dialog to semi-automatically adjust the nucleus detection</string>
-           </property>
-           <property name="text">
-            <string>Auto Edit</string>
-           </property>
-          </widget>
-         </item>
         </layout>
        </item>
        <item>
@@ -380,7 +367,7 @@
           <bool>false</bool>
          </property>
          <property name="toolTip">
-          <string>X coordinate of the ellipse center</string>
+          <string>X coordinate of the ellipse center. Press A to apply typed values to the selected item.</string>
          </property>
         </widget>
        </item>
@@ -474,7 +461,7 @@
           <bool>false</bool>
          </property>
          <property name="toolTip">
-          <string>Clockwise angle of the major axis. </string>
+          <string>Clockwise angle of the major axis. Press A to apply typed values to the selected item.</string>
          </property>
          <property name="minimum">
           <double>-360.000000000000000</double>

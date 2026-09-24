@@ -1,15 +1,13 @@
 import os
 import threading
-from typing import Iterable, Dict, List, Tuple
+from typing import Callable, Iterable, Dict, List, Tuple
 import numpy as np
 import tensorflow as tf
 from scipy.signal.windows import hann
-from skimage.exposure import rescale_intensity
 from skimage.feature import peak_local_max
-from skimage.filters import gaussian, threshold_otsu, threshold_minimum, threshold_local
-from skimage.filters.rank import maximum
+from skimage.filters import threshold_otsu
 from skimage.segmentation import watershed
-from scipy.ndimage import label, binary_fill_holes
+from scipy.ndimage import label
 from skimage.morphology import opening
 from skimage.transform import resize
 from skimage.util import view_as_windows
@@ -28,6 +26,37 @@ _MODEL_CACHE = None
 _MODEL_CACHE_LOCK = threading.Lock()
 from core.detector_modules.AreaMapper import AreaMapper
 from core.detector_modules.ImageLoader import dtype_max
+
+
+class _BatchProgress(tf.keras.callbacks.Callback):
+    """
+    Callback reporting how far a `model.predict` call has got, one step per BATCH
+
+    Added 2026-09-21. The u-net stage is essentially all inference -- measured per channel at
+    1 % resize, 0 % tiling, **99 % predict**, 0 % merge -- so there is no cheaper place to report
+    from: every other step in `map_channels` is too fast to see. That also rules out the obvious
+    alternative of reporting around the other steps instead.
+
+    **It reports two steps per channel and no more**, because 49 tiles at the Keras default batch
+    of 32 is two batches. Making it finer means a smaller batch, which RW ruled out on cost -- see
+    `predict_tiles`. Two is what is available for free, and it is the difference between a bar that
+    stands still for the whole inference and one that moves.
+    """
+
+    def __init__(self, report: Callable[[float], None]):
+        super().__init__()
+        self._report = report
+        self._batches = 0
+
+    def on_predict_begin(self, logs=None):
+        self._batches = 0
+
+    def on_predict_batch_end(self, batch, logs=None):
+        # `batch` is the zero-based index, so +1 is the count completed. The total is not known
+        # here -- Keras does not pass it -- so the fraction is derived from the tile count by the
+        # caller instead of guessed at
+        self._batches = batch + 1
+        self._report(min(self._batches / max(self.params.get("steps") or 1, 1), 1.0))
 
 
 class FCNMapper(AreaMapper):
@@ -49,15 +78,35 @@ class FCNMapper(AreaMapper):
     # present every feature at twice the size the network recognises, which is a detection-accuracy
     # problem. The prediction is resized back to the image's own shape afterwards.
     #
-    # Note this normalises by PIXEL DIMENSIONS, which is only equivalent to normalising by feature
-    # scale while every image covers the same field of view at the same magnification. Making it
-    # depend on dots_per_micron instead is what the TODO in map_channels asks for; that setting is
-    # already carried in analysis_settings and is currently read but unused elsewhere.
+    # THIS NORMALISES BY PIXEL DIMENSIONS, AND FOR THIS LAB'S DATA THAT IS CORRECT -- which is not
+    # obvious and was an open question until RW answered it on 2026-09-21: *"The Network was
+    # trained on both 40x and 63x images, tiled to 256x256 tiles."*
+    #
+    # Pixel-dimension normalisation is only equivalent to FEATURE-SCALE normalisation while every
+    # image covers the same field of view at the same magnification, and this lab's two modes do
+    # not: 159.7 um at 40x and 101.4 um at 63x, both 1024x1024, a 1.575x difference in physical
+    # scale at identical pixel dimensions. **The network was trained across both, so both are in
+    # distribution and neither needs correcting.**
+    #
+    # DO NOT make the resize depend on dots_per_micron. An earlier TODO in map_channels asked for
+    # exactly that, and it is the wrong change: forcing one magnification onto the other's feature
+    # scale would push 63x material to look like 40x, or the reverse, which is what training on
+    # both was meant to make unnecessary. The TODO predates knowing the training set spans both.
     TRAINING_SHAPE = (1024, 1024)
     # The input shape of the saved detector.keras. Tiles are cut to this size and predicted in one
     # batch; a fully convolutional network is theoretically size-agnostic, but this model object is
     # built for a fixed input, so feeding a whole image would mean rebuilding it per image shape.
     TILE_SHAPE = (256, 256)
+    # The physical width one inference tile covers in the material the network was trained on.
+    # Derived from RW's answer above: at 6.4120 px/um (40x) a 256 px tile covers 256 / 6.4120 =
+    # 39.9 um, and at 10.0986 px/um (63x) it covers 25.4 um. The network learned foci across that
+    # span, so a channel whose tiles land inside it is in distribution.
+    #
+    # It exists to catch the case the pixel-dimension resize genuinely cannot handle: an image that
+    # is NOT 1024x1024, or not at one of the two modes. A 2048x2048 image at 40x covers 319.4 um,
+    # so after the resize each tile covers 79.9 um -- twice the widest tile ever trained on -- and
+    # before this check nothing said so.
+    TRAINED_TILE_COVERAGE_UM = (25.4, 39.9)
 
     def __init__(self, channels: Iterable[np.ndarray] = None, settings: Dict = None):
         # There was a `self.script_dir = Path().resolve().parent / "fcn" / "model"` here. It was
@@ -173,33 +222,87 @@ class FCNMapper(AreaMapper):
         pmaps = self.map_channels()
         return self.threshold_maps(pmaps)
 
+    @classmethod
+    def tile_coverage_um(cls, shape: Tuple[int, int], dots_per_micron: float) -> float:
+        """
+        Calculate how many micrometres one inference tile covers, for a channel of the given shape
+
+        The channel is resized to TRAINING_SHAPE before it is tiled, so a tile of TILE_SHAPE pixels
+        corresponds to ``TILE_SHAPE * shape / TRAINING_SHAPE`` pixels of the ORIGINAL image -- and
+        it is the original that `dots_per_micron` describes.
+
+        :param shape: The channel's own shape, before the resize
+        :param dots_per_micron: Pixels per micron of the original image
+        :return: The width one tile covers, in micrometres
+        """
+        return cls.TILE_SHAPE[1] * shape[1] / cls.TRAINING_SHAPE[1] / dots_per_micron
+
+    def warn_if_outside_trained_scale(self, shape: Tuple[int, int]) -> bool:
+        """
+        Report when an image's tiles fall outside the feature scale the network was trained on
+
+        Reports only -- it changes no result. The resize to TRAINING_SHAPE is correct for this
+        lab's two acquisition modes (see TRAINING_SHAPE), and this is the case it cannot cover.
+
+        :param shape: The channel's own shape, before the resize
+        :return: True when a warning was issued
+        """
+        scale = self.settings.get("dots_per_micron") if self.settings else None
+        if not scale:
+            # Absent from hand-built settings dictionaries, and its absence is not an error here --
+            # this method reports, so a missing scale means "cannot report", not "cannot run"
+            return False
+        coverage = self.tile_coverage_um(shape, scale)
+        low, high = self.TRAINED_TILE_COVERAGE_UM
+        # A tenth of tolerance either side, so a slightly different calibration of the SAME
+        # acquisition mode does not cry wolf. The case this is for is off by a factor of two
+        if low * 0.9 <= coverage <= high * 1.1:
+            return False
+        self.log(f"WARNING: one u-net tile covers {coverage:.1f} um for this image, outside the "
+                 f"{low:.1f}-{high:.1f} um the network was trained on. Foci may be detected at the "
+                 f"wrong size. Image {shape[1]}x{shape[0]} px at {scale:.4f} px/um")
+        return True
+
     def map_channels(self) -> List[np.ndarray]:
         """
         Method to map the given channels
 
-        Progress is reported per channel only. The inference itself is one `model.predict` call
-        covering every tile at once, which is where essentially all of the ~21 s goes and which
-        this loop cannot see into; reporting inside it would need a Keras callback, and useful
-        granularity would also need a smaller batch size than the default, at some cost in
-        inference throughput.
+        Progress is reported per channel, and twice more within each channel's inference: a Keras
+        callback on `on_predict_batch_end` fires once per predict batch, which at the default
+        batch size is twice for the 49 tiles a 1024x1024 channel produces. Measured 2026-09-21 at
+        -1 % (noise), where a batch size small enough for finer reporting costs 29-110 %.
 
         :return: The prediction maps
         """
         prediction_maps = []
         channels = list(self.channels)
         count = max(1, len(channels))
+        if channels:
+            # Once per call, not once per channel: every channel of one image has the same shape
+            self.warn_if_outside_trained_scale(channels[0].shape)
         for ind, channel in enumerate(channels):
             self.progress(ind / count, f"Detecting foci on channel {ind + 1}/{count} (u-net)")
             orig_shape = channel.shape
             orig_dtype = channel.dtype
-            # Resize the channel to match the training size
-            # TODO resizen von feature größe abhängig machen, tilen übernimmt den Rest
+            # Resize the channel to match the training size.
+            #
+            # A `TODO resizen von feature groesse abhaengig machen` stood here until 2026-09-21.
+            # It is deleted rather than done: the network was trained on BOTH of this lab's
+            # magnifications, so driving the resize from dots_per_micron would force one of them
+            # onto the other's feature scale and make things worse. See TRAINING_SHAPE.
             channel = resize(channel, output_shape=self.TRAINING_SHAPE,
                              preserve_range=True, anti_aliasing=True).astype(orig_dtype)
             # Split channel images into tiles
             tiles = self.extract_subimages(channel, self.TILE_SHAPE)
             # Predict the individual tiles
-            ptiles = self.predict_tiles(tiles, self.model)
+            # The channel's own share of the stage, so the fraction the callback reports is
+            # mapped into the slice of the bar this channel owns rather than restarting at 0
+            base, span = ind / count, 1 / count
+            ptiles = self.predict_tiles(
+                tiles, self.model,
+                progress=lambda done: self.progress(
+                    base + done * span,
+                    f"Detecting foci on channel {ind + 1}/{count} (u-net)"))
             # Merge the tiles back into TRAINING_SHAPE, then resize that to the image's own shape.
             # The merge must be told the shape the tiles were CUT FROM, not the original: it derives
             # the tile grid from that shape, and the tiles came from the resized channel. Passing
@@ -240,12 +343,27 @@ class FCNMapper(AreaMapper):
 
     @staticmethod
     def predict_tiles(tiles: List[np.ndarray],
-                      model: models.Model) -> List[np.ndarray]:
+                      model: models.Model,
+                      progress: Callable[[float], None] = None) -> List[np.ndarray]:
         """
         Method to predict a list of tiles
 
+        **`verbose=0`, which is new on 2026-09-21**: Keras defaults to printing its own progress bar
+        to stdout, and it was doing so on every analysis -- visible in any console the program was
+        started from, and meaningless there.
+
+        `progress` is called with a fraction as each BATCH completes, which is the only granularity
+        available without slowing inference down. **The batch size is deliberately left at the Keras
+        default.** RW ruled on 2026-09-21 that a smaller batch is only acceptable if the cost is
+        negligible, and it is not: measured on this model over 49 tiles, batch 16 costs +29 to +49 %
+        and batch 8 costs +35 to +110 % -- roughly +1.1 s and +1.7 to +3.1 s per channel, several
+        seconds per image once every foci channel is counted. The default gives two callbacks per
+        channel, which turns a bar that stood still for the whole inference into one that moves
+        twice, for nothing.
+
         :param tiles: The tiles to predict
         :param model: The model to use for the prediction
+        :param progress: Optional callback, receiving the fraction of batches completed
         :return: Predictions for all tiles
         """
         orig_max = dtype_max(tiles[0].dtype)
@@ -258,7 +376,8 @@ class FCNMapper(AreaMapper):
         # tiles came from another. Two statements of the same fact only agree until one is edited.
         tile_height, tile_width = FCNMapper.TILE_SHAPE
         tiles = tiles.reshape(-1, tile_height, tile_width, 1)
-        return [pred[:, :, 0] for pred in model.predict(tiles)]
+        callbacks = [_BatchProgress(progress)] if progress else None
+        return [pred[:, :, 0] for pred in model.predict(tiles, verbose=0, callbacks=callbacks)]
 
     @staticmethod
     def merge_prediction_tiles(masks: List[np.ndarray],

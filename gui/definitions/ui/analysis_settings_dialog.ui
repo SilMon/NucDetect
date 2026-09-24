@@ -20,7 +20,7 @@
    <item>
     <layout class="QFormLayout" name="formLayout">
      <item row="0" column="0">
-      <widget class="QLabel" name="label_14">
+      <widget class="QLabel" name="lbl_detectionmethod">
        <property name="text">
         <string>Detection Method</string>
        </property>
@@ -81,7 +81,7 @@
       </widget>
      </item>
      <item row="2" column="0">
-      <widget class="QLabel" name="label_12">
+      <widget class="QLabel" name="lbl_noisered">
        <property name="sizePolicy">
         <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
          <horstretch>0</horstretch>
@@ -118,7 +118,7 @@
       </layout>
      </item>
      <item row="4" column="0">
-      <widget class="QLabel" name="label_16">
+      <widget class="QLabel" name="lbl_bckred">
        <property name="sizePolicy">
         <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
          <horstretch>0</horstretch>
@@ -161,34 +161,8 @@
        </property>
       </widget>
      </item>
-     <item row="7" column="0">
-      <widget class="QLabel" name="label_11">
-       <property name="text">
-        <string>Dots per micron:</string>
-       </property>
-      </widget>
-     </item>
-     <item row="7" column="1">
-      <widget class="QDoubleSpinBox" name="spbx_mmpd">
-       <property name="toolTip">
-        <string>Standard value (6.412) assumes a 1024x1024 image at 400 magnification</string>
-       </property>
-       <property name="suffix">
-        <string/>
-       </property>
-       <property name="decimals">
-        <number>4</number>
-       </property>
-       <property name="maximum">
-        <double>100.000000000000000</double>
-       </property>
-       <property name="value">
-        <double>6.412000000000000</double>
-       </property>
-      </widget>
-     </item>
      <item row="8" column="1">
-      <widget class="QLabel" name="label_9">
+      <widget class="QLabel" name="lbl_expdet">
        <property name="text">
         <string>Experiment Details</string>
        </property>
@@ -198,7 +172,7 @@
       </widget>
      </item>
      <item row="9" column="0">
-      <widget class="QLabel" name="label">
+      <widget class="QLabel" name="lbl_name">
        <property name="text">
         <string>Name</string>
        </property>
@@ -232,7 +206,7 @@
       </layout>
      </item>
      <item row="10" column="0">
-      <widget class="QLabel" name="label_8">
+      <widget class="QLabel" name="lbl_det">
        <property name="text">
         <string>Details</string>
        </property>
@@ -252,7 +226,7 @@
       </widget>
      </item>
      <item row="11" column="0">
-      <widget class="QLabel" name="label_10">
+      <widget class="QLabel" name="lbl_notes">
        <property name="text">
         <string>Notes</string>
        </property>
@@ -283,7 +257,7 @@
       </widget>
      </item>
      <item row="12" column="1">
-      <widget class="QLabel" name="label_7">
+      <widget class="QLabel" name="lbl_actchn">
        <property name="text">
         <string>Active Channels</string>
        </property>
@@ -293,7 +267,7 @@
       </widget>
      </item>
      <item row="14" column="0">
-      <widget class="QLabel" name="label_2">
+      <widget class="QLabel" name="lbl_chn1">
        <property name="text">
         <string>Channel 1</string>
        </property>
@@ -340,7 +314,7 @@
       </layout>
      </item>
      <item row="15" column="0">
-      <widget class="QLabel" name="label_3">
+      <widget class="QLabel" name="lbl_chn2">
        <property name="text">
         <string>Channel 2</string>
        </property>
@@ -390,7 +364,7 @@
       </layout>
      </item>
      <item row="16" column="0">
-      <widget class="QLabel" name="label_4">
+      <widget class="QLabel" name="lbl_chn3">
        <property name="text">
         <string>Channel 3</string>
        </property>
@@ -440,7 +414,7 @@
       </layout>
      </item>
      <item row="17" column="0">
-      <widget class="QLabel" name="label_5">
+      <widget class="QLabel" name="lbl_chn4">
        <property name="text">
         <string>Channel 4</string>
        </property>
@@ -490,7 +464,7 @@
       </layout>
      </item>
      <item row="18" column="0">
-      <widget class="QLabel" name="label_6">
+      <widget class="QLabel" name="lbl_chn5">
        <property name="text">
         <string>Channel 5</string>
        </property>
@@ -534,6 +508,49 @@
          </property>
          <property name="text">
           <string/>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+     <item row="5" column="0">
+      <widget class="QLabel" name="lbl_dpm">
+       <property name="text">
+        <string>Dots per micron:</string>
+       </property>
+      </widget>
+     </item>
+     <item row="5" column="1">
+      <layout class="QHBoxLayout" name="horizontalLayout_13" stretch="2,0">
+       <item>
+        <widget class="QDoubleSpinBox" name="spbx_mmpd">
+         <property name="toolTip">
+          <string>Standard value (6.412) assumes a 1024x1024 image at 400 magnification</string>
+         </property>
+         <property name="suffix">
+          <string/>
+         </property>
+         <property name="decimals">
+          <number>4</number>
+         </property>
+         <property name="maximum">
+          <double>100.000000000000000</double>
+         </property>
+         <property name="value">
+          <double>6.412000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="cbx_uniform">
+         <property name="toolTip">
+          <string>Apply the factor on the left to every image in this run. Uncheck to enter a factor per image.</string>
+         </property>
+         <property name="text">
+          <string>uniform</string>
+         </property>
+         <property name="checked">
+          <bool>true</bool>
          </property>
         </widget>
        </item>

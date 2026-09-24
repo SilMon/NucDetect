@@ -1,12 +1,10 @@
 import warnings
-from math import sqrt
-from typing import Iterable, Tuple, Dict, List, Any
+from typing import Tuple, Dict, List, Any
 
 import numpy as np
 from skimage.exposure import rescale_intensity
 from skimage.restoration import denoise_tv_chambolle, denoise_bilateral, denoise_wavelet
 from skimage.util import img_as_float
-from skimage.draw import disk
 from skimage.feature import blob_log
 from skimage.filters import gaussian, unsharp_mask, butterworth
 from skimage.filters.rank import mean, median
@@ -23,8 +21,41 @@ class FocusMapper(AreaMapper):
     # No __slots__ -- see the note on AreaMapper for why the hierarchy does not use them.
     STANDARD_SETTINGS = {
         "use_smoothing": False,
+        # The six keys preprocess_channel indexes under `use_smoothing`, added 2026-09-15. They
+        # were read with [] and declared nowhere, which is the `use_signal_improvement` trap in
+        # reverse: the dict the application runs with supplies them, this fallback did not, and
+        # the only reason it never raised is that `use_smoothing` above is False here -- so the
+        # branch is unreachable from this dict and a caller that switches smoothing on against it
+        # gets a KeyError out of the middle of an analysis.
+        #
+        # DECLARED rather than switched to .get, deliberately. This dict claims to be a runnable
+        # fallback; .get with an invented default would smooth with parameters nobody chose, and
+        # silently. The five numeric values are the ones gui/settings/settings.json seeds into
+        # the settings table, so the fallback and the real dict start from the same place.
+        # "Gaussian" is the analysis dialog's combo box at index 0, which is what an untouched
+        # dialog supplies, and it is a real branch of perform_noise_reduction.
+        "smoothing_method": "Gaussian",
+        "filter_radius": 3,
+        "gaussian_sigma": 1.5,
+        "denoising_weight": 0.15,
+        "sigma_color": 0.1,
+        "sigma_spatial": 15,
         "use_background_reduction": False,
-        "use_signal_improvement": False,
+        # "use_signal_improvement": False stood here until 2026-09-14. RW: *"Signal improvement
+        # is no longer supported by the program."* The key appeared once in the whole tree, in
+        # this dict: nothing read it and nothing supplied it, so the settings dict a real
+        # analysis runs with never contained it.
+        #
+        # THE LESSON IS THE DICT, NOT THE KEY. STANDARD_SETTINGS is a FALLBACK, not a
+        # description of the real settings -- a log line added on 2026-08-21 read this key,
+        # ran green against this dict in a harness, and raised KeyError on the first real
+        # analysis. A key here that no dialog, settings.json entry or seed supplies is a trap
+        # for the next person who assumes the two agree.
+        #
+        # "smoothing": 3 stood here until 2026-09-15, and "cutoff" and "min_nucleus_int_perc"
+        # in QualityTester.STANDARD_SETTINGS went with it -- the last three keys in this state.
+        # RW ruled on all three at once. Nothing supplied them and nothing read them: the whole
+        # tree held each name exactly once, in the dict that declared it.
         # Reconciled with what the application actually ships, 2026-08-15. dots_per_micron was
         # 1.3938, which implies a 1024 px field of 734.7 um and matches no acquisition the lab
         # performs; it is now the analysis settings dialog's own default. min_sigma/max_sigma were
@@ -35,9 +66,11 @@ class FocusMapper(AreaMapper):
         # rather than trusted. If the acquisition calibration behind 6.412 is ever corrected, this
         # value moves with the dialog default rather than being a second place to remember.
         "dots_per_micron": 6.412,
-        "smoothing": 3,
-        "min_sigma": 1.5,
-        "max_sigma": 3.5,
+        # MICROMETRES since 2026-09-14, converted to pixels in detect_foci_on_acc_map. These
+        # two were 1.5 and 3.5 PIXELS, which at the 6.412 px/um default is what they still
+        # mean on a 40x image -- the numbers changed, the detection did not.
+        "min_sigma": 0.2339,
+        "max_sigma": 0.5459,
         "num_sigma": 10,
         "acc_thresh": .1,
         "overlap": .10,
@@ -89,8 +122,9 @@ class FocusMapper(AreaMapper):
         get = self.settings.get
         self.log("Focus Detection:")
         self.log(f"Channels to process: {count}")
-        self.log(f"Sigma range: {get('min_sigma', '?')}-{get('max_sigma', '?')} "
-                 f"({get('num_sigma', '?')} steps)")
+        self.log(f"Sigma range: {get('min_sigma', '?')}-{get('max_sigma', '?')} um "
+                 f"({get('num_sigma', '?')} steps, "
+                 f"{get('dots_per_micron', '?')} px/um)")
         self.log(f"Accumulator threshold: {get('acc_thresh', '?')}, "
                  f"max overlap: {get('overlap', '?')}")
         self.log(f"Preprocessing: smoothing={get('use_smoothing', '?')}, "
@@ -108,7 +142,11 @@ class FocusMapper(AreaMapper):
             # one number that makes an empty or runaway channel obvious in the log
             self.log(f"Channel {ind + 1}/{count}: {len(foci)} foci detected")
             # Create foci map and append
-            foci_maps.append(foci)#self.create_foci_map(pchannel.shape, foci))
+            # The disabled `#self.create_foci_map(pchannel.shape, foci)` stood here until
+            # 2026-09-20, when the method it called was deleted as dead code. What this stage
+            # returns is the blob_log LIST, and every consumer downstream reads it as one; the
+            # binary map was an earlier representation that nothing has asked for since.
+            foci_maps.append(foci)
         self.log(f"Foci detected in total: {sum(len(f) for f in foci_maps)}")
         return foci_maps
 
@@ -265,27 +303,12 @@ class FocusMapper(AreaMapper):
             else (0, 255)
         return rescale_intensity(processed, in_range="image", out_range=out_range).astype(channel.dtype)
 
-    @staticmethod
-    def check_for_preprocessing(main: np.ndarray, channel: np.ndarray) -> Tuple[bool, bool]:
-        """
-        Method to check if the channel should be pre-processed or not
-
-        :param main: Binary image of the main channel
-        :param channel: The focus channel to test
-        :return: True if pre-processing should be applied, True if the image should be smoothed beforehand
-        """
-        hist_raw = []
-        for y in range(channel.shape[0]):
-            for x in range(channel.shape[1]):
-                if main[y][x]:
-                    hist_raw.append(channel[y][x])
-        # Calculate the histogram
-        hist, counts = np.unique(hist_raw, return_counts=True)
-        # Calculate the percentage histogram
-        sum_ = sum(counts)
-        phist = [x / sum_ * 100 for x in counts]
-        # Check the first 15% of the histogram
-        return sum(phist[:int(len(phist) * 0.15)]) > 45
+    # check_for_preprocessing was removed here on 2026-09-20. It decided whether a channel
+    # should be pre-processed by building a histogram of the main channel's pixels in a nested
+    # Python loop, and it had no callers -- preprocessing is driven by the `use_smoothing` and
+    # `use_background_reduction` settings instead. It was also annotated `-> Tuple[bool, bool]`
+    # while returning a single bool, so the docstring's "True if pre-processing should be
+    # applied, True if the image should be smoothed" never matched what it answered.
 
     @staticmethod
     def detect_foci_on_acc_map(settings: Dict, acc_map: np.ndarray) -> List[Tuple]:
@@ -297,10 +320,18 @@ class FocusMapper(AreaMapper):
         :return: The detected foci
         """
         # Get needed variables
+        # MULTIPLY: dots_per_micron is pixels per micron, so a sigma in um becomes pixels. The
+        # settings are declared in micrometres and converted here, which is the same rule the
+        # quality check's size bounds follow -- RW, 2026-09-14: "The settings are in um and should
+        # be converted to pixel sizes for the analysis."
+        #
+        # This is what the `# TODO fix conversion via mmpd` that stood here asked for. Until
+        # 2026-09-14 mmpd was read and discarded, so the sigma range was in PIXELS and the physical
+        # size of focus the detector looked for changed with the objective: the same 1.5-3.5 meant
+        # 0.23-0.55 um at 40x and 0.15-0.35 um at 63x, a factor of 1.57 on the same microscope.
         mmpd = settings["dots_per_micron"]
-        # TODO fix conversion via mmpd
-        min_sigma = settings["min_sigma"]
-        max_sigma = settings["max_sigma"]
+        min_sigma = settings["min_sigma"] * mmpd
+        max_sigma = settings["max_sigma"] * mmpd
         num_sigma = settings["num_sigma"]
         acc_thresh = settings["acc_thresh"]
         overlap = settings["overlap"]
@@ -310,24 +341,3 @@ class FocusMapper(AreaMapper):
                         max_sigma=max_sigma,
                         num_sigma=num_sigma, threshold=acc_thresh, overlap=overlap)
 
-    @staticmethod
-    def create_foci_map(shape: Tuple[int], foci: Iterable) -> np.ndarray:
-        """
-        Method to create a binary foci map for the given foci
-
-        :param shape: The shape of the original map
-        :param foci: The foci to mark on the binary map
-        :return: The created foci map
-        """
-        # Create empty map
-        bin_map = np.zeros(shape=shape,
-                           dtype=np.uint32)
-        tsq = sqrt(2)
-        # Iterate over the given foci
-        for ind, focus in enumerate(foci):
-            # Extract variables
-            y, x, r = focus
-            # Draw focus into the foci map
-            rr, cc = disk((y, x), r * tsq, shape=shape)
-            bin_map[rr, cc] = ind + 1
-        return bin_map

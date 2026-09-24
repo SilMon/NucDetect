@@ -12,8 +12,8 @@
     {
       "id": "names",
       "title": "Channel Names",
-      "desc": "The names assigned to the isolated channels.Separate the individual names by ';' in the order BRGXY...Z",
-      "type": "text",
+      "desc": "The names assigned to the isolated channels, in the order the analysis dialog lists them. Leave a field empty to leave that channel unnamed.",
+      "type": "channels",
       "value": "Red;Green;Blue;Cyan;Magenta"
     },
     {
@@ -204,32 +204,32 @@
   "Analysis - Image Processing": [
     {
       "id": "min_sigma",
-      "title": "Blob Detection - Minimum standard deviation",
-      "desc": "The minimum standard deviation for Gaussian kernel. Lower values will help to detect smaller foci",
+      "title": "Blob Detection - Minimum focus size",
+      "desc": "The minimum standard deviation of the Gaussian kernel, in µm. Lower values help to detect smaller foci. Converted to pixels with the conversion factor of the image being analysed",
       "type": "decspin",
-      "value": 1.5,
+      "value": 0.2339,
       "values": {
-        "min": 0,
-        "max": 100,
-        "step": 0.01,
-        "decimals": 2,
+        "min": 0.0,
+        "max": 20.0,
+        "step": 0.005,
+        "decimals": 4,
         "prefix": "",
-        "suffix": ""
+        "suffix": " µm"
       }
     },
     {
       "id": "max_sigma",
-      "title": "Blob Detection - Maximum standard deviation",
-      "desc": "The maximum standard deviation for Gaussian kernel. Higher values will help to detect larger foci",
+      "title": "Blob Detection - Maximum focus size",
+      "desc": "The maximum standard deviation of the Gaussian kernel, in µm. Higher values help to detect larger foci. Converted to pixels with the conversion factor of the image being analysed",
       "type": "decspin",
-      "value": 3.5,
+      "value": 0.5459,
       "values": {
-        "min": 0,
-        "max": 100,
-        "step": 0.01,
-        "decimals": 2,
+        "min": 0.0,
+        "max": 20.0,
+        "step": 0.005,
+        "decimals": 4,
         "prefix": "",
-        "suffix": ""
+        "suffix": " µm"
       }
     },
     {
@@ -376,17 +376,39 @@
       }
     }
   ],
-  "Modification": [
+  "Analysis - Co-Localization": [
     {
-      "id": "show_ellipses",
-      "title": "Show Ellipses",
-      "desc": "If active, the approximated ellipses for detected nuclei will be shown on all channels",
-      "type": "check",
-      "value": 1,
+      "id": "colocalization_distance",
+      "title": "Co-Localization - Maximum distance",
+      "desc": "The largest distance, in µm, between the centres of two foci in different channels for them to count as co-localized. Converted to pixels with the conversion factor of the image being analysed. Which channels are compared is chosen in the analysis dialog",
+      "type": "decspin",
+      "value": 1.4036,
       "values": {
-        "tristate": 0
+        "min": 0.0,
+        "max": 20.0,
+        "step": 0.01,
+        "decimals": 4,
+        "prefix": "",
+        "suffix": " µm"
       }
     },
+    {
+      "id": "merge_distance",
+      "title": "Combined Detection - Merge distance",
+      "desc": "The largest distance, in µm, between the centres of an image-processing focus and a u-net focus in the same channel for them to be treated as one focus. Only used by the combined detection method",
+      "type": "decspin",
+      "value": 0.7798,
+      "values": {
+        "min": 0.0,
+        "max": 20.0,
+        "step": 0.01,
+        "decimals": 4,
+        "prefix": "",
+        "suffix": " µm"
+      }
+    }
+  ],
+  "Modification": [
     {
       "id": "track_mouse",
       "title": "Mouse Tracking",
@@ -417,53 +439,61 @@
     {
       "id": "min_main_area",
       "title": "Minimal Nucleus Size",
-      "desc": "Minimal size in µm² a detected nucleus can have",
-      "type": "slider",
-      "value": 115,
+      "desc": "Minimal size in µm² a detected nucleus can have. About 115 µm² is a nucleus roughly 12 µm across",
+      "type": "decspin",
+      "value": 115.0,
       "values": {
-        "min": 115,
-        "max": 30000,
-        "step": 50,
-        "unit": "µm²"
+        "min": 0.0,
+        "max": 2000.0,
+        "step": 5.0,
+        "decimals": 2,
+        "prefix": "",
+        "suffix": " µm²"
       }
     },
     {
       "id": "max_main_area",
       "title": "Maximal Nucleus Size",
       "desc": "Maximal size in µm² a detected nucleus can have",
-      "type": "slider",
-      "value": 15000,
+      "type": "decspin",
+      "value": 4650.0,
       "values": {
-        "min": 155,
-        "max": 30000,
-        "step": 50,
-        "unit": "µm²"
+        "min": 0.0,
+        "max": 10000.0,
+        "step": 10.0,
+        "decimals": 2,
+        "prefix": "",
+        "suffix": " µm²"
       }
     },
     {
       "id": "min_foc_area",
       "title": "Minimal Focus Size",
-      "desc": "Minimal size in µm² a detected focus can have",
-      "type": "slider",
-      "value": 8,
+      "desc": "Minimal size in µm² a detected focus can have. About 0.2 µm² is a focus roughly 0.5 µm across",
+      "type": "decspin",
+      "value": 0.195,
       "values": {
-        "min": 7,
-        "max": 450,
-        "step": 1,
-        "unit": "µm²"
+        "min": 0.0,
+        "max": 10.0,
+        "step": 0.005,
+        "decimals": 3,
+        "prefix": "",
+        "suffix": " µm²"
       }
     },
     {
       "id": "max_foc_area",
       "title": "Maximal Focus Size",
       "desc": "Maximal size in µm² a detected focus can have",
-      "type": "slider",
-      "value": 70,
+      "type": "decspin",
+      "value": 1.703,
       "values": {
-        "min": 7,
-        "max": 705,
-        "step": 1,
-        "unit": "µm²"
+        "min": 0.0,
+        "max": 50.0,
+        "step": 0.05,
+        "decimals": 3,
+        "prefix": "",
+        "suffix": " µm²"
       }
     },
     {

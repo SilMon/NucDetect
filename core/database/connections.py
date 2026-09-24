@@ -2,10 +2,11 @@ import os
 import sqlite3
 import time
 from enum import Enum
-from typing import Tuple, Dict, List, Optional, Union, Iterable, Any
+from typing import Tuple, Dict, List, Optional, Set, Union, Iterable, Any
 
 from core.detector_modules.ImageLoader import ImageLoader
 from core.logging_config import get_logger
+from core.database import schema_version, selection
 from gui import Paths
 from core.roi.ROI import ROI
 
@@ -20,6 +21,13 @@ NO_STATISTICS = "Not calculated"
 # placeholder that parses as a number would be indistinguishable from a real result, and the result
 # table's sort key already groups non-numeric cells together after the numeric ones
 NO_COLOCALIZATION = "n/a"
+# Shown in the Edge column of the result table. A nucleus cut off by the image border is measured
+# as though it were whole -- half the size of an uncut one, on the reference images -- so RW ruled
+# on 2026-09-15 that those nuclei are FLAGGED rather than dropped: they stay in the table, in the
+# exports and in the statistics, and the cell says which they are. Words rather than yes/no so the
+# column reads without its header, and so it sorts into two blocks
+CLIPPED_BY_BORDER = "clipped"
+NOT_CLIPPED_BY_BORDER = "whole"
 
 
 class Specifiers(Enum):
@@ -37,8 +45,24 @@ class Specifiers(Enum):
 
 class Connector:
 
-    def __init__(self, protected: bool = True):
-        self.connection, self.cursor = self.connect_to_database(protected)
+    def __init__(self, protected: bool = True, path: str = None):
+        """
+        :param protected: If true, no concurrent access to the database is allowed
+        :param path: The database to open. Defaults to ``Paths.database``, the one used when no
+            experiment-specific database is chosen. It is a parameter so that per-experiment
+            databases -- RW, 2026-09-22 -- need no second connector class
+        """
+        # selection.get_active(), not Paths.database: the default follows the program's current
+        # choice of database, so every Requester()/Inserter() built without a connector -- nine of
+        # them across the dialogs -- moves with it. An explicit path still wins, which is what the
+        # converter needs to open a database it is not switching to
+        self.path = path or selection.get_active()
+        # Whether THIS call created the file. sqlite3.connect creates it silently, so the question
+        # can only be asked before connecting, and the answer is what decides whether the schema
+        # version is stamped: a new database is at the current version by construction, an
+        # existing one must not be stamped without the user asking. See schema_version
+        self.created = not os.path.isfile(self.path)
+        self.connection, self.cursor = self.connect_to_database(protected, self.path)
         # Set the cache size to 50000 pages (2 GB)
         self.cursor.execute("PRAGMA cache_size=50000;")
         # Load needed scripts
@@ -47,18 +71,20 @@ class Connector:
         self.table_info = self.get_table_info_from_database()
 
     @staticmethod
-    def connect_to_database(protected: bool = True) -> Tuple[sqlite3.Connection, sqlite3.Cursor]:
+    def connect_to_database(protected: bool = True,
+                            path: str = None) -> Tuple[sqlite3.Connection, sqlite3.Cursor]:
         """
-        Method to connect to the general database
+        Method to connect to a database
 
         :param protected: If true, no concurrent access to the database is allowed
+        :param path: The database to open, defaulting to ``Paths.database``
         :return: The connection and cursor to the database
         """
         # sqlite3.connect creates the database file but NOT the directory holding it, so a fresh
         # HOME raised "unable to open database file" here for anything using the core without the
         # GUI. Asking Paths for its directories is what makes a headless Connector work
         Paths.ensure_directories()
-        connection = sqlite3.connect(Paths.database, check_same_thread=protected)
+        connection = sqlite3.connect(path or selection.get_active(), check_same_thread=protected)
         return connection, connection.cursor()
 
     @staticmethod
@@ -94,6 +120,11 @@ class Connector:
             query = self.commands["get_columns_from_table"].replace("<table_name>", table)
             info = [x[1] for x in self.cursor.execute(query).fetchall()]
             table_info[table]["columns"] = info
+            # The same names as a set, built ONCE per schema read rather than once per query.
+            # check_identifiers runs on every statement this class builds, and the result table
+            # issues thousands in one call: building the set per call cost 14 % of that call,
+            # measured 2026-09-16 against the previous commit on the same database
+            table_info[table]["column_set"] = set(info)
             table_info[table]["column_number"] = len(info)
         return table_info
 
@@ -115,6 +146,14 @@ class Connector:
         """
         self.connection.commit()
 
+    def rollback_changes(self) -> None:
+        """
+        Method to discard all changes made since the last commit
+
+        :return: None
+        """
+        self.connection.rollback()
+
     def close_connection(self) -> None:
         """
         Method to close the established connection
@@ -129,38 +168,80 @@ class Connector:
 
         :return: None
         """
+        # Asked BEFORE the script runs, and asked of the SCHEMA rather than of the file.
+        #
+        # `self.created` -- whether this connector created the file -- is the obvious test and it
+        # is wrong: sqlite3.connect creates the file, while the schema is built here, so a
+        # Connector constructed and dropped without calling this leaves an empty unstamped file
+        # that no later open will ever stamp (it exists by then, so `created` is False). Caught by
+        # a test that did exactly that by accident.
+        #
+        # No user tables before the script + tables after = this call built the schema, so the
+        # database is at the current version by construction and may be stamped. An existing
+        # database is left alone, which is RW's "do not migrate the existing databases".
+        fresh = not self.cursor.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' LIMIT 1"
+        ).fetchone()
         self.cursor.executescript(self.commands["create_tables"])
+        if fresh:
+            schema_version.stamp_new(self.connection)
         self.table_info = self.get_table_info_from_database()
 
-    @staticmethod
-    def check_parameters(*args) -> None:
+    def check_identifiers(self, table: str, columns) -> None:
         """
-        Method to check multiple parameters for illegal characters
+        Method to reject any table or column name that is not in the database's own schema
 
-        :param args: All passed parameters
+        **This replaced a blacklist of illegal characters on 2026-09-16, and the two are not the
+        same kind of check.** The blacklist existed because every value was interpolated into the
+        SQL text, so a value carrying a quote or a semicolon could end one statement and start
+        another. Values are BOUND now -- see build_where and build_set -- so no value reaches the
+        SQL text at all and the blacklist had nothing left to protect.
+
+        What still has to be interpolated is identifiers: SQLite cannot bind a table or a column
+        name. Those are checked against the real schema instead -- an allow-list of what exists
+        beats a deny-list of what looked dangerous, and it cannot be defeated by a character
+        nobody thought of.
+
+        **The blacklist was also wrong in the other direction**, which is why it is gone rather
+        than kept alongside: `.` was illegal, so the ordinary value "1.5" was rejected and no
+        decimal could be written through `update`.
+
+        :param table: The table the columns belong to
+        :param columns: A column name, an iterable of them, or Specifiers.ALL
+        :raises ValueError: If the table is unknown, or a column is not one of its columns
         :return: None
         """
-        for param in args:
-            if isinstance(param, list) or isinstance(param, tuple):
-                for p in param:
-                    Connector.check_parameter(p)
-            else:
-                Connector.check_parameter(param)
+        self.check_for_table(table)
+        known = self.table_info[table]["column_set"]
+        for column in Connector.iterate_column_names(columns):
+            if column not in known:
+                raise ValueError(f"Query rejected: {column!r} is not a column of {table!r} "
+                                 f"(it has {sorted(known)})")
 
     @staticmethod
-    def check_parameter(param: Any) -> None:
+    def iterate_column_names(columns):
         """
-        Throws Exception if the parameter contains illegal characters
+        Method to yield the bare column names out of whatever a caller passed as `column`
 
-        :param param: The parameter to check
-        :return:None
+        Callers pass a name, a tuple of names, `Specifiers.ALL`, or a name behind a keyword --
+        "DISTINCT name" is the only such form in the tree. `*` names no column and yields
+        nothing; the keyword is stripped so the name behind it is checked.
+
+        :param columns: The column argument as handed to a query builder
+        :return: The column names to validate, one at a time
         """
-        if isinstance(param, Specifiers) or not isinstance(param, str):
+        if isinstance(columns, Specifiers):
             return
-        for c in ".;,():\'\"\\/<>!$§%&[]{}´`|~#*=":
-            if c in param:
-                error = f"Query rejected: Parameter contains illegal character \"{c}\""
-                raise ValueError(error)
+        if isinstance(columns, str):
+            columns = (columns,)
+        for column in columns:
+            if isinstance(column, Specifiers) or column == "*":
+                continue
+            name = column.strip()
+            if name.lower().startswith("distinct "):
+                name = name[len("distinct "):].strip()
+            yield name
+
 
     def create_standard_settings(self) -> None:
         """
@@ -175,14 +256,74 @@ class Connector:
         """
         Method to delete all saved data for the given image
 
+        **NO executescript, since 2026-09-16.** `executescript` issues a COMMIT before it runs
+        anything, so clearing an image committed whatever transaction was already open -- and
+        `save_rois_to_database` calls this and THEN writes the new results, so the old data was
+        committed away before the new data existed. A write that failed in between left the image
+        with neither.
+
+        The script it used to run needed several statements only because it built a temporary
+        VIEW to find the hashes that no other image shares. A subquery says the same thing, so
+        this is three ordinary statements that run inside the caller's transaction and commit
+        when the caller does.
+
+        **Why points are deleted by a subquery and not by hash**: hash(roi) is md5(channel + area)
+        and carries no image, so two images holding an identical focus in the same channel share
+        one hash -- 4388 such hashes in the live database -- and the points table has no image
+        column, so they share ONE set of points. Deleting by hash alone removed the other image's
+        geometry and left its roi row standing with nothing under it: 57 such rows existed across
+        33 images, and the manual editor raised "ROI ... does not contain any points!" on them.
+
         :param image: md5 hash of the image
         :return: None
         """
-        # Check parameter
-        self.check_parameter(image)
-        query = self.commands["delete_existing_image_data"].replace("<img_hash>",
-                                                                    self.convert_value(image))
-        self.cursor.executescript(query)
+        self.cursor.execute(
+            "DELETE FROM points WHERE hash IN ("
+            "    SELECT hash FROM roi WHERE image = ?"
+            "    AND hash NOT IN (SELECT hash FROM roi WHERE image <> ?))",
+            (image, image))
+        # BY IMAGE, not by hash: statistics has an image column, so the row belonging to another
+        # image with the same hash must survive
+        self.cursor.execute("DELETE FROM statistics WHERE image = ?", (image,))
+        self.cursor.execute("DELETE FROM roi WHERE image = ?", (image,))
+        # A re-analysis may compare different pairs than the last one did, so the old pairs go too
+        # -- a pair left behind would be offered in the table's pair selector with no rows under it
+        self.cursor.execute("DELETE FROM colocalization WHERE image = ?", (image,))
+        self.cursor.execute("DELETE FROM colocalization_pairs WHERE image = ?", (image,))
+
+    def count_colocalized_foci(self, image: str, channel_a: str,
+                               channel_b: str) -> Dict[int, Tuple[int, int]]:
+        """
+        Method to count, per nucleus, the foci of one channel pair and how many of them have a
+        partner
+
+        A dedicated query rather than get_view_from_table, because it needs a join and an
+        aggregate, and that method's parameter check rejects both. The per-nucleus percentage is
+        derived here from the per-focus rows instead of being stored, so the two cannot disagree.
+
+        The image is compared against the bound value on BOTH sides rather than joined column to
+        column: ``roi.image`` is declared INTEGER and ``colocalization.image`` TEXT, and a
+        column-to-column comparison would apply numeric affinity to one of them. Binding the md5
+        is what every other query against ``roi.image`` does, so it matches the same rows.
+
+        Foci marked "Removed" are left out, exactly as count_foci_for_nucleus_and_channel leaves
+        them out -- the percentage must describe the foci the Foci column counts.
+
+        :param image: The md5 hash of the image
+        :param channel_a: The first channel of the pair
+        :param channel_b: The second channel of the pair
+        :return: {nucleus hash: (foci of the pair in it, of those with a partner)}. A nucleus with
+            no focus in either channel is absent: it has nothing to co-localize
+        """
+        rows = self.cursor.execute(
+            "SELECT r.associated, COUNT(*), COUNT(c.partner) "
+            "FROM colocalization AS c JOIN roi AS r ON r.hash = c.focus AND r.image = ? "
+            "WHERE c.image = ? AND c.channel_a = ? AND c.channel_b = ? "
+            "AND r.associated IS NOT NULL AND r.detection_method IS NOT 'Removed' "
+            "GROUP BY r.associated",
+            (image, image, channel_a, channel_b)).fetchall()
+        return {int(nucleus): (total, partnered) for nucleus, total, partnered in rows}
+
 
     def count_instances(self, column: str, table: str, where: Tuple = ()) -> int:
         """
@@ -193,16 +334,14 @@ class Connector:
         :param where: The condition to count
         :return: The number of found instances
         """
-        self.check_for_table(table)
-        self.check_parameters(column, table, where)
+        self.check_identifiers(table, column)
         if not where:
             query = self.commands["count"].replace("<column>", column).replace("<table_name>", table)
             return self.cursor.execute(query).fetchall()[0][0]
-        else:
-            where = self.convert_where_statement(where)
-            query = self.commands["count_where"].replace("<column>", column) \
-                .replace("<table_name>", table).replace("<condition>", where)
-            return self.cursor.execute(query).fetchall()[0][0]
+        condition, params = self.build_where(table, where)
+        query = self.commands["count_where"].replace("<column>", column) \
+            .replace("<table_name>", table).replace("<condition>", condition)
+        return self.cursor.execute(query, params).fetchall()[0][0]
 
     def insert_or_replace_into(self, table: str, columns: Union[List, Tuple],
                                values: Union[List, Tuple], many: bool = False) -> None:
@@ -219,10 +358,9 @@ class Connector:
         # and there is nothing to insert, so return before len(values[0]) below indexes into it
         if not values:
             return
-        # Check parameters for illegal characters
-        self.check_parameters(table, columns, values)
-        # Check if the requested table exists
-        self.check_for_table(table)
+        # Identifiers against the schema. The values are bound by execute/executemany below
+        # and never needed the character blacklist that used to be applied to them here
+        self.check_identifiers(table, columns)
         # Convert the column list
         columns = self.convert_column_list(columns)
         # Get value string
@@ -246,12 +384,12 @@ class Connector:
         if not where:
             raise ValueError("No condition for update given!")
         self.check_for_table(table)
-        self.check_parameters(table, values, where)
-        set_stm = self.convert_set_statement(values)
-        where = self.convert_where_statement(where)
+        set_stm, set_params = self.build_set(table, values)
+        condition, where_params = self.build_where(table, where)
         query = self.commands["update"].replace("<table_name>", table) \
-            .replace("<set_values>", set_stm).replace("<condition>", where)
-        self.cursor.execute(query)
+            .replace("<set_values>", set_stm).replace("<condition>", condition)
+        # SET parameters before WHERE: placeholders bind in the order they appear in the text
+        self.cursor.execute(query, set_params + where_params)
 
     def delete(self, table: str, where: Tuple = ()) -> None:
         """
@@ -264,10 +402,9 @@ class Connector:
         if not where:
             raise ValueError("An empty condition would delete the whole table!")
         self.check_for_table(table)
-        self.check_parameters(table, where)
-        where = self.convert_where_statement(where)
-        query = self.commands["delete"].replace("<table_name>", table).replace("<condition>", where)
-        self.cursor.execute(query)
+        condition, params = self.build_where(table, where)
+        query = self.commands["delete"].replace("<table_name>", table).replace("<condition>", condition)
+        self.cursor.execute(query, params)
 
     def reset_database(self) -> None:
         """
@@ -299,18 +436,15 @@ class Connector:
         """
         # Convert list of columns
         columns = self.convert_column_list(column)
-        # Check for table
-        self.check_for_table(table)
-        # Check table name for illegal characters
-        self.check_parameters(column, table, where)
+        # Identifiers against the schema; every value below is bound
+        self.check_identifiers(table, column)
         if not where:
             query = self.commands["select_from"].replace("<columns>", columns).replace("<table_name>", table)
             return self.cursor.execute(query).fetchall()
-        else:
-            where = self.convert_where_statement(where)
-            query = self.commands["select_from_where"].replace("<columns>", columns) \
-                .replace("<table_name>", table).replace("<condition>", where)
-            return self.cursor.execute(query).fetchall()
+        condition, params = self.build_where(table, where)
+        query = self.commands["select_from_where"].replace("<columns>", columns) \
+            .replace("<table_name>", table).replace("<condition>", condition)
+        return self.cursor.execute(query, params).fetchall()
 
     @staticmethod
     def get_value_string(number: int) -> str:
@@ -334,61 +468,96 @@ class Connector:
             return columns.value
         return ",".join(columns) if isinstance(columns, tuple) or isinstance(columns, list) else columns
 
-    @staticmethod
-    def convert_set_statement(values: Iterable[Tuple[str, str]]) -> str:
-        """
-        Method to convert the given iterable to a usable SET statment
+    # convert_set_statement was removed here on 2026-09-16. It rendered an update's values
+    # into the SQL text; build_set binds them instead, and nothing else called it.
 
-        :param values: The values to convert
-        :return: The usable SET statement
+    def build_where(self, table: str, where) -> Tuple[str, List]:
         """
-        if isinstance(values[0], tuple):
-            return ",".join([f"{x[0]}={Connector.convert_value(x[1])}" for x in values])
-        else:
-            return f"{values[0]}={Connector.convert_value(values[1])}"
+        Method to turn a condition into WHERE text with placeholders, plus the values to bind
 
-    @staticmethod
-    def convert_where_statement(where: Union[str, Tuple[Union[Tuple[str, Union[str, Specifiers], str]]]]) -> str:
-        """
-        Method to convert the given conditions to a usable where statement
+        **Replaced convert_where_statement on 2026-09-16.** That method rendered the whole
+        condition -- column, operator AND value -- into the SQL text, which is what made a
+        character blacklist necessary and what made nested conditions dangerous: `check_parameters`
+        recursed exactly one level, so the values inside a nested tuple were never inspected at
+        all. Binding removes both problems rather than deepening the inspection.
 
-        :param where: List of where statements to convert
-        :return: The usable where statement
-        """
-        if not isinstance(where[0], tuple):
-            cond1 = Connector.convert_value(where[0])
-            sign = Connector.convert_value(where[1])
-            cond2 = Connector.convert_value(where[2])
-            return cond1 + sign + cond2
-        else:
-            return " AND ".join([Connector.convert_where_statement(x) for x in where])
+        The column is interpolated, because SQLite cannot bind an identifier -- it is checked
+        against the schema by check_identifiers instead. The value is always bound. The one
+        exception is `Specifiers.NULL`, which is a SQL keyword rather than a value: `IS ?` with
+        None bound is never true, so `IS NULL` has to reach the text.
 
-    @staticmethod
-    def convert_value(value: Union[float, int, str, Specifiers], quote: bool = True) -> str:
+        :param table: The table the condition applies to, for validating its columns
+        :param where: A (column, operator, value) triple, or a tuple of such triples
+        :return: The WHERE text and the parameters to bind, in order
         """
-        Method to convert the given value to a SQLite compatible string
+        if isinstance(where[0], tuple):
+            parts, params = [], []
+            for condition in where:
+                text, values = self.build_where(table, condition)
+                parts.append(text)
+                params.extend(values)
+            return " AND ".join(parts), params
+        column, operator, value = where
+        self.check_identifiers(table, column)
+        operator = operator.value if isinstance(operator, Specifiers) else str(operator)
+        if value is Specifiers.NULL:
+            return f"{column} {operator} NULL", []
+        if isinstance(value, Specifiers):
+            return f"{column} {operator} {value.value}", []
+        return f"{column} {operator} ?", [value]
 
-        :param value: The value to convert
-        :param quote: If true, strings will be quoted
-        :return: The converted value
+    def build_set(self, table: str, values) -> Tuple[str, List]:
         """
-        # bool BEFORE int, because bool is a subclass of int: tested the other way round the int
-        # branch wins and True converts to "True" rather than "1". SQLite only accepts the bare
-        # TRUE/FALSE literals from 3.23 onwards and only while the value is interpolated unquoted,
-        # so the old order worked by two coincidences at once
-        if isinstance(value, bool):
-            return f"{int(value)}"
-        elif isinstance(value, (float, int)):
-            return f"{value}"
-        elif isinstance(value, str):
-            if quote:
-                return f"\"{value}\""
+        Method to turn an update's values into SET text with placeholders, plus what to bind
+
+        Same change as build_where, and the same reason: the value used to be rendered into the
+        text by convert_value, so `update` could not write a string containing a quote and --
+        because of the blacklist that protected it -- could not write "1.5" either.
+
+        :param table: The table being updated, for validating its columns
+        :param values: A (column, value) pair, or an iterable of them
+        :return: The SET text and the parameters to bind, in order
+        """
+        # WHAT BINDING DOES NATIVELY, moved here when convert_value was deleted on 2026-09-20.
+        # Both behaviours cost real debugging to establish and neither needs a branch in this
+        # file any more; they are written down so nobody reintroduces the rendering they belong
+        # to, having rediscovered the same two traps:
+        #
+        #   * None binds as SQL NULL. Until 2026-09-14 the renderer had no branch for None at
+        #     all: it fell off the end, returned the Python None, and the caller's f-string wrote
+        #     the bare word `None`, which SQLite then read as a COLUMN NAME.
+        #     `Inserter.set_image_scale(md5, None, None)` raised `no such column: None`, and
+        #     every nullable column had the same hole -- x_res, y_res, unit, associated, match
+        #     and co_localized are all nullable by design, and writing NULL to any of them had no
+        #     working route.
+        #   * True binds as 1. The renderer had to test bool BEFORE int, because bool is a
+        #     subclass of int and the other order rendered True as the string "True". SQLite
+        #     accepts the bare TRUE/FALSE literals only from 3.23 onwards, and only while the
+        #     value is interpolated unquoted, so the old order worked by two coincidences at once.
+        #
+        # WHAT BINDING DOES NOT DO is the WHERE-clause caveat: `<col> = NULL` is never true in
+        # SQL, so a None reaching a condition matches nothing rather than raising. Use
+        # Specifiers.IS with Specifiers.NULL there -- build_where renders that pair as `IS NULL`.
+        pairs = values if isinstance(values[0], tuple) else (tuple(values),)
+        self.check_identifiers(table, [pair[0] for pair in pairs])
+        parts, params = [], []
+        for column, value in pairs:
+            # A Specifier is a SQL KEYWORD, not a value -- `SET associated = NULL` is written by
+            # reset_nucleus_focus_association exactly that way, and binding it raises
+            # "type 'Specifiers' is not supported". Python's None, by contrast, IS bound: sqlite
+            # binds it as SQL NULL natively, which is the correct route and the one the
+            # 2026-09-14 convert_value fix was reaching for by hand
+            if isinstance(value, Specifiers):
+                parts.append(f"{column}={value.value}")
             else:
-                return value
-        elif isinstance(value, Specifiers):
-            if value is Specifiers.IS or value is Specifiers.NULL:
-                return f" {value.value} "
-            return f"{value.value}"
+                parts.append(f"{column}=?")
+                params.append(value)
+        return ",".join(parts), params
+
+    # convert_value was removed here on 2026-09-20, the last of the three renderers.
+    # It turned a Python value into SQL text; build_where and build_set bind their values
+    # instead, and nothing had called it since. The two behaviours it documented are
+    # recorded on build_set, because they are the ones sqlite now provides natively.
 
 
 class DatabaseInteractor:
@@ -406,6 +575,19 @@ class DatabaseInteractor:
         :return: None
         """
         self.connector.commit_changes()
+
+    def rollback_and_close(self) -> None:
+        """
+        Method to discard all changes made since the last commit and close the connection
+
+        The counterpart of commit_and_close, for a save the user cancels partway through. Every
+        write between them is in one open transaction, so discarding it is a true cancel rather
+        than a half-applied save.
+
+        :return: None
+        """
+        self.connector.rollback_changes()
+        self.connector.close_connection()
 
     def commit_and_close(self) -> None:
         """
@@ -571,7 +753,7 @@ class Requester(DatabaseInteractor):
         rows = self.connector.get_view_from_table("analysed", "images",
                                                   ("md5", Specifiers.EQUALS, image))
         # An unknown hash returns an empty list, and [0][0] raised IndexError instead of answering
-        # "no". Found by verify_batch_partitioning, which drives _analyze_all over paths that were
+        # "no". Found by a test driving _analyze_all over paths that were
         # never registered -- one such path used to take the whole batch run down before the loop
         if not rows:
             return False
@@ -630,27 +812,39 @@ class Requester(DatabaseInteractor):
                                                                         Specifiers.NULL),
                                                                        ("image", Specifiers.EQUALS, md5)))]
 
-    def get_hashes_of_associated_foci(self, nucleus: str) -> List[str]:
+    def get_hashes_of_associated_foci(self, nucleus: str, image: str) -> List[str]:
         """
         Method to get the hashes of associated foci for the given nucleus
 
+        The image is REQUIRED and is half of the roi table's primary key. A roi hash is derived
+        from the channel name and the AREA, so two images holding a roi with an identical run list
+        hash to the same value -- by design, which is what PRIMARY KEY ("hash", "image") is for.
+        Without the image this returns the foci of every image whose nucleus hashes the same.
+
         :param nucleus: md5 hash of the nucleus
+        :param image: The md5 hash of the image the nucleus belongs to
         :return: List of all focus hashes
         """
         return [x[0] for x in self.connector.get_view_from_table("hash", "roi",
                                                                  (("associated", Specifiers.EQUALS, nucleus),
-                                                                  ))]
+                                                                  ("image", Specifiers.EQUALS, image)))]
 
-    def count_foci_for_nucleus_and_channel(self, nucleus: int, channel: str) -> int:
+    def count_foci_for_nucleus_and_channel(self, nucleus: int, channel: str, image: str) -> int:
         """
         Method to count the associated foci for the given nucleus and channel
 
+        The image is REQUIRED -- see get_hashes_of_associated_foci. Measured on the testing
+        database before this filter existed: a nucleus of demo.tif reported 558 Green foci where
+        the image holds 146, because the same nucleus area exists in four images.
+
         :param nucleus: The md5 hash of the nucleus
         :param channel:The name of the channel
+        :param image: The md5 hash of the image the nucleus belongs to
         :return: The number of associated foci
         """
         return self.connector.count_instances("hash", "roi", (
             ("associated", Specifiers.EQUALS, nucleus), ("channel", Specifiers.EQUALS, channel),
+            ("image", Specifiers.EQUALS, image),
             ("detection_method", Specifiers.NOTEQUALS, "Removed")))
 
     def get_modified_images(self) -> List[str]:
@@ -697,6 +891,72 @@ class Requester(DatabaseInteractor):
             where = (where, ("active", Specifiers.EQUALS, 1))
         return [x[0] for x in self.connector.get_view_from_table("name", "channels", where)]
 
+    def get_colocalization_pairs(self, image: str) -> List[Tuple[str, str]]:
+        """
+        Method to get the channel pairs the analysis of an image compared
+
+        :param image: The md5 hash of the image
+        :return: The pairs, by channel name. In primary-key order -- alphabetical by the first
+            channel, then the second -- not in the order they were configured, which is not stored.
+            Empty for an image analysed before pairs existed, and for one analysed without any
+        """
+        return [(a, b) for a, b in self.connector.get_view_from_table(
+            ("channel_a", "channel_b"), "colocalization_pairs", ("image", Specifiers.EQUALS, image))]
+
+    def get_colocalization_distance(self, image: str) -> Optional[float]:
+        """
+        Method to get the distance, in pixels, at which an image's channel pairs were compared
+
+        :param image: The md5 hash of the image
+        :return: The distance as applied to this image, or None if it has no co-localization
+        """
+        rows = self.connector.get_view_from_table("max_distance", "colocalization_pairs",
+                                                  ("image", Specifiers.EQUALS, image))
+        return float(rows[0][0]) if rows and rows[0][0] is not None else None
+
+    def get_colocalization_by_nucleus(self, image: str,
+                                      pair: Tuple[str, str]) -> Dict[int, float]:
+        """
+        Method to get the share of each nucleus's foci that co-localize, for one channel pair
+
+        The share counts the foci of BOTH channels of the pair: a nucleus with 3 foci in one
+        channel, 2 in the other and 2 pairs between them is 4 of 5, 80 %. That is the definition
+        roi.match used, except that each focus now counts towards its OWN nucleus -- the old pass
+        credited both foci of a pair to the nucleus of the first one.
+
+        :param image: The md5 hash of the image
+        :param pair: The pair, by channel name, as get_colocalization_pairs returns it
+        :return: {nucleus hash: share between 0 and 1}. A nucleus with no focus in either channel
+            of the pair is absent -- there is nothing to co-localize, which is not the same as 0
+        """
+        counts = self.connector.count_colocalized_foci(image, pair[0], pair[1])
+        return {nucleus: partnered / total for nucleus, (total, partnered) in counts.items()}
+
+    def get_image_scale(self, image: str) -> Union[Tuple[float, float], None]:
+        """
+        Method to get the pixels-per-micrometre scale stored for an image
+
+        `images.x_res` / `y_res` hold the conversion factor the user entered for this image, written
+        per image at the end of the analysis. They are NOT the TIFF tags -- a file's declared
+        resolution is not trusted, because not every microscope writes a meaningful one, so the
+        value here is always one a person supplied.
+
+        Both columns are nullable and always have been, so None is a legitimate answer meaning
+        "nobody has said what scale this image was acquired at". Callers must show pixels and say so
+        rather than substituting a default: a wrong scale silently reports wrong micrometres.
+
+        :param image: The md5 hash of the image
+        :return: (x, y) in pixels per micrometre, or None if either is missing
+        """
+        rows = self.connector.get_view_from_table(("x_res", "y_res"), "images",
+                                                  ("md5", Specifiers.EQUALS, image))
+        if not rows:
+            return None
+        x_res, y_res = rows[0]
+        if x_res is None or y_res is None or x_res <= 0 or y_res <= 0:
+            return None
+        return float(x_res), float(y_res)
+
     def get_main_channel(self, image: str) -> str:
         """
         Method to get the main channel of the given image
@@ -712,26 +972,43 @@ class Requester(DatabaseInteractor):
         # on open rather than reporting which image had no main channel
         return rows[0][0] if rows else None
 
-    def get_roi_info(self, roi: int) -> Tuple:
+    def get_roi_info(self, roi: int, image: str) -> Tuple:
         """
         Method to get general information about the roi
 
+        The image is REQUIRED -- see get_hashes_of_associated_foci. Without it this returned
+        rows[0] of a multi-image result, i.e. ANOTHER image's roi row, in whichever order SQLite
+        happened to scan. The geometry columns are safe either way, because they derive from the
+        area the hash is made of, but the per-image columns are not: measured on the testing
+        database, of 4506 roi hashes shared between images, 2836 disagree on `associated`, 2353 on
+        `co_localized` and 847 on `detection_method`.
+
         :param roi: The md5 hash of the roi
+        :param image: The md5 hash of the image the roi belongs to
         :return: The retrieved information
         """
         rows = self.connector.get_view_from_table(Specifiers.ALL, "roi",
-                                                  ("hash", Specifiers.EQUALS, roi))
+                                                  (("hash", Specifiers.EQUALS, roi),
+                                                   ("image", Specifiers.EQUALS, image)))
         return rows[0] if rows else None
 
-    def get_statistics_for_roi(self, roi: int) -> Tuple:
+    def get_statistics_for_roi(self, roi: int, image: str) -> Tuple:
         """
         Method to get the statistics for the given roi
 
+        The image is REQUIRED -- see get_hashes_of_associated_foci, and the statistics table
+        carries the same composite key. The AREA cannot differ between the images sharing a hash,
+        since the area is what the hash is derived from, but the INTENSITIES can: they are read
+        out of that image's own pixels. Measured on the testing database, of 2270 statistics
+        hashes spanning more than one image, 0 disagree on area and 575 disagree on intensity.
+
         :param roi: The roi hash to get the statistics for
+        :param image: The md5 hash of the image the roi belongs to
         :return: The statistics
         """
-        stats = self.connector.get_view_from_table(Specifiers.ALL, "statistics", ("hash",
-                                                                                  Specifiers.EQUALS, roi))
+        stats = self.connector.get_view_from_table(Specifiers.ALL, "statistics",
+                                                  (("hash", Specifiers.EQUALS, roi),
+                                                   ("image", Specifiers.EQUALS, image)))
         # None, not (): an empty tuple is falsy AND indexable-with-IndexError, so it read as a
         # row that happens to be empty. Every accessor in this class now answers None for "no such
         # row" -- see get_info_for_image for where the convention was first written down
@@ -741,22 +1018,94 @@ class Requester(DatabaseInteractor):
         """
         Method to get the points of a roi
 
+        This one takes NO image, deliberately, and it is the exception among the hash-keyed
+        queries. The points table has no image column at all -- its key is ("hash", "row",
+        "column_") -- so a run list is shared by every image whose roi hashes to the same value,
+        by construction. That is not a defect of this query: the hash IS the area, so the single
+        stored run list is the right answer for all of them. Verified on the testing database --
+        a hash present in five images has exactly five points rows, all five distinct.
+
+        The sharing IS a defect elsewhere: delete_existing_image_data removes these rows by hash
+        alone, so re-analysing one image destroys the geometry of every other image sharing it.
+
         :param roi: The roi hash to get the points for
         :return: The saved points
         """
         return self.connector.get_view_from_table(Specifiers.ALL, "points",
                                                   ("hash", Specifiers.EQUALS, roi))
 
-    def get_table_data_for_image(self, image: str, name: str = None) -> List[List]:
+    def get_nuclei_clipped_by_border(self, image: str,
+                                     nuclei: Iterable[int] = None) -> Set[int]:
+        """
+        Method to get the hashes of the nuclei that are cut off by the edge of the image
+
+        **Derived, not stored.** The flag is computed from the geometry already in the database --
+        the run list in `points` against `images.width`/`height` -- so it needs no column, no
+        migration, and it answers for images analysed long before the flag existed. `roi`'s own
+        `center_x`/`center_y`/`width`/`height` cannot be used: the centre is the CENTROID, not the
+        centre of the bounding box, so the box position is not recoverable from them.
+
+        Rows are bounded by `height` and columns by `width`, verified against the testing database
+        on the five non-square images it holds -- 1384 x 1032 rows reaching row 1031 and column
+        1384. Runs are (row, first_col, length) and half open, so `first_col + length` is one past
+        the last pixel and the right edge is `>= width` while the bottom edge is `>= height - 1`.
+
+        One query per nucleus rather than one aggregate query for the image: `MIN`/`MAX` cannot go
+        through Connector.get_view_from_table, whose parameter check rejects parentheses. Measured
+        on the testing database, the loop costs 3 ms for a 15-nucleus image against the several
+        queries per nucleus this table already runs.
+
+        :param image: The md5 hash of the image
+        :param nuclei: Optional; the nucleus hashes to check. Queried if not given
+        :return: The hashes of the nuclei touching any of the four image edges
+        """
+        info = self.get_info_for_image(image)
+        if info is None:
+            LOGGER.warning("No row for image %s -- no nucleus can be checked against its border",
+                           image)
+            return set()
+        width, height = info[7], info[8]
+        if nuclei is None:
+            nuclei = self.get_nuclei_hashes_for_image(image)
+        clipped = set()
+        for nucleus in nuclei:
+            points = self.connector.get_view_from_table(("row", "column_", "width"), "points",
+                                                        ("hash", Specifiers.EQUALS, nucleus))
+            # A nucleus whose points are gone cannot be judged, and saying "whole" would be an
+            # answer rather than an absence. It is left out and the missing geometry is already
+            # reported by the row builder
+            if not points:
+                continue
+            if (min(p[0] for p in points) <= 0
+                    or min(p[1] for p in points) <= 0
+                    or max(p[0] for p in points) >= height - 1
+                    or max(p[1] + p[2] for p in points) >= width):
+                clipped.add(nucleus)
+        return clipped
+
+    def get_table_data_for_image(self, image: str, name: str = None,
+                                 pair: Optional[Tuple[str, str]] = None) -> List[List]:
         """
         Method to create a result table for the given image
 
         :param image: The md5 hash of the image
         :param name: Optional: The file name of the image
+        :param pair: Optional: the channel pair whose co-localization fills the Co-Loc. cell. None
+            means this image's first pair -- see ``colocalization_cells`` for what an image
+            analysed before pairs existed shows instead
         :return: The created table
         """
+        # Once per image, not once per nucleus: the scale is a property of the image
+        scale = self.get_image_scale(image)
+        if scale is None:
+            LOGGER.warning("Image %s has no conversion factor -- areas and axes are reported in "
+                           "PIXELS, not micrometres. Set the factor for this image to convert "
+                           "them", image)
         # Get all nuclei associated with this image
         nucs = self.get_nuclei_hashes_for_image(image)
+        # Once per image, like the scale: the border test needs the image dimensions, which are one
+        # row, and the set is then a lookup per nucleus rather than a query per nucleus per channel
+        clipped = self.get_nuclei_clipped_by_border(image, nucs)
         # Hoisted out of the nucleus loop: it does not depend on the nucleus, so it was one query
         # per nucleus for one answer. Fetching it here is also what makes the check below possible
         # exactly once per image rather than once per row.
@@ -768,12 +1117,15 @@ class Requester(DatabaseInteractor):
         if not channels and nucs:
             LOGGER.error("No active non-main channel for image %s -- its result table will be "
                          "empty despite %d nuclei", image, len(nucs))
+        # Once per image, like the scale: one aggregate query for every nucleus. None means the
+        # image predates per-pair storage and the cell falls back to roi.match below
+        coloc = self.colocalization_cells(image, pair)
         rows = []
         for nuc in nucs:
             # Get the name of the image
             name = name if name else "Name not available"
             # Get the general ROI information
-            general = self.get_roi_info(nuc)
+            general = self.get_roi_info(nuc, image)
             # None means the hash came back from get_nuclei_hashes_for_image but its roi row is
             # gone -- there is no row to render, so the nucleus is skipped loudly rather than
             # raising three frames further down on general[10]
@@ -782,14 +1134,22 @@ class Requester(DatabaseInteractor):
                                "table", nuc, image)
                 continue
             # Get nucleus statistics
-            stats = self.get_statistics_for_roi(nuc)
-            # Calculate overall match for this nucleus. roi.match is -1 when the image has a single
+            stats = self.get_statistics_for_roi(nuc, image)
+            if coloc is not None:
+                # Per pair, from the colocalization table. A nucleus absent from it has no focus
+                # in either channel of the pair -- nothing to co-localize, which is not 0 %
+                share = coloc.get(nuc)
+                match = NO_COLOCALIZATION if share is None else f"{share * 100:.2f}"
+            # LEGACY: an image analysed before 2026-09-24 has no pairs and carries ONE value per
+            # nucleus in roi.match, computed on its first two foci channels. RW ruled it is shown
+            # as it is rather than recomputed. roi.match is -1 when the image has a single
             # channel, where co-localization is not a meaningful concept, and None when it was never
-            # computed; both render as NO_COLOCALIZATION. The test is explicit rather than a
-            # truthiness check because a match of exactly 0 is a real measurement -- "these foci
-            # co-localize with nothing" -- and used to be reported as 100 % by the old
+            # computed -- which is also what this build writes -- and both render as
+            # NO_COLOCALIZATION. The test is explicit rather than a truthiness check because a
+            # match of exactly 0 is a real measurement -- "these foci co-localize with nothing" --
+            # and used to be reported as 100 % by the old
             # `general[10] * 100 if general[10] else 100`, which caught 0 along with the sentinels
-            if general[10] is None or general[10] == -1:
+            elif general[10] is None or general[10] == -1:
                 match = NO_COLOCALIZATION
             else:
                 match = f"{general[10] * 100:.2f}"
@@ -820,23 +1180,99 @@ class Requester(DatabaseInteractor):
                     """One cell: the number, or NO_STATISTICS when the column is NULL"""
                     return NO_STATISTICS if value is None else f"{float(value) * factor:.2f}"
 
+                # LENGTHS AND AREAS ARE CONVERTED FOR DISPLAY; COORDINATES ARE NOT.
+                # RW, 2026-09-14: *"Convert every length or area. Centers and the like should still
+                # be displayed as pixels, because they are literal coordinates in the image."* So
+                # the ellipse area becomes um^2 and the two axes become um, while the centre stays
+                # where it is -- a pixel position in the image the user is looking at.
+                #
+                # The stored values are untouched: every area in the database is still a pixel
+                # count, which is ruling 1 of the same day. Only the cells change.
+                #
+                # scale is None when nobody has said what this image was acquired at. The values are
+                # then shown in PIXELS rather than converted with a guessed factor, and the caller
+                # is told -- see the warning below.
+                # ELLIPTICITY IS DERIVED FROM THE AXES, not from the stored `ellipticity`
+                # column. That column holds `shape_match` -- the fitted ELLIPSE AREA divided by the
+                # measured area -- which is a goodness-of-fit ratio, not an elongation: a circle
+                # and a long thin ellipse both score about 1, because both are described well by an
+                # ellipse. It is unbounded above, so multiplying by 100 and calling it a percentage
+                # produced values over 100 %: measured on the real database, 511 of 1712 rows did,
+                # up to 138 %.
+                #
+                # 1 - minor/major is the usual meaning of ellipticity: 0 for a circle, approaching
+                # 1 for a line, and bounded. The two are barely related -- Pearson r = 0.36 over
+                # those same rows -- so this is a different quantity rather than a rescaling of the
+                # old one, and stored results will not agree with re-displayed ones.
+                #
+                # The shape_match column is untouched and still stored; it simply stopped being
+                # displayed under a name that does not describe it. It was NOT given a column of
+                # its own: both table headers are at 13 columns and the main one already keeps its
+                # labels short because Qt was eliding them and clipping the sort arrows.
+                area_factor = scale[0] * scale[1] if scale else 1.0      # px^2 per um^2
+                length_factor = scale[0] if scale else 1.0                # px per um
+                major, minor = stats[12], stats[13]
+                ellipticity = (None if major is None or minor is None or float(major) <= 0
+                               else 1 - float(minor) / float(major))
+                # stats[2] is the MEASURED area -- the pixel count of the roi. stats[15] is
+                # `ellipse_area`, pi * r_major * r_minor of the fitted ellipse, which is what this
+                # cell held until 2026-09-14 under a header reading "Area". The two differ by
+                # exactly the fit ratio that used to be displayed as Ellipticity[%]: measured
+                # 0.95 to 1.38 on the real database, so up to 38 % apart. RW: display the actual
+                # area. The ellipse area stays in the statistics table and is simply not shown.
                 measurements = [_measure(stats[11]), _measure(stats[10]),
-                                _measure(stats[15]),
-                                _measure(stats[18], 100), _measure(stats[14]),
-                                _measure(stats[12]), _measure(stats[13])]
+                                _measure(stats[2], 1 / area_factor),
+                                _measure(ellipticity, 100), _measure(stats[14]),
+                                _measure(stats[12], 1 / length_factor),
+                                _measure(stats[13], 1 / length_factor)]
             else:
                 measurements = [NO_STATISTICS] * 7
-            row = [name, str(image), str(nuc)] + measurements + [match]
+            # The Edge cell is a property of the NUCLEUS, so it sits with the other nucleus-level
+            # cells, before the per-channel pair appended below -- the result table merges its
+            # nucleus-level columns across the channel rows and picks them out by header name
+            edge = CLIPPED_BY_BORDER if nuc in clipped else NOT_CLIPPED_BY_BORDER
+            row = [name, str(image), str(nuc)] + measurements + [match, edge]
             # Count the foci
             for channel in channels:
-                rows.append(row + [channel, str(self.count_foci_for_nucleus_and_channel(nuc, channel))])
+                rows.append(row + [channel,
+                                   str(self.count_foci_for_nucleus_and_channel(nuc, channel, image))])
         return rows
 
-    def get_table_data_for_experiment(self, experiment: str):
+    def colocalization_cells(self, image: str,
+                             pair: Optional[Tuple[str, str]] = None) -> Optional[Dict[int, float]]:
+        """
+        Method to decide which co-localization an image's Co-Loc. cells show
+
+        Three cases, and the first is the one that needs saying:
+
+        * **no pair requested, and the image has no pairs**: None. The image was analysed before
+          pairs existed, and its cells show the single stored ``roi.match`` value -- RW ruled on
+          2026-09-24 that those are shown as they are, not recomputed. It is also what an image
+          analysed with fewer than two foci channels gets, and there ``roi.match`` is NULL;
+        * **no pair requested, and the image has pairs**: its first pair;
+        * **a pair requested**: that pair, or an empty mapping -- every cell "n/a" -- when this
+          image did not compare it. Deliberately so for an image from before pairs existed as
+          well: its single value was computed on whichever two channels came first, and showing it
+          under a pair the user picked BY NAME would be claiming a correspondence nothing records.
+
+        :param image: The md5 hash of the image
+        :param pair: The pair asked for, or None for each image's own first pair
+        :return: {nucleus hash: share}, or None to fall back to roi.match
+        """
+        pairs = self.get_colocalization_pairs(image)
+        if pair is None:
+            return self.get_colocalization_by_nucleus(image, pairs[0]) if pairs else None
+        pair = (pair[0], pair[1])
+        return self.get_colocalization_by_nucleus(image, pair) if pair in pairs else {}
+
+    def get_table_data_for_experiment(self, experiment: str,
+                                      pair: Optional[Tuple[str, str]] = None):
         """
         Method to create a result table for the given experiment
 
         :param experiment: Name of the experiment
+        :param pair: Optional: the channel pair for the Co-Loc. column, as for
+            ``get_table_data_for_image``
         :return: The created table
         """
         # Get all images associated with the experiment
@@ -846,7 +1282,7 @@ class Requester(DatabaseInteractor):
         for ind, img in enumerate(imgs):
             start = time.time()
             img_name = self.get_image_filename(img)
-            img_data = self.get_table_data_for_image(img, name=img_name)
+            img_data = self.get_table_data_for_image(img, name=img_name, pair=pair)
             # Check if the image was assigned to a group
             group = self.get_associated_group_for_image(img, experiment)
             for row in img_data:
@@ -1069,6 +1505,37 @@ class Inserter(DatabaseInteractor):
         """
         self.save_roi_to_database(roi_data, line_data, stat_data)
         self.connector.update("images", ("analysed", True), ("md5", Specifiers.EQUALS, image))
+
+    def save_colocalization(self, image: str, pairs: Iterable[Tuple[str, str]],
+                            max_distance: float, rows: Iterable[Tuple]) -> None:
+        """
+        Method to replace an image's co-localization with a new result
+
+        REPLACES rather than adds, for both tables: the analysis and the editor's recomputation
+        both hand over the complete result for the image, and a pair or a focus from the previous
+        one left standing would be counted alongside it.
+
+        :param image: The md5 hash of the image
+        :param pairs: The channel pairs that were compared, by name. Recorded even when a pair
+            produced no rows, so "compared, nothing found" stays distinct from "not compared"
+        :param max_distance: The distance, in pixels for this image, the pairs were compared at
+        :param rows: (focus hash, channel_a, channel_b, partner hash or None), as
+            MapComparator.colocalize returns them
+        :return: None
+        """
+        self.connector.delete("colocalization", ("image", Specifiers.EQUALS, image))
+        self.connector.delete("colocalization_pairs", ("image", Specifiers.EQUALS, image))
+        pair_rows = [(image, a, b, float(max_distance)) for a, b in pairs]
+        if pair_rows:
+            self.connector.insert_or_replace_into(
+                "colocalization_pairs", ("image", "channel_a", "channel_b", "max_distance"),
+                pair_rows, True)
+        focus_rows = [(image, int(focus), a, b, None if partner is None else int(partner))
+                      for focus, a, b, partner in rows]
+        if focus_rows:
+            self.connector.insert_or_replace_into(
+                "colocalization", ("image", "focus", "channel_a", "channel_b", "partner"),
+                focus_rows, True)
 
     def set_image_analysed(self, image: str, analysed: bool = True) -> None:
         """

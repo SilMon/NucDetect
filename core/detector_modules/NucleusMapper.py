@@ -1,5 +1,4 @@
 import warnings
-from typing import List
 
 import numpy as np
 from scipy import ndimage as ndi
@@ -31,7 +30,10 @@ class NucleusMapper(AreaMapper):
         """
         Method to create the nucleus map for the given channel
 
-        :return: The created foci maps
+        Validates, then delegates to map_nuclei. Detector called map_nuclei directly until
+        2026-09-20, which skipped both checks below.
+
+        :return: The created nucleus map
         """
         # Check if channels were set
         if not self.channels:
@@ -83,7 +85,8 @@ class NucleusMapper(AreaMapper):
         it_max = self.get_iterative_max_map(edm, thresh)
         # TODO it_max anstelle von edm übergeben
         # Get the center mask based on it_max
-        cmask = self.create_center_mask(it_max, self.progress.span("centers", NUCLEUS_BOUNDS))
+        cmask = self.create_center_mask(it_max, edm,
+                                        self.progress.span("centers", NUCLEUS_BOUNDS))
         # Seed count before segmentation, against nucleus count after it. The pair is what tells a
         # split from a merge: watershed cannot produce more regions than it was given seeds, so a
         # final count below this one is regions that were dropped rather than nuclei that were
@@ -206,11 +209,14 @@ class NucleusMapper(AreaMapper):
         return maxi
 
     @staticmethod
-    def create_center_mask(max_it: np.ndarray, progress=NO_PROGRESS) -> np.ndarray:
+    def create_center_mask(max_it: np.ndarray, edm: np.ndarray,
+                           progress=NO_PROGRESS) -> np.ndarray:
         """
         Method to create a center mask for watershed segmentation
 
         :param max_it: The iterative maximum map
+        :param edm: The distance map the watershed will flood. The seed is placed at its maximum
+            within each component -- see below for why that is not the centre of mass
         :param progress: Reporter owning the "centers" sub-stage. Defaults to a no-op so existing
             callers keep working unchanged
         :return: The nucleus extraction map
@@ -218,15 +224,33 @@ class NucleusMapper(AreaMapper):
         # Label individual areas of max_it
         area_map, labels = ndi.label(max_it)
         progress(0.0, "Locating nucleus centres")
-        # ndi.center_of_mass, not a pure-Python pass over every pixel. The loop this replaces
-        # grouped pixel coordinates per label by hand and then averaged them, which is the
-        # definition of the centre of mass of a uniform region -- measured on a 1024x1024 map with
-        # 40 nuclei, 0.32 s against 33.8 ms, and the loop is the whole of this method's cost. The
-        # per-row progress it used to report went with it: there is nothing left to report from
-        # inside, and a call that takes 34 ms does not need a progress bar
-        centers = ndi.center_of_mass(max_it, area_map, range(1, labels + 1))
+        # ndi.maximum_position over the DISTANCE MAP, not ndi.center_of_mass over the component.
+        #
+        # The centre of mass of a non-convex region need not lie inside it, and a seed off the
+        # distance ridge is dominated by its neighbours the moment the watershed floods -- it yields
+        # a region a few pixels across. Measured on real data 2026-09-11: 3 of 166 seeds (1.8%) fell
+        # outside their own component, and the nuclei they produced were 1, 4 and 28 px against a
+        # median of 6188. Across all seeds the median distance value AT the seed was 31.4 where 35.9
+        # was available inside the component.
+        #
+        # Measured again on deliberately non-convex shapes 2026-09-13 -- crescents, which is what a
+        # merged nucleus looks like and the worst case for this: 18 of 30 centres of mass landed
+        # outside, at a median distance value of 0.00, against 0 of 30 for the maximum. The cost is
+        # +19.7% on this call, which is a couple of milliseconds.
+        #
+        # Note the edm here is the normalised, byte-quantised one -- 256 levels, which is an open
+        # concern of its own -- so ties on a plateau are common and the first maximum is taken. That
+        # is still a point on the ridge, which the centre of mass was not.
+        centers = ndi.maximum_position(edm, area_map, range(1, labels + 1))
         progress(1.0, "Locating nucleus centres")
-        # Create center map as starting point for watershed segmentation
+        # Create center map as starting point for watershed segmentation.
+        #
+        # The loop below was measured 2026-09-13 and is NOT worth vectorising: it runs once per
+        # detected centre, a few dozen iterations, and costs 0.0001 s -- 0.2% of this method against
+        # 90.6% for the call above and 9.2% for ndi.label. A numpy replacement was written and
+        # timed; it reproduces the output exactly and saves 0.0000 s. The profiler label
+        # "per-pixel python loop" is left over from a genuine per-pixel pass that was replaced
+        # earlier, and it is what made this look like the expensive step.
         cmask = np.zeros(shape=max_it.shape, dtype=np.uint32)
         ind = 1
         for c in centers:

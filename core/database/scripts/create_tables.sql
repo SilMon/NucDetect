@@ -72,6 +72,41 @@ CREATE TABLE IF NOT EXISTS "roi"
     "co_localized"     INTEGER,
     PRIMARY KEY ("hash", "image")
 ) WITHOUT ROWID;
+/*
+Co-localization, per CHANNEL PAIR -- schema version 3, 2026-09-24. RW: "The co-localization should
+be stored for each defined channel pair. This requires to move it out of the main table."
+
+roi.match and roi.co_localized above are the version-2 form: ONE percentage per nucleus and ONE
+partner per focus, which cannot express more than one pair. They stay, because removing a column
+needs a table rebuild and older builds still read them, but this build writes NULL to both and
+reads them only for an image analysed before these tables existed.
+
+colocalization_pairs records what an analysis was CONFIGURED to compare, including a pair that
+found no foci at all -- that pair's answer is "nothing to compare", which an absent row cannot
+distinguish from "never computed". max_distance is in PIXELS as applied to this image, so a
+recomputation after an edit reproduces the analysis exactly.
+
+colocalization holds one row per focus per pair it takes part in; partner is NULL for a focus with
+none. The per-nucleus percentage is derived from these rows, never stored, so it cannot disagree
+with them. image is TEXT, as the md5 it holds is -- unlike roi.image, which is declared INTEGER.
+*/
+CREATE TABLE IF NOT EXISTS "colocalization_pairs"
+(
+    "image"        TEXT,
+    "channel_a"    TEXT,
+    "channel_b"    TEXT,
+    "max_distance" REAL,
+    PRIMARY KEY ("image", "channel_a", "channel_b")
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS "colocalization"
+(
+    "image"     TEXT,
+    "focus"     INTEGER,
+    "channel_a" TEXT,
+    "channel_b" TEXT,
+    "partner"   INTEGER,
+    PRIMARY KEY ("image", "focus", "channel_a", "channel_b")
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS "settings"
 (
     "key_"  TEXT,

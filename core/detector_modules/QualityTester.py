@@ -58,16 +58,40 @@ class QualityTester:
         # _get_values_dict already computes correctly as np.iinfo(channel.dtype).max -- so wiring
         # it up as written would have reintroduced the 8-bit cap that the "16-bit images are
         # silently reduced to 8-bit precision" fix removed. Deleted rather than connected.
-        "max_focus_overlap": .75,
-        "min_main_area": 1000,
-        "max_main_area": 30000,
-        "min_nucleus_int_perc": .8,
-        "min_foc_area": 5,
-        "max_foc_area": 270,
+        # A "max_focus_overlap": .75 entry stood here until 2026-09-13, alongside a
+        # "max_foc_overlap" seeded into the settings table -- two spellings of one parameter, and
+        # no reader for either: check_focus_overlap does not exist. Removed by RW's decision
+        # rather than wired up. "max_foc_area" below is a DIFFERENT key, it IS read by
+        # check_size_boundaries, and it stays.
+        # dots_per_micron is REQUIRED by check_size_boundaries and is present in the real
+        # settings dict (gui/dialogs/settings.py supplies it from the analysis dialog). It is
+        # listed here too because STANDARD_SETTINGS is what harnesses and any caller that does not
+        # build a full dict fall back to -- and a key that exists in only one of the two is exactly
+        # how "use_signal_improvement" passed a harness and then raised KeyError on a real run.
+        "dots_per_micron": 6.412,
+        # The four size bounds are in SQUARE MICROMETRES, as the settings dialog has always said
+        # they were. Until 2026-09-14 they were compared directly against an area in PIXELS, so the
+        # unit in the dialog was decorative. These defaults were pixel counts and are converted:
+        # 1000 -> 24.3, 30000 -> 729.8, 5 -> 0.12, 270 -> 6.57 at 6.412 px/um.
+        "min_main_area": 24.3,
+        "max_main_area": 729.8,
+        "min_foc_area": 0.12,
+        "max_foc_area": 6.57,
         "min_foc_int": .055,
         "min_foc_cont": .005,
-        "cutoff": .03,
-        "size_factor": 1.0,
+        # "min_nucleus_int_perc": .8 and "cutoff": .03 stood here until 2026-09-15, removed by
+        # RW's ruling together with "smoothing" in FocusMapper.STANDARD_SETTINGS. Nothing supplied
+        # either and nothing read either -- each name appeared exactly once in the whole tree, in
+        # this dict. min_nucleus_int_perc reads like a real quality criterion, and that is the
+        # point: it was never wired up, so declaring it here promised a filter that does not
+        # exist. The nucleus plausibility that WAS wanted is reported by
+        # Detector.report_nucleus_plausibility, which filters nothing.
+        # "size_factor": 1.0 stood here until 2026-09-14. QualityTester no longer reads it:
+        # check_size_boundaries used to divide by it as though it were a scale, which it is
+        # not -- it is the manual editor's spin box, and NucleusMapper's mask multiplier.
+        # Both of those uses are untouched; this declaration was dead once the real
+        # conversion went in, and a dead declaration in this dict is what the
+        # "use_signal_improvement" finding is about.
         "logging": False,
         "log": default_log
     }
@@ -140,23 +164,37 @@ class QualityTester:
         """
         # TODO überprüfen ob die Einstellungen so stimmen
         main, foci = self.separate_nuclei_and_foci()
+        self.log("Quality Check:")
+
+        # Every line reports PASSED and DISCARDED against the count that went in, rather than the
+        # survivors alone. "Nuclei Size Check: 19" read as "19 nuclei were checked" when it meant
+        # "19 of 51 survived" -- and that is what hid a finding for weeks: 63 % of the nuclei were
+        # being discarded and the line meant to report it looked like a tally of work done. The
+        # input count was only recoverable from "Nuclei segmented:" seven lines earlier, in a
+        # different block.
+        def _report(name: str, before: int, after: int) -> None:
+            self.log(f"{name}: {after} of {before} passed, {before - after} discarded")
+
         # Check size of nuclei
+        before = len(main)
         lower_bound, upper_bound = self.settings["min_main_area"], self.settings["max_main_area"]
         main = self.check_size_boundaries(main, lower_bound, upper_bound)
-        self.log("Quality Check:")
-        self.log(f"Nuclei Size Check: {len(main)}")
+        _report("Nuclei Size Check", before, len(main))
         # Delete foci whose nucleus was deleted or which are unassociated to a nucleus
-        self.log(f"Foci to check: {len(foci)}")
+        before = len(foci)
         foci = self.delete_unassociated_foci(main, foci)
-        self.log(f"Focus Association Check: {len(foci)}")
+        _report("Focus Association Check", before, len(foci))
         # Check size of foci
+        before = len(foci)
         foci = self.check_size_boundaries(foci, self.settings["min_foc_area"], self.settings["max_foc_area"])
-        self.log(f"Focus Size Check: {len(foci)}")
+        _report("Focus Size Check", before, len(foci))
         # Check foci for intensity
+        before = len(foci)
         foci = self.check_intensity_boundaries(foci, self.settings["min_foc_int"], 1)
-        self.log(f"Focus Intensity Check: {len(foci)}")
+        _report("Focus Intensity Check", before, len(foci))
+        before = len(foci)
         foci = self.check_focus_contrast(foci, self.settings["min_foc_cont"])
-        self.log(f"Focus Contrast Check: {len(foci)}")
+        _report("Focus Contrast Check", before, len(foci))
         return main, foci
 
     def separate_nuclei_and_foci(self) -> Tuple[List[ROI], List[ROI]]:
@@ -174,18 +212,40 @@ class QualityTester:
                 foci.append(roi)
         return main, foci
 
-    def check_size_boundaries(self, roi: List[ROI], lower_bound: int, upper_bound: int) -> List[ROI]:
+    def check_size_boundaries(self, roi: List[ROI], lower_bound: float,
+                              upper_bound: float) -> List[ROI]:
         """
         Method to check if the area of a roi lies inside the specified boundaries
 
+        **The bounds are in square micrometres and the areas are in pixels.** The BOUNDS are
+        converted, not the areas: a stored area stays a pixel count -- RW's rule, 2026-09-14 -- and
+        converting two numbers per call rather than one per roi keeps the comparison on integers.
+
+        Until 2026-09-14 this divided the area by `size_factor` and compared the result against the
+        bound. Three things were wrong with that:
+
+        * **`size_factor` is not a scale.** It is the manual editor's spin box -- settings.json
+          files it under "Modification", titled *"Size factor for modification window"* -- and it
+          also serves as a mask multiplier in NucleusMapper. It has been removed from this
+          expression rather than kept alongside the real conversion.
+        * **its default is 1.0**, so the division did nothing and a PIXEL area was compared against
+          a bound the dialog declares in um^2;
+        * the real scale, `dots_per_micron`, was never read here at all.
+
+        Measured consequence, on the live database's tuned bounds: **roughly half of everything the
+        detector returned was discarded**, and the bounds had been hand-tuned until that looked
+        right -- which made them pixel counts wearing a um^2 label.
+
         :param roi: List of roi to check
-        :param lower_bound: Lower threshold
-        :param upper_bound: Upper threshold
+        :param lower_bound: Lower threshold, in um^2
+        :param upper_bound: Upper threshold, in um^2
         :return: List of ROI that are larger than lower_bound and smaller than upper_bound
         """
-        # Size factor gives the pix/mikro m ; area is given in pix
-        return [x for x in roi if lower_bound <= x.calculate_dimensions()["area"] /
-                self.settings["size_factor"] <= upper_bound]
+        # px per um, so px^2 per um^2 is its square
+        px_per_um2 = self.settings["dots_per_micron"] ** 2
+        lower_px, upper_px = lower_bound * px_per_um2, upper_bound * px_per_um2
+        return [x for x in roi
+                if lower_px <= x.calculate_dimensions()["area"] <= upper_px]
 
     @staticmethod
     def delete_unassociated_foci(nuclei: List[ROI], foci: List[ROI]) -> List[ROI]:
