@@ -20,7 +20,7 @@ from core.detector_modules.AreaAndROIExtractor import extract_nuclei_from_maps, 
 from core.detector_modules.FCNMapper import FCNMapper
 from core.detector_modules.FocusMapper import FocusMapper
 from core.detector_modules.ImageLoader import ImageData, ImageLoader
-from core.detector_modules.MapComparator import MapComparator
+from core.detector_modules.MapComparator import ColocalizationRow, MapComparator
 from core.detector_modules.NucleusMapper import NucleusMapper
 from core.detector_modules.QualityTester import QualityTester
 from core.roi.ROI import ROI
@@ -82,6 +82,14 @@ class AnalysisResult(ImageData, total=False):
     plausibility: Dict[str, Union[int, float, bool]]
     add_to_experiment: bool
     experiment_details: Dict[str, str]
+    #: The channel pairs co-localization was computed for, by NAME. Empty when there were fewer
+    #: than two foci channels, or when the user chose no pair -- see ``resolve_colocalization_pairs``
+    colocalization_pairs: List[Tuple[str, str]]
+    #: The distance the pairs were compared at, in PIXELS for this image -- the micrometre setting
+    #: after conversion. Stored with the pairs so a later recomputation reproduces it exactly
+    colocalization_distance: float
+    #: One row per focus per pair: (focus hash, channel_a, channel_b, partner hash or None)
+    colocalization: List[ColocalizationRow]
     #: The settings this analysis actually ran with, after any per-image override
     used_settings: Dict[str, Any]
     #: Wall-clock seconds. A FIELD as well as log text, because the batch loop's remaining-time
@@ -110,6 +118,13 @@ DETECTION_METHODS = frozenset({"image processing", "u-net", "combined"})
 #   0.5 would have warned on most images, which is a warning nobody reads.
 IMPLAUSIBLE_DISCARD_SHARE = 0.75
 IMPLAUSIBLE_BORDER_SHARE = 0.4
+
+# The two matching distances, in MICROMETRES, used when the settings carry none -- any hand-built
+# settings dict. They are the values create_settings.sql seeds, which are the old
+# hard-coded 9 px and 5 px at the 6.412 px/um default, so an image at that scale is compared
+# exactly as before they became physical
+DEFAULT_COLOCALIZATION_DISTANCE_UM = 1.4036
+DEFAULT_MERGE_DISTANCE_UM = 0.7798
 
 
 class Detector:
@@ -170,6 +185,10 @@ class Detector:
         if not settings["activated"][settings["main"]]:
             raise ValueError(f"Channel {settings['main']} is nominated as the main channel but is "
                              f"not active -- activate it or nominate an active channel")
+        # Resolved here for the same reason as the main channel: a pair naming a channel that is
+        # not analysed is a settings defect, and there is no point loading the image to find out
+        colocalization_pairs = self.resolve_colocalization_pairs(settings)
+        analysis_settings["colocalization_pairs"] = [list(x) for x in colocalization_pairs]
         # Each stage reports 0..1 within its own slice of the bar and never learns its position in
         # the whole run. Weights are measured, per method -- see core/progress.py
         bounds = stage_bounds(analysis_settings["method"])
@@ -261,6 +280,12 @@ class Detector:
         # the channel the user pointed at, and it holds whether or not anything was found on it
         handler = ROIHandler(ident=imgdat["id"], main=main_channel_name)
         handler.idents = analysis_settings["names"]
+        # Converted HERE, after any per-image override of the scale has been applied above
+        colocalization_distance = (analysis_settings.get("colocalization_distance",
+                                                         DEFAULT_COLOCALIZATION_DISTANCE_UM)
+                                   * analysis_settings["dots_per_micron"])
+        # Empty unless nuclei were found: with no nucleus there are no foci to compare
+        colocalization: List[ColocalizationRow] = []
         # Check if nuclei were detected
         if main_roi:
             if detection_method == "image processing" or detection_method == "combined":
@@ -273,6 +298,10 @@ class Detector:
                 self.add_log_message(f"Detected ML ROI: {len(mlroi)}")
             rois = []
             if detection_method == "combined":
+                # In micrometres since 2026-09-24, like every other length the detector takes: a
+                # fixed 5 px merged foci up to 0.78 um apart at 40x and 0.49 um apart at 63x
+                merge_distance = (analysis_settings.get("merge_distance", DEFAULT_MERGE_DISTANCE_UM)
+                                  * analysis_settings["dots_per_micron"])
                 # Merge the foci for each channel
                 foci = []
                 foci_names = analysis_settings["foci_channel_names"]
@@ -284,17 +313,13 @@ class Detector:
                                          [x for x in iproi if x.ident == channel],
                                          [x for x in mlroi if x.ident == channel],
                                          self.add_log_message)
-                    foci.append(mapc.merge_overlapping_foci())
+                    foci.append(mapc.merge_overlapping_foci(max_distance=merge_distance))
                 # Add all foci
                 for x in foci:
                     rois.extend(x)
-                # Check the foci for co-localisation. Called ONCE, outside the loop: it takes the
-                # whole per-channel list and was previously invoked once per channel with that same
-                # list. Each call rebuilds its own match dictionary, so the repeats produced an
-                # identical result rather than a wrong one -- the cost was len(foci) times the work,
-                # which is why nothing looked broken. It reports through nucleus.match rather than a
-                # return value, which is why discarding the result here is correct
-                MapComparator.get_match_for_nuclei(main_roi, foci)
+                # Co-localization is NOT computed here any more. It compares CHANNELS, not
+                # detection methods, so it runs for every method -- after the quality check below,
+                # on the foci that are actually stored
             elif detection_method == "image processing":
                 rois.extend(iproi)
             else:
@@ -375,6 +400,17 @@ class Detector:
             if dropped:
                 self.add_log_message(f"QR: Foci outside every nucleus, deleted: {dropped}")
             handler.add_rois(checked)
+            # AFTER the quality check and the association rule, on exactly the foci that are
+            # stored. Until 2026-09-24 it ran before both, inside the combined branch, so a focus
+            # the quality check then removed could still be recorded as some other focus's
+            # partner, and the percentage counted foci the table never showed
+            colocalization = MapComparator.colocalize([x for x in checked if not x.main],
+                                                      colocalization_pairs, colocalization_distance)
+            for channel_a, channel_b in colocalization_pairs:
+                rows = [x for x in colocalization if x[1] == channel_a and x[2] == channel_b]
+                self.add_log_message(
+                    f"Co-localization {channel_a}/{channel_b}: "
+                    f"{sum(1 for x in rows if x[3] is not None)} of {len(rows)} foci have a partner")
         imgdat["x_scale"] = analysis_settings["dots_per_micron"]
         imgdat["y_scale"] = analysis_settings["dots_per_micron"]
         imgdat["scale_unit"] = "µm"
@@ -391,6 +427,11 @@ class Detector:
         imgdat["main_channel"] = main_channel
         imgdat["add_to_experiment"] = settings["add_to_experiment"]
         imgdat["experiment_details"] = settings["experiment_details"]
+        # The pairs are returned even when nothing was detected: they record what the analysis was
+        # CONFIGURED to compare, which the dialog reads back when the image is analysed again
+        imgdat["colocalization_pairs"] = colocalization_pairs
+        imgdat["colocalization_distance"] = colocalization_distance
+        imgdat["colocalization"] = colocalization
         # Remove logging function from settings
         del analysis_settings["log"]
         imgdat["used_settings"] = analysis_settings
@@ -412,6 +453,46 @@ class Detector:
             self.clear_log()
         self.release_transient_state()
         return imgdat
+
+    @staticmethod
+    def resolve_colocalization_pairs(settings: Dict) -> List[Tuple[str, str]]:
+        """
+        Method to turn the configured channel pairs into the channel names co-localization compares
+
+        RW's ruling, 2026-09-21: *"For one focus channel, co-localization does not make any sense.
+        For more than 2 [...] calculate the overlap between selected channel pairs. [...] Standard
+        pairing should be channel 1 and 2 with three beeing the main channel."*
+
+        ``settings["colocalization_pairs"]`` holds index pairs into the FULL channel list -- the
+        same index space as ``settings["main"]`` -- because that is what the dialog's widgets are
+        laid out over. **When the key is absent** the default applies: the first two active
+        channels that are not the main one. With the standard channels that is channel 1 and 2
+        against a main channel 3, as ruled, and it is also what the detector compared before pairs
+        existed, so a caller that has never heard of pairs gets the old behaviour. **When it is
+        present it is taken literally**, including an empty list, which means the user chose no
+        pair.
+
+        :param settings: The analysis settings as the dialog returns them
+        :return: The pairs, by channel name, in the order given
+        :raises ValueError: if a pair names the main channel, an inactive channel, or one channel
+            twice -- a settings defect, reported like the main-channel one rather than dropped
+        """
+        names, active, main = settings["names"], settings["activated"], settings["main"]
+        foci_channels = [i for i in range(len(active)) if active[i] and i != main]
+        configured = settings.get("colocalization_pairs")
+        if configured is None:
+            configured = [foci_channels[:2]] if len(foci_channels) >= 2 else []
+        pairs: List[Tuple[str, str]] = []
+        for pair in configured:
+            # Ordered, so (2, 1) and (1, 2) are one pair and not two identical comparisons
+            first, second = sorted(int(x) for x in pair)
+            if first == second or first not in foci_channels or second not in foci_channels:
+                raise ValueError(f"Co-localization pair ({first}, {second}) is not two different "
+                                 f"active foci channels -- the foci channels are {foci_channels}")
+            named = (names[first], names[second])
+            if named not in pairs:
+                pairs.append(named)
+        return pairs
 
     def nucleus_extraction(self, main_channel: np.ndarray, main_name: str,
                            analysis_settings,

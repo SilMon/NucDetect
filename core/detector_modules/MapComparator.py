@@ -1,6 +1,6 @@
 import itertools
 import time
-from typing import List, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
@@ -9,6 +9,10 @@ from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
 from core.roi.ROI import ROI
+
+#: One stored co-localization result: (focus hash, channel_a, channel_b, partner hash or None).
+#: The pair is carried on every row because a focus takes part in one row per pair it belongs to
+ColocalizationRow = Tuple[int, str, str, Optional[int]]
 
 
 class MapComparator:
@@ -39,54 +43,54 @@ class MapComparator:
         self.log("Map Comparator:")
 # TODO Logging hinzufügen
     @staticmethod
-    def get_match_for_nuclei(nuclei: List[ROI],
-                             foci: List[List[ROI]],
-                             max_distance: float = 9) -> None:
+    def colocalize(foci: Iterable[ROI], pairs: Sequence[Tuple[str, str]],
+                   max_distance: float) -> List[ColocalizationRow]:
         """
-        Method to check the given foci for co-localization.
+        Method to pair the foci of each configured channel pair
 
-        :param nuclei: List of all detected nuclei
-        :param foci: List of all detected foci, subdivided by method
-        :param max_distance: Maximum distance for two foci centers to be considered co-localized
-        :return: None
+        **Channels, not detection methods.** Co-localization asks whether a focus in one channel
+        is corroborated by a focus in another -- RW's reason for the measure is telling a real
+        DNA double-strand break from a marker that labelled something else. It therefore runs on
+        the FINAL foci of each channel, whichever method found them. Until 2026-09-24 it ran only
+        under the combined method and only on the first two foci channels, with the pair implied
+        by list position; the pairs are now named, and chosen in the analysis settings dialog.
+
+        **One row per focus per pair it takes part in**, carrying the partner's hash or None. The
+        per-nucleus percentage is not computed here: it is derived from these rows when the table
+        is built, so it cannot disagree with the per-focus result it summarises -- which is what
+        the old ``roi.match`` / ``roi.co_localized`` pair could do, since they were written by two
+        separate passes over two different sets of foci.
+
+        :param foci: Every focus of the image, of any channel. Nuclei must not be included
+        :param pairs: The channel pairs to compare, as (name, name). A pair naming a channel with
+            no foci still yields rows for the other channel, every one of them unpartnered -- that
+            IS the answer for that pair, and dropping the rows would make it read as "not computed"
+        :param max_distance: The largest centre distance, in PIXELS, at which two foci count as
+            co-localized
+        :return: The rows, as (focus hash, channel_a, channel_b, partner hash or None)
         """
-        start = time.time()
-        # Create a dictionary to keep track of matched and unmatched foci
-        nucleus_match = {
-            hash(x):{
-                "Matched": 0,
-                "Unmatched": 0,
-                "ROI": x
-            } for x in nuclei
-        }
-        # Only the first two channels will determine co-localization
-        foci_a, foci_b = foci[:2]
-        # Get the overlap between both methods
-        pairs, _, _, unmatched_a, unmatched_b = MapComparator.get_overlap_between_lists(foci_a,
-                                                                                        foci_b,
-                                                                                        max_distance)
-        # Mark the foci as co-localized and count the matches for each nucleus
-        for index_a, index_b in pairs:
-            focus_a, focus_b = foci_a[index_a], foci_b[index_b]
-            # Check if focus_a is associated, else ignore the focus
-            if not focus_a.associated:
-                continue
-            focus_a.colocalized = hash(focus_b)
-            focus_b.colocalized = hash(focus_a)
-            nucleus_match[hash(focus_a.associated)]["Matched"] += 2
-        # Add the number of unmatched a foci
-        unmatched_foci = list(itertools.compress(foci_a, unmatched_a)) + list(itertools.compress(foci_b, unmatched_b))
-        # Set the number of unmatched foci
-        for focus in unmatched_foci:
-            # Regard only foci that were matched to a nucleus
-            if focus.associated:
-                nucleus_match[focus.associated]["Unmatched"] += 1
-        # Calculate the overlap for each nucleus
-        for data in nucleus_match.values():
-            matched, unmatched, nucleus = data.values()
-            nucleus.match = (matched / (matched + unmatched)) if (matched + unmatched) > 0 else 0
+        by_channel: Dict[str, List[ROI]] = {}
+        for focus in foci:
+            by_channel.setdefault(focus.ident, []).append(focus)
+        rows: List[ColocalizationRow] = []
+        for channel_a, channel_b in pairs:
+            foci_a = by_channel.get(channel_a, [])
+            foci_b = by_channel.get(channel_b, [])
+            matched, _, _, _, _ = MapComparator.get_overlap_between_lists(foci_a, foci_b,
+                                                                          max_distance)
+            partner_of_a = dict(matched)
+            partner_of_b = {j: i for i, j in matched}
+            for i, focus in enumerate(foci_a):
+                j = partner_of_a.get(i)
+                rows.append((hash(focus), channel_a, channel_b,
+                             None if j is None else hash(foci_b[j])))
+            for j, focus in enumerate(foci_b):
+                i = partner_of_b.get(j)
+                rows.append((hash(focus), channel_a, channel_b,
+                             None if i is None else hash(foci_a[i])))
+        return rows
 
-    def merge_overlapping_foci(self, max_distance: float = 5) -> List[ROI]:
+    def merge_overlapping_foci(self, max_distance: float) -> List[ROI]:
         """
         Method to merge overlapping foci
 

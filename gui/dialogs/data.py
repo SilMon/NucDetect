@@ -25,7 +25,7 @@ from gui import Util
 from core.DataProcessing import perform_statistical_analysis_on_groups
 from gui.Plots import PlotCanvas
 from gui.Util import create_image_item_list_from
-from core.database.connections import Inserter, Requester
+from core.database.connections import Inserter, Requester, NO_COLOCALIZATION
 from core.logging_config import get_logger
 from gui.definitions.icons import Icon
 from gui.dialogs.GraphicsItems import EditorView, ROIDrawer, ROIItem
@@ -450,6 +450,8 @@ class DataExportDialog(QDialog):
         header.extend(("Channel", "Foci"))
         # Get the data for the given image
         rows = self.get_data_for_image(md5)
+        # The nucleus is the third cell of an image row
+        self.append_pair_columns(header, rows, nucleus_column=2)
         # Try to get the name of the image
         img_name = self.req.get_image_filename(md5)
         self.save_table_to_disk(img_name, rows, header,
@@ -504,12 +506,48 @@ class DataExportDialog(QDialog):
         header.extend(("Channel", "Foci"))
         # Get the data for the given image
         rows = self.req.get_table_data_for_experiment(experiment)
+        # The nucleus is the fourth cell of an experiment row, after the inserted Group
+        self.append_pair_columns(header, rows, nucleus_column=3)
         self.save_table_to_disk(experiment,
                                 rows, header,
                                 include_header=include_header,
                                 sheet_name=sheet_name if sheet_name else experiment,
                                 xlsx_name=xlsx_name,
                                 writer=writer)
+
+    def append_pair_columns(self, header: List[str], rows: List[List],
+                            nucleus_column: int) -> None:
+        """
+        Method to add one co-localization column per channel pair to an export, in place
+
+        The match column keeps holding each image's FIRST pair -- the row shape is shared with the
+        result table and the statistics dialog, and all three would have to change together. The
+        per-pair columns are appended AFTER Channel and Foci instead, so every existing column keeps
+        its position and nothing that reads an older export by index breaks.
+
+        One column per pair that ANY exported image compared. An image that did not compare a pair
+        gets n/a in that column, as does a nucleus with no focus in either of its channels.
+
+        :param header: The export's header, extended by one label per pair
+        :param rows: The export's rows, each extended by one cell per pair. The image md5 is the
+            second cell of every row
+        :param nucleus_column: Where the nucleus hash sits in a row
+        :return: None
+        """
+        images = sorted({row[1] for row in rows})
+        per_image = {image: self.req.get_colocalization_pairs(image) for image in images}
+        pairs = sorted({pair for image_pairs in per_image.values() for pair in image_pairs})
+        if not pairs:
+            return
+        # Once per image and pair, not per row: a row repeats its nucleus once per channel
+        shares = {(image, pair): self.req.get_colocalization_by_nucleus(image, pair)
+                  for image, image_pairs in per_image.items() for pair in image_pairs}
+        header.extend(f"Co-Loc. {a}/{b} [%]" for a, b in pairs)
+        for row in rows:
+            nucleus = int(row[nucleus_column])
+            for pair in pairs:
+                share = shares.get((row[1], pair), {}).get(nucleus)
+                row.append(NO_COLOCALIZATION if share is None else f"{share * 100:.2f}")
 
     def get_data_for_image(self, image: str) -> List[List]:
         """

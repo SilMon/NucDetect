@@ -12,6 +12,7 @@ from skimage.draw import ellipse
 
 from core.DataProcessing import create_lg_lut, automatic_colorbalance
 from core.detector_modules.AreaAndROIExtractor import get_nearest_nucleus
+from core.detector_modules.MapComparator import MapComparator
 from core.logging_config import get_logger
 from core.roi.ROI import ROI
 from core.roi.ROIHandler import ROIHandler
@@ -1193,10 +1194,36 @@ class EditorView(pg.GraphicsView):
         # Create new associations
         for focus, nucleus in associations.items():
             self.inserter.associate_focus_with_nucleus(int(nucleus), int(focus))
+        self.recompute_colocalization()
         # Change image entry to indicate that the image was manually modified
         self.inserter.mark_image_as_modified(self.roi.ident)
         self.inserter.commit_and_close()
         return True
+
+    def recompute_colocalization(self) -> None:
+        """
+        Method to bring the stored co-localization up to date with the edited foci
+
+        **Recomputed, not patched.** A focus drawn, moved or deleted by hand changes which foci are
+        near each other, and patching the rows of the edited foci alone would leave their old
+        partners pointing at hashes that no longer exist. The result is a pure function of the
+        foci, the pairs and the distance, so it is simply computed again -- from the pairs and the
+        pixel distance the ANALYSIS recorded, so an edit never changes what is being compared.
+
+        An image with no stored pairs is left alone: it was analysed before pairs existed, or with
+        fewer than two foci channels, and in both cases there is nothing per pair to keep current.
+
+        Runs inside the save's open transaction, so a cancelled save discards it with everything
+        else.
+
+        :return: None
+        """
+        pairs = self.requester.get_colocalization_pairs(self.roi.ident)
+        distance = self.requester.get_colocalization_distance(self.roi.ident)
+        if not pairs or distance is None:
+            return
+        rows = MapComparator.colocalize([x for x in self.roi if not x.main], pairs, distance)
+        self.inserter.save_colocalization(self.roi.ident, pairs, distance, rows)
 
     def confirm_focus_deletion(self, count: int) -> bool:
         """
@@ -1264,7 +1291,7 @@ class EditorView(pg.GraphicsView):
         # UI row 4 verifies
         roidat = (hash(roi), image_id, False, roi.ident,
                   item.center[0], item.center[1], item.width,
-                  item.height, None, "manual", -1, roi.colocalized)
+                  item.height, None, "manual", None, None)
         stats = roi.calculate_statistics(image[..., item.channel_index])
         # TODO replace for FOCI
         ellp = roi.calculate_ellipse_parameters()

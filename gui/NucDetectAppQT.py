@@ -18,7 +18,7 @@ if _PROJECT_ROOT not in sys.path:
 from concurrent.futures import ProcessPoolExecutor
 from copy import copy
 from threading import Thread
-from typing import Union, Dict, Iterable, List, Sequence, Tuple, Any, Callable
+from typing import Union, Dict, Iterable, List, Optional, Sequence, Tuple, Any, Callable
 
 # --- Import order below is load-bearing: TensorFlow MUST be imported before PyQt5 ---------
 # On Windows, loading Qt's DLLs first exhausts the process' static TLS budget. TensorFlow's
@@ -209,6 +209,9 @@ class NucDetect(QMainWindow):
     # and model access to happen on the GUI thread, so workers compute plain data and hand it over
     # here instead of touching the models themselves
     table_signal = pyqtSignal(list, list)
+    # The channel pairs the displayed images compared, the pair the table was built with (None for
+    # each image's first pair), and whether the view spans several images
+    coloc_signal = pyqtSignal(list, object, bool)
     row_signal = pyqtSignal(list)
     status_signal = pyqtSignal(bool)
     # Labels are kept SHORT on purpose. The table has 14 columns, and a header section only shows
@@ -249,6 +252,13 @@ class NucDetect(QMainWindow):
         self._signals_connected = False
         # Contains data for the associated experiment
         self.cur_exp = None
+        # The co-localization pair the result table shows, chosen in cmbx_coloc_pair. None means
+        # each image's first pair. Read by the worker that builds the table, written on the GUI
+        # thread -- a single attribute assignment, so there is no torn state to guard against
+        self._coloc_pair: Optional[Tuple[str, str]] = None
+        # What the table was last built from, so choosing another pair can rebuild the SAME view:
+        # the experiment shown, or None for a single image, which is then _displayed_keys[0]
+        self._table_experiment: Optional[str] = None
         # Contains data of the loaded image
         self.cur_img = None
         # Contains the associated roi for the loaded image
@@ -641,6 +651,8 @@ class NucDetect(QMainWindow):
         self.err_signal.connect(self._show_worker_error)
         self.enable_signal.connect(self._set_ui_enabled)
         self.table_signal.connect(self._apply_result_table)
+        self.coloc_signal.connect(self._apply_coloc_pairs)
+        self.ui.cmbx_coloc_pair.activated.connect(self._on_coloc_pair_chosen)
         self.row_signal.connect(self._append_result_row)
         self.status_signal.connect(self._apply_item_status)
         # The image list is lazy: rows revealed after the table was filled would carry no marker, so
@@ -972,6 +984,7 @@ class NucDetect(QMainWindow):
                 self._displayed_keys = []
                 self._mark_displayed_images()
                 self.set_experiment_status_label_text("")
+                self._apply_coloc_pairs([], None, False)
                 self.enable_buttons(False, ana_buttons=False)
         else:
             self.ui.btn_analyse.setEnabled(False)
@@ -1264,7 +1277,17 @@ class NucDetect(QMainWindow):
         # Columns are (md5, index_, name, active, main). An image that was never analysed has no
         # channel rows at all, and one analysed before the main flag was written has none set --
         # both leave the program-wide default in place rather than inventing a nomination
-        nominated = [row for row in self.requester.get_channels(self.cur_img["key"]) if row[4]]
+        channel_rows = self.requester.get_channels(self.cur_img["key"])
+        # The co-localization pairs come back the same way, and for the same reason: re-analysing
+        # an image should offer the comparison it was analysed with. Stored by channel NAME, so
+        # they are mapped to indices through this image's own channel rows -- the program-wide
+        # names may since have changed. A pair whose channel is gone is dropped rather than guessed
+        index_of = {row[2]: row[1] for row in channel_rows}
+        stored = self.requester.get_colocalization_pairs(self.cur_img["key"])
+        pairs = [[index_of[a], index_of[b]] for a, b in stored if a in index_of and b in index_of]
+        if pairs:
+            settings["colocalization_pairs"] = pairs
+        nominated = [row for row in channel_rows if row[4]]
         if not nominated:
             return settings
         settings["main_channel"] = nominated[0][1]
@@ -1359,6 +1382,8 @@ class NucDetect(QMainWindow):
         self._displayed_keys = []
         self._mark_displayed_images()
         self.set_experiment_status_label_text("")
+        # ...and the pair selector, which describes the table and would otherwise outlive it
+        self._apply_coloc_pairs([], None, False)
         self.prg_signal.emit(f"Analysing {self.cur_img['file_name']}",
                              0, 100, "")
         thread = Thread(target=self._run_guarded,
@@ -1699,6 +1724,13 @@ class NucDetect(QMainWindow):
                 # the editor's own save path relies on; the explicit call below is what covers the
                 # case where this branch is skipped
                 ins.save_roi_data_for_image(key, roidat, pdat, elldat)
+            # Per channel pair, and outside the `if roidat` on purpose: the pairs record what the
+            # analysis was configured to compare even when it found nothing, which is what the
+            # analysis dialog reads back for this image. .get, because a stubbed result or one
+            # from before 2026-09-24 carries none
+            ins.save_colocalization(key, data.get("colocalization_pairs", []),
+                                    data.get("colocalization_distance", 0.0),
+                                    data.get("colocalization", []))
             # Mark the image analysed WHETHER OR NOT anything was found.
             #
             # The flag used to be set only inside save_roi_data_for_image, above, so an analysis
@@ -1737,9 +1769,12 @@ class NucDetect(QMainWindow):
             # Get the channel of the roi
             stats = roi.calculate_statistics(channels[handler.idents.index(roi.ident)])
             asso = hash(roi.associated) if roi.associated else None
+            # match and co_localized are written NULL since 2026-09-24: co-localization is stored
+            # per channel pair in its own tables, and these two columns are read only for images
+            # analysed before that -- see Requester.colocalization_cells
             roidat.append((hash(roi), handler.ident, True, roi.ident,
                            str(dim["center_x"]), str(dim["center_y"]),
-                           dim["width"], dim["height"], asso, roi.detection_method, roi.match, roi.colocalized))
+                           dim["width"], dim["height"], asso, roi.detection_method, None, None))
             # TODO
             for p in roi.area:
                 pdat.append((hash(roi), p[0], p[1], p[2]))
@@ -1806,7 +1841,7 @@ class NucDetect(QMainWindow):
             self.prg_signal.emit(f"Loading ROI:  {ind}/{max_}",
                                  ind, max_, "")
             temproi = ROI(channel=entry[3], main=entry[8] is None,
-                          auto=bool(entry[2]), associated=entry[8], method=entry[9], match=entry[10])
+                          auto=bool(entry[2]), associated=entry[8], method=entry[9])
             # entry[1] is the roi table's image column -- the second half of its primary key. The
             # row already carries it, so the image needs no threading through the signature
             stats = self.requester.get_statistics_for_roi(entry[0], entry[1])
@@ -1858,7 +1893,7 @@ class NucDetect(QMainWindow):
         ellip = statistics[18]
         return center_x, center_y, major, minor, angle, area, ov_x, ov_y, ellip
 
-    def create_result_table(self, experiment: str = None) -> None:
+    def create_result_table(self, experiment: str = None, image_key: str = None) -> None:
         """
         Method to create the result table
 
@@ -1876,6 +1911,7 @@ class NucDetect(QMainWindow):
         directly.
 
         :param experiment: The experiment to load
+        :param image_key: The image to show when no experiment is, if not the selected one
         :return: None
         """
         self.prg_signal.emit(f"Create Result Table",
@@ -1884,14 +1920,102 @@ class NucDetect(QMainWindow):
         header = copy(NucDetect.STANDARD_TABLE_HEADER)
         if experiment:
             header.insert(2, "Group")
-        rows = self.prepare_main_table_rows(experiment)
+        # The pairs offered are those the SHOWN images compared, so they are collected before the
+        # rows are built. A pair chosen for a previous view that none of these images compared
+        # falls back to each image's first pair rather than filling the column with n/a
+        if experiment:
+            keys = list(self.requester.get_associated_images_for_experiment(experiment))
+        else:
+            key = image_key or (self.cur_img["key"] if self.cur_img else None)
+            keys = [key] if key else []
+        pairs = self.collect_colocalization_pairs(keys)
+        pair = self._coloc_pair if self._coloc_pair in pairs else None
+        self._table_experiment = experiment
+        rows = self.prepare_main_table_rows(experiment, pair=pair, image_key=image_key)
+        self.coloc_signal.emit([list(x) for x in pairs], list(pair) if pair else None,
+                               bool(experiment))
         self.table_signal.emit(header, rows)
 
-    def prepare_main_table_rows(self, experiment: Union[str, None] = None) -> List[List[str]]:
+    def collect_colocalization_pairs(self, keys: List[str]) -> List[Tuple[str, str]]:
+        """
+        Method to collect every channel pair the given images were analysed with
+
+        :param keys: The md5 hashes of the images
+        :return: The pairs, sorted and without repetition
+        """
+        pairs = set()
+        for key in keys:
+            pairs.update(self.requester.get_colocalization_pairs(key))
+        return sorted(pairs)
+
+    def _apply_coloc_pairs(self, pairs: List[List[str]], selected: Optional[List[str]],
+                           several: bool) -> None:
+        """
+        Method to offer the displayed images' channel pairs in cmbx_coloc_pair. Connected to
+        coloc_signal, thus always executed on the main thread
+
+        **Hidden when there is nothing to choose** -- no pair at all, which is every image analysed
+        before pairs existed and every image with a single foci channel. RW asked for the ETA
+        label to take space only when it showed something, and the same holds here.
+
+        An experiment gets one extra entry, first: each image's own first pair. That is not the
+        same as any single pair once the images differ, and it is the only choice under which an
+        image analysed before pairs existed shows its stored value -- see
+        Requester.colocalization_cells. A single image has no use for it: its first pair IS the
+        first entry.
+
+        :param pairs: The pairs, as [channel_a, channel_b]
+        :param selected: The pair the table was built with, or None for each image's first pair
+        :param several: True when the table shows an experiment rather than one image
+        :return: None
+        """
+        self._assert_main_thread("_apply_coloc_pairs")
+        combo = self.ui.cmbx_coloc_pair
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            if several:
+                combo.addItem("Each image's first pair", None)
+            for a, b in pairs:
+                combo.addItem(f"{a} / {b}", (a, b))
+            index = combo.findData(tuple(selected)) if selected else 0
+            combo.setCurrentIndex(max(0, index))
+        finally:
+            combo.blockSignals(False)
+        visible = bool(pairs)
+        combo.setVisible(visible)
+        self.ui.lbl_coloc_pair.setVisible(visible)
+
+    def _on_coloc_pair_chosen(self, index: int) -> None:
+        """
+        Method to rebuild the result table for the pair chosen in cmbx_coloc_pair
+
+        Rebuilds the view that is ON SCREEN, which is not necessarily the selected image: after an
+        analysis the selection advances while the table keeps showing the image just analysed.
+
+        :param index: The chosen entry
+        :return: None
+        """
+        data = self.ui.cmbx_coloc_pair.itemData(index)
+        self._coloc_pair = tuple(data) if data else None
+        experiment = self._table_experiment
+        if not experiment and not self._displayed_keys:
+            return
+        image_key = None if experiment else self._displayed_keys[0]
+        threading.Thread(target=self._run_guarded,
+                         args=(self.create_result_table, experiment, image_key),
+                         daemon=True).start()
+
+    def prepare_main_table_rows(self, experiment: Union[str, None] = None,
+                                pair: Optional[Tuple[str, str]] = None,
+                                image_key: Optional[str] = None) -> List[List[str]]:
         """
         Method to prepare the rows of the result table on the main UI
 
         :param experiment: Name of the experiment to show. None if only the current image should be shown
+        :param pair: The channel pair for the Co-Loc. column; None for each image's first pair
+        :param image_key: The image to show when no experiment is, if not the selected one -- a
+            pair change rebuilds whatever is on screen, which after an analysis is not the selection
         :return: The prepared rows
         """
         # The label and the list marker both answer "what am I looking at?", which stopped being
@@ -1902,7 +2026,7 @@ class NucDetect(QMainWindow):
             # Get all assigned images
             num_imgs = self.requester.get_number_of_associated_images_for_experiment(experiment)
             # Load data for experiment
-            rows = self.get_table_data_from_database(experiment)
+            rows = self.get_table_data_from_database(experiment, pair)
             # Sort rows according to group
             rows = sorted(rows, key=lambda x: x[1])
             self.set_experiment_status_label_text(
@@ -1913,11 +2037,14 @@ class NucDetect(QMainWindow):
             self._displayed_keys = list(
                 self.requester.get_associated_images_for_experiment(experiment))
         else:
-            rows = self.get_table_data_for_image(self.cur_img["key"])
+            key = image_key or self.cur_img["key"]
+            name = (self.cur_img["file_name"] if self.cur_img and key == self.cur_img["key"]
+                    else self.requester.get_image_filename(key))
+            rows = self.get_table_data_for_image(key, pair)
             self.set_experiment_status_label_text(
-                f"Showing image: {self.cur_img['file_name']}\nExperiment: None"
+                f"Showing image: {name}\nExperiment: None"
             )
-            self._displayed_keys = [self.cur_img["key"]]
+            self._displayed_keys = [key]
         return rows
 
     def create_table_rows(self, rows: List[List[str]], append: bool = True) -> Union[None, List[List[QStandardItem]]]:
@@ -1960,11 +2087,13 @@ class NucDetect(QMainWindow):
             return
         return item_row
 
-    def get_table_data_from_database(self, experiment: str) -> List[List[str]]:
+    def get_table_data_from_database(self, experiment: str,
+                                     pair: Optional[Tuple[str, str]] = None) -> List[List[str]]:
         """
         Method to load the data of an experiment from the database
 
         :param experiment: The name of the experiment to get the data for
+        :param pair: The channel pair for the Co-Loc. column; None for each image's first pair
         :return: List of row to created for display
         """
         # Get images associated with experiment
@@ -1975,7 +2104,7 @@ class NucDetect(QMainWindow):
             # Check if the image is already analysed
             if not self.requester.check_if_image_was_analysed(img):
                 continue
-            row = self.get_table_data_for_image(img)
+            row = self.get_table_data_for_image(img, pair)
             # Check if the image was assigned to a group
             group = self.requester.get_associated_group_for_image(img, experiment)
             for row_ in row:
@@ -2009,17 +2138,19 @@ class NucDetect(QMainWindow):
                        plausibility["nuclei"], plausibility["below_min_area"],
                        plausibility["above_max_area"], plausibility["border"])
 
-    def get_table_data_for_image(self, img: str) -> List[List[str]]:
+    def get_table_data_for_image(self, img: str,
+                                 pair: Optional[Tuple[str, str]] = None) -> List[List[str]]:
         """
         Method to get the table data for the specified image
 
         :param img: The md5 hash of the image to get the data for
+        :param pair: The channel pair for the Co-Loc. column; None for the image's first pair
         :return: List of rows created for display
         """
         # Convert key to file name
         name = self.requester.get_image_filename(img)
         self.prg_signal.emit(f"Creating result table for image {name}", 0, 100, "")
-        rows = self.requester.get_table_data_for_image(img, name)
+        rows = self.requester.get_table_data_for_image(img, name, pair)
         self.prg_signal.emit(f"Creating result table for image {name}", 100, 100, "")
         return rows
 
@@ -2237,7 +2368,7 @@ class NucDetect(QMainWindow):
         # a few microseconds later the difference is already just under the whole number -- an ETA
         # of 125 s painted as 124 immediately, losing a second before the clock had moved. Ceiling
         # also gives a countdown the right end: it reads 1 while any time at all remains and
-        # reaches 0 exactly at the deadline. Caught by verify_progress_bar, not by reading
+        # reaches 0 exactly at the deadline. Caught by a test, not by reading the code
         remaining = math.ceil(max(self._eta_deadline - time.time(), 0))
         self.ui.prg_bar.setFormat(ETA_FORMAT.format(hours=remaining // 3600,
                                                     minutes=remaining % 3600 // 60,
@@ -2507,7 +2638,7 @@ class NucDetect(QMainWindow):
         :return: None
         """
         # Guarded here as well as in the range form it delegates to. This is a public entry point
-        # called from three places, and the invariant verify_thread_affinity enforces is that every
+        # called from three places, and the invariant the thread-affinity test enforces is that every
         # ui-mutating entry point carries the guard -- not that some caller further down does
         self._assert_main_thread("check_all_item_statuses")
         self.check_item_statuses_in_range(0, self.ui.list_images.model().rowCount() - 1)

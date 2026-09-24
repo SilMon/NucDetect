@@ -376,6 +376,38 @@
       }
     }
   ],
+  "Analysis - Co-Localization": [
+    {
+      "id": "colocalization_distance",
+      "title": "Co-Localization - Maximum distance",
+      "desc": "The largest distance, in µm, between the centres of two foci in different channels for them to count as co-localized. Converted to pixels with the conversion factor of the image being analysed. Which channels are compared is chosen in the analysis dialog",
+      "type": "decspin",
+      "value": 1.4036,
+      "values": {
+        "min": 0.0,
+        "max": 20.0,
+        "step": 0.01,
+        "decimals": 4,
+        "prefix": "",
+        "suffix": " µm"
+      }
+    },
+    {
+      "id": "merge_distance",
+      "title": "Combined Detection - Merge distance",
+      "desc": "The largest distance, in µm, between the centres of an image-processing focus and a u-net focus in the same channel for them to be treated as one focus. Only used by the combined detection method",
+      "type": "decspin",
+      "value": 0.7798,
+      "values": {
+        "min": 0.0,
+        "max": 20.0,
+        "step": 0.01,
+        "decimals": 4,
+        "prefix": "",
+        "suffix": " µm"
+      }
+    }
+  ],
   "Modification": [
     {
       "id": "track_mouse",

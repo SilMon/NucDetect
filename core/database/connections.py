@@ -174,7 +174,7 @@ class Connector:
         # is wrong: sqlite3.connect creates the file, while the schema is built here, so a
         # Connector constructed and dropped without calling this leaves an empty unstamped file
         # that no later open will ever stamp (it exists by then, so `created` is False). Caught by
-        # verify_database_switch, which did exactly that by accident.
+        # a test that did exactly that by accident.
         #
         # No user tables before the script + tables after = this call built the schema, so the
         # database is at the current version by construction and may be stamped. An existing
@@ -286,6 +286,43 @@ class Connector:
         # image with the same hash must survive
         self.cursor.execute("DELETE FROM statistics WHERE image = ?", (image,))
         self.cursor.execute("DELETE FROM roi WHERE image = ?", (image,))
+        # A re-analysis may compare different pairs than the last one did, so the old pairs go too
+        # -- a pair left behind would be offered in the table's pair selector with no rows under it
+        self.cursor.execute("DELETE FROM colocalization WHERE image = ?", (image,))
+        self.cursor.execute("DELETE FROM colocalization_pairs WHERE image = ?", (image,))
+
+    def count_colocalized_foci(self, image: str, channel_a: str,
+                               channel_b: str) -> Dict[int, Tuple[int, int]]:
+        """
+        Method to count, per nucleus, the foci of one channel pair and how many of them have a
+        partner
+
+        A dedicated query rather than get_view_from_table, because it needs a join and an
+        aggregate, and that method's parameter check rejects both. The per-nucleus percentage is
+        derived here from the per-focus rows instead of being stored, so the two cannot disagree.
+
+        The image is compared against the bound value on BOTH sides rather than joined column to
+        column: ``roi.image`` is declared INTEGER and ``colocalization.image`` TEXT, and a
+        column-to-column comparison would apply numeric affinity to one of them. Binding the md5
+        is what every other query against ``roi.image`` does, so it matches the same rows.
+
+        Foci marked "Removed" are left out, exactly as count_foci_for_nucleus_and_channel leaves
+        them out -- the percentage must describe the foci the Foci column counts.
+
+        :param image: The md5 hash of the image
+        :param channel_a: The first channel of the pair
+        :param channel_b: The second channel of the pair
+        :return: {nucleus hash: (foci of the pair in it, of those with a partner)}. A nucleus with
+            no focus in either channel is absent: it has nothing to co-localize
+        """
+        rows = self.cursor.execute(
+            "SELECT r.associated, COUNT(*), COUNT(c.partner) "
+            "FROM colocalization AS c JOIN roi AS r ON r.hash = c.focus AND r.image = ? "
+            "WHERE c.image = ? AND c.channel_a = ? AND c.channel_b = ? "
+            "AND r.associated IS NOT NULL AND r.detection_method IS NOT 'Removed' "
+            "GROUP BY r.associated",
+            (image, image, channel_a, channel_b)).fetchall()
+        return {int(nucleus): (total, partnered) for nucleus, total, partnered in rows}
 
 
     def count_instances(self, column: str, table: str, where: Tuple = ()) -> int:
@@ -716,7 +753,7 @@ class Requester(DatabaseInteractor):
         rows = self.connector.get_view_from_table("analysed", "images",
                                                   ("md5", Specifiers.EQUALS, image))
         # An unknown hash returns an empty list, and [0][0] raised IndexError instead of answering
-        # "no". Found by verify_batch_partitioning, which drives _analyze_all over paths that were
+        # "no". Found by a test driving _analyze_all over paths that were
         # never registered -- one such path used to take the whole batch run down before the loop
         if not rows:
             return False
@@ -853,6 +890,47 @@ class Requester(DatabaseInteractor):
         else:
             where = (where, ("active", Specifiers.EQUALS, 1))
         return [x[0] for x in self.connector.get_view_from_table("name", "channels", where)]
+
+    def get_colocalization_pairs(self, image: str) -> List[Tuple[str, str]]:
+        """
+        Method to get the channel pairs the analysis of an image compared
+
+        :param image: The md5 hash of the image
+        :return: The pairs, by channel name. In primary-key order -- alphabetical by the first
+            channel, then the second -- not in the order they were configured, which is not stored.
+            Empty for an image analysed before pairs existed, and for one analysed without any
+        """
+        return [(a, b) for a, b in self.connector.get_view_from_table(
+            ("channel_a", "channel_b"), "colocalization_pairs", ("image", Specifiers.EQUALS, image))]
+
+    def get_colocalization_distance(self, image: str) -> Optional[float]:
+        """
+        Method to get the distance, in pixels, at which an image's channel pairs were compared
+
+        :param image: The md5 hash of the image
+        :return: The distance as applied to this image, or None if it has no co-localization
+        """
+        rows = self.connector.get_view_from_table("max_distance", "colocalization_pairs",
+                                                  ("image", Specifiers.EQUALS, image))
+        return float(rows[0][0]) if rows and rows[0][0] is not None else None
+
+    def get_colocalization_by_nucleus(self, image: str,
+                                      pair: Tuple[str, str]) -> Dict[int, float]:
+        """
+        Method to get the share of each nucleus's foci that co-localize, for one channel pair
+
+        The share counts the foci of BOTH channels of the pair: a nucleus with 3 foci in one
+        channel, 2 in the other and 2 pairs between them is 4 of 5, 80 %. That is the definition
+        roi.match used, except that each focus now counts towards its OWN nucleus -- the old pass
+        credited both foci of a pair to the nucleus of the first one.
+
+        :param image: The md5 hash of the image
+        :param pair: The pair, by channel name, as get_colocalization_pairs returns it
+        :return: {nucleus hash: share between 0 and 1}. A nucleus with no focus in either channel
+            of the pair is absent -- there is nothing to co-localize, which is not the same as 0
+        """
+        counts = self.connector.count_colocalized_foci(image, pair[0], pair[1])
+        return {nucleus: partnered / total for nucleus, (total, partnered) in counts.items()}
 
     def get_image_scale(self, image: str) -> Union[Tuple[float, float], None]:
         """
@@ -1005,12 +1083,16 @@ class Requester(DatabaseInteractor):
                 clipped.add(nucleus)
         return clipped
 
-    def get_table_data_for_image(self, image: str, name: str = None) -> List[List]:
+    def get_table_data_for_image(self, image: str, name: str = None,
+                                 pair: Optional[Tuple[str, str]] = None) -> List[List]:
         """
         Method to create a result table for the given image
 
         :param image: The md5 hash of the image
         :param name: Optional: The file name of the image
+        :param pair: Optional: the channel pair whose co-localization fills the Co-Loc. cell. None
+            means this image's first pair -- see ``colocalization_cells`` for what an image
+            analysed before pairs existed shows instead
         :return: The created table
         """
         # Once per image, not once per nucleus: the scale is a property of the image
@@ -1035,6 +1117,9 @@ class Requester(DatabaseInteractor):
         if not channels and nucs:
             LOGGER.error("No active non-main channel for image %s -- its result table will be "
                          "empty despite %d nuclei", image, len(nucs))
+        # Once per image, like the scale: one aggregate query for every nucleus. None means the
+        # image predates per-pair storage and the cell falls back to roi.match below
+        coloc = self.colocalization_cells(image, pair)
         rows = []
         for nuc in nucs:
             # Get the name of the image
@@ -1050,13 +1135,21 @@ class Requester(DatabaseInteractor):
                 continue
             # Get nucleus statistics
             stats = self.get_statistics_for_roi(nuc, image)
-            # Calculate overall match for this nucleus. roi.match is -1 when the image has a single
+            if coloc is not None:
+                # Per pair, from the colocalization table. A nucleus absent from it has no focus
+                # in either channel of the pair -- nothing to co-localize, which is not 0 %
+                share = coloc.get(nuc)
+                match = NO_COLOCALIZATION if share is None else f"{share * 100:.2f}"
+            # LEGACY: an image analysed before 2026-09-24 has no pairs and carries ONE value per
+            # nucleus in roi.match, computed on its first two foci channels. RW ruled it is shown
+            # as it is rather than recomputed. roi.match is -1 when the image has a single
             # channel, where co-localization is not a meaningful concept, and None when it was never
-            # computed; both render as NO_COLOCALIZATION. The test is explicit rather than a
-            # truthiness check because a match of exactly 0 is a real measurement -- "these foci
-            # co-localize with nothing" -- and used to be reported as 100 % by the old
+            # computed -- which is also what this build writes -- and both render as
+            # NO_COLOCALIZATION. The test is explicit rather than a truthiness check because a
+            # match of exactly 0 is a real measurement -- "these foci co-localize with nothing" --
+            # and used to be reported as 100 % by the old
             # `general[10] * 100 if general[10] else 100`, which caught 0 along with the sentinels
-            if general[10] is None or general[10] == -1:
+            elif general[10] is None or general[10] == -1:
                 match = NO_COLOCALIZATION
             else:
                 match = f"{general[10] * 100:.2f}"
@@ -1145,11 +1238,41 @@ class Requester(DatabaseInteractor):
                                    str(self.count_foci_for_nucleus_and_channel(nuc, channel, image))])
         return rows
 
-    def get_table_data_for_experiment(self, experiment: str):
+    def colocalization_cells(self, image: str,
+                             pair: Optional[Tuple[str, str]] = None) -> Optional[Dict[int, float]]:
+        """
+        Method to decide which co-localization an image's Co-Loc. cells show
+
+        Three cases, and the first is the one that needs saying:
+
+        * **no pair requested, and the image has no pairs**: None. The image was analysed before
+          pairs existed, and its cells show the single stored ``roi.match`` value -- RW ruled on
+          2026-09-24 that those are shown as they are, not recomputed. It is also what an image
+          analysed with fewer than two foci channels gets, and there ``roi.match`` is NULL;
+        * **no pair requested, and the image has pairs**: its first pair;
+        * **a pair requested**: that pair, or an empty mapping -- every cell "n/a" -- when this
+          image did not compare it. Deliberately so for an image from before pairs existed as
+          well: its single value was computed on whichever two channels came first, and showing it
+          under a pair the user picked BY NAME would be claiming a correspondence nothing records.
+
+        :param image: The md5 hash of the image
+        :param pair: The pair asked for, or None for each image's own first pair
+        :return: {nucleus hash: share}, or None to fall back to roi.match
+        """
+        pairs = self.get_colocalization_pairs(image)
+        if pair is None:
+            return self.get_colocalization_by_nucleus(image, pairs[0]) if pairs else None
+        pair = (pair[0], pair[1])
+        return self.get_colocalization_by_nucleus(image, pair) if pair in pairs else {}
+
+    def get_table_data_for_experiment(self, experiment: str,
+                                      pair: Optional[Tuple[str, str]] = None):
         """
         Method to create a result table for the given experiment
 
         :param experiment: Name of the experiment
+        :param pair: Optional: the channel pair for the Co-Loc. column, as for
+            ``get_table_data_for_image``
         :return: The created table
         """
         # Get all images associated with the experiment
@@ -1159,7 +1282,7 @@ class Requester(DatabaseInteractor):
         for ind, img in enumerate(imgs):
             start = time.time()
             img_name = self.get_image_filename(img)
-            img_data = self.get_table_data_for_image(img, name=img_name)
+            img_data = self.get_table_data_for_image(img, name=img_name, pair=pair)
             # Check if the image was assigned to a group
             group = self.get_associated_group_for_image(img, experiment)
             for row in img_data:
@@ -1382,6 +1505,37 @@ class Inserter(DatabaseInteractor):
         """
         self.save_roi_to_database(roi_data, line_data, stat_data)
         self.connector.update("images", ("analysed", True), ("md5", Specifiers.EQUALS, image))
+
+    def save_colocalization(self, image: str, pairs: Iterable[Tuple[str, str]],
+                            max_distance: float, rows: Iterable[Tuple]) -> None:
+        """
+        Method to replace an image's co-localization with a new result
+
+        REPLACES rather than adds, for both tables: the analysis and the editor's recomputation
+        both hand over the complete result for the image, and a pair or a focus from the previous
+        one left standing would be counted alongside it.
+
+        :param image: The md5 hash of the image
+        :param pairs: The channel pairs that were compared, by name. Recorded even when a pair
+            produced no rows, so "compared, nothing found" stays distinct from "not compared"
+        :param max_distance: The distance, in pixels for this image, the pairs were compared at
+        :param rows: (focus hash, channel_a, channel_b, partner hash or None), as
+            MapComparator.colocalize returns them
+        :return: None
+        """
+        self.connector.delete("colocalization", ("image", Specifiers.EQUALS, image))
+        self.connector.delete("colocalization_pairs", ("image", Specifiers.EQUALS, image))
+        pair_rows = [(image, a, b, float(max_distance)) for a, b in pairs]
+        if pair_rows:
+            self.connector.insert_or_replace_into(
+                "colocalization_pairs", ("image", "channel_a", "channel_b", "max_distance"),
+                pair_rows, True)
+        focus_rows = [(image, int(focus), a, b, None if partner is None else int(partner))
+                      for focus, a, b, partner in rows]
+        if focus_rows:
+            self.connector.insert_or_replace_into(
+                "colocalization", ("image", "focus", "channel_a", "channel_b", "partner"),
+                focus_rows, True)
 
     def set_image_analysed(self, image: str, analysed: bool = True) -> None:
         """

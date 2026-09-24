@@ -33,7 +33,7 @@ def dtype_max(dtype: np.dtype) -> float:
     (~:221-226): *"a float channel keeps the previous 0-255 target rather than silently changing
     meaning -- the images this was written for are integer, and a float one is a separate question
     from bit depth."* Returning 1.0 here would put two different float conventions in one pipeline,
-    and ``verify_bit_depth`` pins the 0..255 one.
+    and a regression test pins the 0..255 one.
 
     Takes a dtype rather than an array so the callers that only have a dtype to hand -- the
     re-scaling at the end of ``merge_prediction_tiles`` -- do not have to invent an array.

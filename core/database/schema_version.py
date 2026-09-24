@@ -29,13 +29,17 @@ comparing six real databases against this build's schema:
 
 **So a converter's job is columns and types, and nothing else.** That boundary is why version 1
 below is defined by a missing column rather than by anything else the inspection found.
+
+**Version 3 (2026-09-24) is the exception, and says why where it is defined**: it adds two tables,
+which would heal on open anyway, but a version number has to describe the whole shape or a stamped
+file cannot be trusted to have it.
 """
 import sqlite3
 from typing import Callable, Dict, List, NamedTuple, Optional
 
 #: The schema this build writes. Bump it when a NEW version is added to HISTORY below, never on its
 #: own -- a version number with no entry describing it cannot be converted to or from.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 #: What `PRAGMA user_version` reads on every database written before 2026-09-22. It is not a
 #: version: it is SQLite's default, and it means "ask the schema instead".
@@ -57,9 +61,18 @@ def _roi_columns(connection: sqlite3.Connection) -> List[str]:
     return [row[1] for row in connection.execute('PRAGMA table_info("roi")').fetchall()]
 
 
-def _has_roi_table(connection: sqlite3.Connection) -> bool:
+def _has_table(connection: sqlite3.Connection, name: str) -> bool:
     return bool(connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='roi'").fetchone())
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone())
+
+
+def _has_roi_table(connection: sqlite3.Connection) -> bool:
+    return _has_table(connection, "roi")
+
+
+def _has_colocalization_tables(connection: sqlite3.Connection) -> bool:
+    return _has_table(connection, "colocalization") and _has_table(connection,
+                                                                    "colocalization_pairs")
 
 
 HISTORY: Dict[int, SchemaVersion] = {
@@ -74,13 +87,38 @@ HISTORY: Dict[int, SchemaVersion] = {
     ),
     2: SchemaVersion(
         number=2,
-        description="roi.co_localized present -- the shape shipped up to 1.11.0",
-        recognise=lambda con: _has_roi_table(con) and "co_localized" in _roi_columns(con),
+        description="roi.co_localized present, one co-localization pair per image",
+        recognise=lambda con: (_has_roi_table(con) and "co_localized" in _roi_columns(con)
+                               and not _has_colocalization_tables(con)),
         # ALTER TABLE ADD COLUMN is the one schema change SQLite makes in place and in O(1): it
         # rewrites the header, not the rows, and existing rows read the column as NULL. That is
         # correct here -- a roi analysed before co-localization existed has no partner, and NULL
         # says so where 0 would claim "co-localizes with hash 0"
         upgrade_from_previous=['ALTER TABLE "roi" ADD COLUMN "co_localized" INTEGER'],
+    ),
+    3: SchemaVersion(
+        number=3,
+        description="co-localization stored per channel pair, in its own two tables",
+        recognise=lambda con: (_has_roi_table(con) and "co_localized" in _roi_columns(con)
+                               and _has_colocalization_tables(con)),
+        # THE FIRST VERSION DEFINED BY TABLES RATHER THAN A COLUMN, which the module docstring's
+        # "columns and types, and nothing else" has to be read against: these two tables DO heal
+        # on open, like any other table. The version exists anyway because a version number has to
+        # describe the whole shape -- a file stamped 2 that this build has opened holds both tables
+        # and still says 2, and a file converted by path without ever being opened would not get
+        # them at all. IF NOT EXISTS makes the step a no-op on the first kind and correct on the
+        # second.
+        #
+        # Duplicated from create_tables.sql, which builds NEW databases. The two must produce the
+        # same tables, column by column -- change one and the other changes with it
+        upgrade_from_previous=[
+            'CREATE TABLE IF NOT EXISTS "colocalization_pairs" ("image" TEXT, "channel_a" TEXT, '
+            '"channel_b" TEXT, "max_distance" REAL, '
+            'PRIMARY KEY ("image", "channel_a", "channel_b")) WITHOUT ROWID',
+            'CREATE TABLE IF NOT EXISTS "colocalization" ("image" TEXT, "focus" INTEGER, '
+            '"channel_a" TEXT, "channel_b" TEXT, "partner" INTEGER, '
+            'PRIMARY KEY ("image", "focus", "channel_a", "channel_b")) WITHOUT ROWID',
+        ],
     ),
 }
 

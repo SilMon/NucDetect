@@ -37,6 +37,15 @@ INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("maximum_size_multip
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_nuclei", 0.95, "float");
 INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("fcn_certainty_foci", 0.25, "float");
 -- Matching Settings
+/*
+Both in MICROMETRES since 2026-09-24, and converted with the image's own conversion factor like
+min_sigma above. They were hard-coded PIXEL defaults in MapComparator -- 9 for co-localization, 5
+for the combined method's merge -- so whether two foci co-localized depended on the objective the
+image was taken with. The seeds are those pixel values at the 6.412 px/um default, so a 40x image
+is compared exactly as before.
+*/
+INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("colocalization_distance", 1.4036, "float");
+INSERT OR IGNORE INTO settings (key_, value, type_) VALUES ("merge_distance", 0.7798, "float");
 -- Quality check settings
 /*
 The four size bounds below are in SQUARE MICROMETRES, which is what the settings dialog has always

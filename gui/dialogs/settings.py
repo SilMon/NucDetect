@@ -8,13 +8,13 @@
 import json
 import os
 from functools import partial
-from typing import Any, Dict, NotRequired, Optional, TypedDict, Union, List
+from typing import Any, Dict, NotRequired, Optional, Tuple, TypedDict, Union, List
 
 from PyQt5 import uic, QtCore
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (QDialog, QWidget, QScrollArea, QSizePolicy, QVBoxLayout, QMessageBox,
                              QTableWidget, QTableWidgetItem, QHeaderView, QDoubleSpinBox,
-                             QPushButton, QDialogButtonBox, QLabel)
+                             QPushButton, QDialogButtonBox, QLabel, QCheckBox, QHBoxLayout)
 
 import gui.Paths as gpaths
 from gui import Util
@@ -105,6 +105,7 @@ class AnalysisSettingsDialog(QDialog):
                 self.ui.cbx_five.isChecked()
             ],
             "main": self.get_main_channel_index(),
+            "colocalization_pairs": self.get_colocalization_pairs(),
             "analysis_settings": {
                 "method": self.get_detection_method(),
                 "dots_per_micron": self.spbx_mmpd.value(),
@@ -179,6 +180,91 @@ class AnalysisSettingsDialog(QDialog):
             LOGGER.warning("No main channel is selected -- falling back to the first channel")
             return 0
         return index
+
+    def get_colocalization_pairs(self) -> List[List[int]]:
+        """
+        Method to get the channel pairs chosen for co-localization
+
+        **Only ENABLED boxes count.** A box is disabled when either of its channels is inactive or
+        is the main channel, and Qt leaves a disabled box checked -- the same trap the main-channel
+        radio buttons fell into. Filtering here keeps a tick the user can no longer act on from
+        reaching the analysis, and keeps it in place should the channel come back.
+
+        :return: The pairs as [lower index, higher index], in the index space of ``"main"``
+        """
+        return [[i, j] for (i, j), box in sorted(self.pair_boxes.items())
+                if i < j and box.isEnabled() and box.isChecked()]
+
+    def update_pair_availability(self, *_) -> None:
+        """
+        Method to enable exactly the pair boxes whose two channels are both active foci channels
+
+        Takes and ignores the arguments of the signals it is connected to.
+
+        :return: None
+        """
+        main = self.ui.main_channel_btn_group.checkedId()
+        active = [box.isChecked() for box in self.channel_activation]
+        for (i, j), box in self.pair_boxes.items():
+            box.setEnabled(active[i] and active[j] and main not in (i, j))
+
+    def _add_pair_boxes(self, rows: List[QHBoxLayout]) -> None:
+        """
+        Method to add the co-localization pair boxes beside each channel
+
+        RW, 2026-09-21: *"A new set of widgets besides to set pairs for each selected channel.
+        Standard pairing should be channel 1 and 2 with three beeing the main channel."* Each
+        channel row gets one box per OTHER channel, labelled with that channel's number, and the
+        two boxes describing one pair are kept in step -- ticking 2 in channel 1's row ticks 1 in
+        channel 2's. A symmetric matrix rather than a list of pairs because it is what "besides
+        each channel" describes, and because "compare every channel with every other", RW's other
+        option, is then simply every box ticked.
+
+        Built here rather than in the .ui: twenty boxes wired in pairs would be twenty entries in
+        Designer that the code has to name individually anyway.
+
+        :param rows: The layout of each channel row, in channel order
+        :return: None
+        """
+        count = len(rows)
+        self.pair_boxes: Dict[Tuple[int, int], QCheckBox] = {}
+        for i, row in enumerate(rows):
+            label = QLabel("Pair with:")
+            label.setToolTip("The channels whose foci are compared with this channel's for "
+                             "co-localization")
+            row.addWidget(label)
+            for j in range(count):
+                if i == j:
+                    continue
+                box = QCheckBox(str(j + 1))
+                box.setToolTip(f"Compare the foci of channel {i + 1} with those of channel "
+                               f"{j + 1} for co-localization")
+                row.addWidget(box)
+                self.pair_boxes[(i, j)] = box
+        for (i, j), box in self.pair_boxes.items():
+            box.toggled.connect(self.pair_boxes[(j, i)].setChecked)
+
+    def _preselect_pairs(self) -> None:
+        """
+        Method to tick the pairs the dialog opens with
+
+        The image's own pairs when it has been analysed with some -- read back by the caller, the
+        same way the main-channel nomination is -- and otherwise the ruled default: the first two
+        active channels that are not the main one. That is channel 1 and 2 against a main
+        channel 3, and it is what the detector compared before pairs existed.
+
+        :return: None
+        """
+        configured = self.settings.get("colocalization_pairs")
+        if configured is None:
+            main = self.ui.main_channel_btn_group.checkedId()
+            foci = [i for i, box in enumerate(self.channel_activation)
+                    if box.isChecked() and i != main]
+            configured = [foci[:2]] if len(foci) >= 2 else []
+        for pair in configured:
+            i, j = (int(x) for x in pair)
+            if (i, j) in self.pair_boxes:
+                self.pair_boxes[(i, j)].setChecked(True)
 
     def get_detection_method(self) -> str:
         """
@@ -291,6 +377,17 @@ class AnalysisSettingsDialog(QDialog):
         # nominated, with nothing in the log or the results recording the substitution
         for index, checkbox in enumerate(channels):
             checkbox.toggled.connect(partial(self.on_channel_activation_changed, index))
+        # Co-localization pairs. Connected AFTER the activation handler above, and Qt calls slots
+        # in connection order: deactivating the main channel hands the nomination on first, and
+        # only then is it known which boxes the new main channel disables
+        self._add_pair_boxes([self.ui.horizontalLayout_2, self.ui.horizontalLayout_3,
+                              self.ui.horizontalLayout_4, self.ui.horizontalLayout_5,
+                              self.ui.horizontalLayout_6])
+        for checkbox in channels:
+            checkbox.toggled.connect(self.update_pair_availability)
+        self.ui.main_channel_btn_group.idToggled.connect(self.update_pair_availability)
+        self.update_pair_availability()
+        self._preselect_pairs()
 
 class ImageScaleDialog(QDialog):
     """
@@ -678,7 +775,7 @@ class SettingsDialog(QDialog):
                 # so it never did. Kept rather than deleted, and made to read
                 # from "values" the way every other branch does. A list, not a delimited string:
                 # JSON has lists, and SettingsComboBox iterates what it is given -- which is how
-                # verify_gui_dialogs' checks 23/24 already construct it
+                # the dialog tests already construct it
                 dat = values["data"]
                 p = SettingsComboBox(
                     _id=mp["id"],

@@ -4,3 +4,5 @@ DELETE FROM images;
 DELETE FROM points;
 DELETE FROM roi;
 DELETE FROM statistics;
+DELETE FROM colocalization_pairs;
+DELETE FROM colocalization;

@@ -21,6 +21,7 @@ complete. Everything hangs off the image's md5, except the geometry, which hangs
                 ├─ encountered_names.md5
                 ├─ groups.image
                 ├─ statistics.image
+                ├─ colocalization_pairs.image, colocalization.image   (schema v3)
                 └─ roi.image ── roi.hash ── points.hash
 
 **`roi.image`, `statistics.image` and `groups.image` are declared INTEGER and hold the md5 TEXT**
@@ -57,6 +58,10 @@ IMAGE_TABLES: List[tuple] = [
     ("statistics", "image IN ({placeholders})"),
     ("points", "hash IN (SELECT hash FROM {schema}.roi WHERE image IN ({placeholders}))"),
     ("groups", "image IN ({placeholders})"),
+    # Schema version 3. Forgetting these two here is the failure that would not show: a transfer
+    # would complete, report success, and the image would arrive with its co-localization gone
+    ("colocalization_pairs", "image IN ({placeholders})"),
+    ("colocalization", "image IN ({placeholders})"),
 ]
 
 
@@ -155,7 +160,15 @@ def transfer_images(source: str, target: str, md5s: Iterable[str],
             if experiment is not None:
                 con.execute("INSERT OR REPLACE INTO target.experiments "
                             "SELECT * FROM main.experiments WHERE name = ?", (experiment,))
-            for table, where in IMAGE_TABLES:
+            # A source this build has never opened can predate a table -- create_tables adds
+            # missing ones on open, and a transfer does not open through a Connector. Such a table
+            # has nothing to carry, so it is skipped rather than failing the whole transfer; a
+            # table missing from the TARGET is not skipped, and fails loudly, because the target is
+            # required to have the current schema
+            present_tables = {row[0] for row in con.execute(
+                "SELECT name FROM main.sqlite_master WHERE type='table'")}
+            tables = [(t, w) for t, w in IMAGE_TABLES if t in present_tables]
+            for table, where in tables:
                 clause = where.format(placeholders=holders, schema="main")
                 cur = con.execute(
                     f"INSERT OR REPLACE INTO target.{table} "
@@ -163,7 +176,7 @@ def transfer_images(source: str, target: str, md5s: Iterable[str],
                 copied[table] = cur.rowcount if cur.rowcount > 0 else 0
             if move:
                 # Reverse order: points before roi, because points are identified THROUGH roi
-                for table, where in reversed(IMAGE_TABLES):
+                for table, where in reversed(tables):
                     clause = where.format(placeholders=holders, schema="main")
                     cur = con.execute(f"DELETE FROM main.{table} WHERE {clause}", params)
                     removed[table] = cur.rowcount if cur.rowcount > 0 else 0

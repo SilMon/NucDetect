@@ -31,13 +31,15 @@ class ROI:
         "id",
         "marked",
         "detection_method",
-        "match",
-        "colocalized"
     ]
+    # `match` and `colocalized` were removed from this list on 2026-09-24. They held ONE
+    # co-localization result per ROI -- a percentage on a nucleus, a partner hash on a focus -- and
+    # could not express more than one channel pair. The result is now returned by
+    # MapComparator.colocalize and stored per pair in its own tables
 
     def __init__(self, main: bool = True, channel: str = "Blue", auto: bool = True,
                  associated: Union[int, None] = None, marked: bool = False,
-                 method: str = "Not Set", match: float = 0):
+                 method: str = "Not Set"):
         """
         Constructor of ROI class
 
@@ -48,7 +50,7 @@ class ROI:
                            An identifier, NOT a ROI object -- associate_roi reads it out of the
                            nucleus hash map, so it arrives as a numpy int64, and every live
                            consumer treats it as a number: the database column stores it, and
-                           MapComparator uses it directly as a dict key. It was annotated as a
+                           the co-localization query groups by it. It was annotated as a
                            ROI for years while never holding one; the only two methods that
                            expected an object were a CSV export superseded in 2020 and removed.
                            A focus is always associated with a nucleus -- one that ends up
@@ -66,12 +68,6 @@ class ROI:
         self.associated = associated
         self.marked = marked
         self.detection_method = method
-        self.match = match
-        # NOT a flag, despite this initial value. MapComparator writes hash() of the focus this one
-        # co-localizes with, so the attribute -- and the roi.co_localized column it is written to --
-        # holds False for most ROI and a 64-bit identifier for the rest. `if roi.colocalized` is
-        # therefore not a safe test for "is co-localized": it is false for a partner hashing to 0.
-        self.colocalized = False
         self.id = None
 
     # __add__ was removed here. It delegated to what is now intersect_with, so `a + b` read as a
