@@ -4,7 +4,7 @@ import time
 from enum import Enum
 from typing import Tuple, Dict, List, Optional, Set, Union, Iterable, Any
 
-from core.detector_modules.ImageLoader import ImageLoader
+from core.detector_modules.ImageLoader import ANALYSIS_SCALE_UNIT, ImageLoader
 from core.logging_config import get_logger
 from core.database import schema_version, selection
 from gui import Paths
@@ -941,6 +941,14 @@ class Requester(DatabaseInteractor):
         resolution is not trusted, because not every microscope writes a meaningful one, so the
         value here is always one a person supplied.
 
+        **ONLY WHEN `unit` SAYS SO, since 2026-09-24.** Registration used to store the file's raw
+        declared resolution in the same two columns -- pixels per `Inch` or `Centimeter` -- and this
+        returned it as pixels per micrometre: 68493.72 for `demo.tif`, which declares 2.70 px/um.
+        The analysis writes `ANALYSIS_SCALE_UNIT` beside its factor, so the unit is what tells the
+        two apart; registration no longer writes either, but rows registered before still hold the
+        raw value, and they answer None here like any image nobody has set a factor for. A file's
+        declaration is read from the file instead -- `ImageLoader.declared_pixels_per_micron`.
+
         Both columns are nullable and always have been, so None is a legitimate answer meaning
         "nobody has said what scale this image was acquired at". Callers must show pixels and say so
         rather than substituting a default: a wrong scale silently reports wrong micrometres.
@@ -948,11 +956,13 @@ class Requester(DatabaseInteractor):
         :param image: The md5 hash of the image
         :return: (x, y) in pixels per micrometre, or None if either is missing
         """
-        rows = self.connector.get_view_from_table(("x_res", "y_res"), "images",
+        rows = self.connector.get_view_from_table(("x_res", "y_res", "unit"), "images",
                                                   ("md5", Specifiers.EQUALS, image))
         if not rows:
             return None
-        x_res, y_res = rows[0]
+        x_res, y_res, unit = rows[0]
+        if unit != ANALYSIS_SCALE_UNIT:
+            return None
         if x_res is None or y_res is None or x_res <= 0 or y_res <= 0:
             return None
         return float(x_res), float(y_res)
@@ -1317,8 +1327,8 @@ class Inserter(DatabaseInteractor):
     """
 
     def add_new_image(self, md5: str, year: int, month: int, day: int, hour: int, minute: int,
-                      channels: int, width: int, height: int, xres: Optional[float],
-                      yres: Optional[float], res_unit: str) -> None:
+                      channels: int, width: int, height: int, xres: Optional[float] = None,
+                      yres: Optional[float] = None, res_unit: Optional[str] = None) -> None:
         """
         Method to add a new image to the database
 
@@ -1331,6 +1341,11 @@ class Inserter(DatabaseInteractor):
         yields None, which is stored as SQL NULL rather than as an in-band numeric sentinel -- the
         x_res/y_res columns are nullable and have always been. Readers must treat NULL as "unknown"
         and not as a scale.
+
+        **Registration passes none of the three since 2026-09-24.** The columns hold the factor an
+        analysis used, with `unit` naming it, and a file's own declaration -- in pixels per inch
+        or centimetre -- in the same columns is what `get_image_scale` read as pixels per
+        micrometre. The parameters stay for callers that set a known factor directly.
 
         :param md5: The md5 hash of the image
         :param year: The year the image was created

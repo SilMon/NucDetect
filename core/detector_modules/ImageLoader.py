@@ -19,6 +19,16 @@ from skimage import io
 # images.x_res / images.y_res are nullable (create_tables.sql, no NOT NULL), so no schema change was
 # needed and no existing database was touched.
 
+#: The unit written beside a conversion factor an ANALYSIS used, in ``images.unit``. It is what tells
+#: that factor -- pixels per micrometre -- apart from a file's raw declared resolution, which rows
+#: registered before 2026-09-24 hold in the same columns, in pixels per ``Inch`` or ``Centimeter``.
+#: Written by the Detector and required by ``Requester.get_image_scale``, so both use this constant
+ANALYSIS_SCALE_UNIT = "µm"
+
+#: Micrometres in one of each absolute TIFF ``ResolutionUnit``. "No Unit" is absent on purpose: a
+#: resolution with no unit has nothing to be converted from
+MICRONS_PER_DECLARED_UNIT = {"Inch": 25400.0, "Centimeter": 10000.0}
+
 
 def dtype_max(dtype: np.dtype) -> float:
     """
@@ -196,6 +206,44 @@ class ImageLoader:
         if num <= 0 or den <= 0:
             return None
         return float(Fraction(num, den))
+
+    @staticmethod
+    def declared_pixels_per_micron(path: str) -> Optional[float]:
+        """
+        Method to read the scale a file declares, converted to pixels per micrometre
+
+        **A SUGGESTION, never applied on its own** -- RW, 2026-09-14: *"not all microscopes really
+        save meaningful data in these fields, so the user should still be required to set the
+        values themself."* The per-image scale dialog shows it and copies it in on request.
+
+        **Converted, which is the point of this method.** TIFF declares a resolution in pixels per
+        INCH or per CENTIMETRE, named by ``ResolutionUnit``. Until 2026-09-24 the raw number was
+        stored in ``images.x_res`` at registration and offered to that dialog as pixels per
+        micrometre: ``demo.tif`` declares 68493.72 px/inch, which is 2.70 px/um, and the dialog
+        offered 68493.72 -- clamped by its spin box to 100, still 37 times too large.
+
+        Read from the file's header each time rather than from the database: the column now holds
+        only the factor an analysis used, so the file is the only place the declaration lives.
+        ``piexif.load`` reads the tags without decoding the pixels.
+
+        :param path: The image file
+        :return: Pixels per micrometre along x, or None when the file declares no resolution, no
+            absolute unit ("No Unit" -- there is nothing to convert from), or cannot be read
+        """
+        if os.path.splitext(path)[1].lower() not in (".tiff", ".tif", ".jpg"):
+            return None
+        try:
+            tags = piexif.load(path)
+        except Exception:                                            # noqa: BLE001
+            # piexif raises its own InvalidImageDataError and plain ValueError for files it
+            # cannot parse; neither is a reason to fail a dialog that only offers a suggestion
+            return None
+        x_res = ImageLoader._rational_to_scale(tags["0th"].get(piexif.ImageIFD.XResolution))
+        unit = ImageLoader._convert_tag_to_unit(tags["0th"].get(piexif.ImageIFD.ResolutionUnit, 2))
+        microns = MICRONS_PER_DECLARED_UNIT.get(unit)
+        if x_res is None or microns is None:
+            return None
+        return x_res / microns
 
     @staticmethod
     def _convert_tag_to_unit(unit: int) -> str:

@@ -134,6 +134,60 @@
            </item>
           </layout>
          </item>
+         <item row="3" column="0">
+          <widget class="QLabel" name="label_db">
+           <property name="text">
+            <string>Current Database:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="3" column="1">
+          <widget class="QLabel" name="lbl_db_info">
+           <property name="text">
+            <string/>
+           </property>
+           <property name="wordWrap">
+            <bool>true</bool>
+           </property>
+           <property name="textInteractionFlags">
+            <set>Qt::TextSelectableByMouse</set>
+           </property>
+          </widget>
+         </item>
+         <item row="4" column="0">
+          <widget class="QLabel" name="label_convert">
+           <property name="text">
+            <string>Convert Database:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="4" column="1">
+          <layout class="QHBoxLayout" name="horizontalLayout_convert">
+           <item>
+            <spacer name="horizontalSpacer_convert">
+             <property name="orientation">
+              <enum>Qt::Horizontal</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>40</width>
+               <height>20</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+           <item>
+            <widget class="QPushButton" name="btn_convert_db">
+             <property name="toolTip">
+              <string>Choose a database and bring it to the version this program writes</string>
+             </property>
+             <property name="text">
+              <string>Convert...</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </item>
         </layout>
        </item>
       </layout>

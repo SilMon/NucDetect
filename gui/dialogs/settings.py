@@ -7,6 +7,8 @@
 # before adding attribute access to a non-Qt object in this file.
 import json
 import os
+import sqlite3
+from contextlib import closing
 from functools import partial
 from typing import Any, Dict, NotRequired, Optional, Tuple, TypedDict, Union, List
 
@@ -14,10 +16,12 @@ from PyQt5 import uic, QtCore
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (QDialog, QWidget, QScrollArea, QSizePolicy, QVBoxLayout, QMessageBox,
                              QTableWidget, QTableWidgetItem, QHeaderView, QDoubleSpinBox,
-                             QPushButton, QDialogButtonBox, QLabel, QCheckBox, QHBoxLayout)
+                             QPushButton, QDialogButtonBox, QLabel, QCheckBox, QHBoxLayout,
+                             QFileDialog)
 
 import gui.Paths as gpaths
 from gui import Util
+from core.database import schema_version, selection
 from core.logging_config import get_logger, reset_log_file
 from gui.definitions.icons import Icon
 from gui.settings.Widgets import SettingsSlider, SettingsDial, SettingsSpinner, SettingsDecimalSpinner, \
@@ -522,7 +526,140 @@ class SettingsDialog(QDialog):
         self.ui.btn_reset_db.clicked.connect(self.reset_database)
         self.ui.btn_reset_an.clicked.connect(self.reset_analysis_data)
         self.ui.btn_reset_log.clicked.connect(self.reset_log_file)
+        self.ui.btn_convert_db.clicked.connect(lambda: self.convert_database())
+        self.show_database_info()
         # TODO implement program settings and chosen presets
+
+    def show_database_info(self) -> None:
+        """
+        Method to show which database is in use and which schema version it has
+
+        Read through a READ-ONLY connection: opening a database to describe it must not change it,
+        which is the first of the two rules the schema-version module keeps.
+
+        :return: None
+        """
+        path = selection.get_active()
+        try:
+            with closing(sqlite3.connect(f"file:{path.replace(os.sep, '/')}?mode=ro",
+                                         uri=True)) as connection:
+                state = schema_version.describe(connection)
+        except sqlite3.Error as exc:
+            state = f"unreadable: {exc}"
+        self.ui.lbl_db_info.setText(f"{path}\n{state}")
+
+    def convert_database(self, path: Optional[str] = None) -> Optional[List[str]]:
+        """
+        Method to convert a chosen database to the schema version this build writes
+
+        RW, 2026-09-22: *"Do not migrate the existing databases. Provide an option in the Settings
+        dialog (main tab) to load an existing database and convert it to the most recent version if
+        possible."* So nothing is converted without the user choosing the file and confirming what
+        will happen to it, and a database that cannot be converted is refused with the reason.
+
+        **Inspected read-only first**: a file the user only looks at, or declines to convert, is
+        not touched. **Converted in one transaction** by ``schema_version.upgrade``, so a failure
+        part-way leaves it exactly as it was.
+
+        Each user-facing step is its own method -- ``choose_database_file``,
+        ``confirm_conversion``, ``show_message`` -- so the flow can be driven without modal windows.
+
+        :param path: The database to convert. Asked for when not given
+        :return: The statements executed; an empty list when it was already current; None when
+            nothing was converted -- cancelled, declined, refused or failed
+        """
+        path = path or self.choose_database_file()
+        if not path:
+            return None
+        name = os.path.basename(path)
+        try:
+            with closing(sqlite3.connect(f"file:{path.replace(os.sep, '/')}?mode=ro",
+                                         uri=True)) as connection:
+                current = schema_version.detect(connection)
+                steps = schema_version.pending(connection)
+        except schema_version.Unconvertible as exc:
+            self.show_message(QMessageBox.Warning, "Cannot convert",
+                              f"{name} cannot be converted: {exc}.")
+            return None
+        except sqlite3.Error as exc:
+            self.show_message(QMessageBox.Warning, "Cannot convert",
+                              f"{name} could not be read as a database: {exc}.")
+            return None
+        if not steps:
+            self.show_message(QMessageBox.Information, "Nothing to convert",
+                              f"{name} is already at version {current}, the version this "
+                              f"program writes.")
+            return []
+        if not self.confirm_conversion(path, current, steps):
+            return None
+        try:
+            with closing(sqlite3.connect(path)) as connection:
+                applied = schema_version.upgrade(connection)
+        except (sqlite3.Error, schema_version.Unconvertible) as exc:
+            LOGGER.error("Conversion of %s failed and was rolled back: %s", path, exc)
+            self.show_message(QMessageBox.Critical, "Conversion failed",
+                              f"{name} could not be converted and has been left unchanged:\n{exc}")
+            return None
+        LOGGER.info("Converted %s from schema version %s to %s (%d statements)", path, current,
+                    schema_version.SCHEMA_VERSION, len(applied))
+        self.show_message(QMessageBox.Information, "Conversion finished",
+                          f"{name} is now at version {schema_version.SCHEMA_VERSION}.")
+        self.show_database_info()
+        return applied
+
+    def choose_database_file(self) -> Optional[str]:
+        """
+        Method to ask which database to convert
+
+        :return: The chosen path, or None if the user cancelled
+        """
+        path, _ = QFileDialog.getOpenFileName(self, "Choose a database to convert",
+                                              gpaths.data_dir,
+                                              "Databases (*.db);;All files (*)")
+        return path or None
+
+    def confirm_conversion(self, path: str, current: int,
+                           steps: List[schema_version.SchemaVersion]) -> bool:
+        """
+        Method to show what a conversion will do and ask whether to go ahead
+
+        The versions are described in words rather than as the statements that will run: the
+        decision is the user's, and it has to be made on something they can read.
+
+        :param path: The database to convert
+        :param current: Its current version
+        :param steps: The versions the conversion passes through, oldest first
+        :return: True to convert
+        """
+        changes = "\n".join(f"  - version {v.number}: {v.description}" for v in steps)
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("Convert database?")
+        box.setText(f"{os.path.basename(path)} is at version {current}. Converting it brings it "
+                    f"to version {schema_version.SCHEMA_VERSION}:\n\n{changes}")
+        box.setInformativeText("The conversion runs as a single step: if anything fails, the file "
+                               "is left exactly as it was. It cannot be undone afterwards, so "
+                               "keep a copy if you may need to open this database with an older "
+                               "version of the program.")
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        # No is the default, as for every other destructive action in this dialog
+        box.setDefaultButton(QMessageBox.No)
+        return box.exec() == QMessageBox.Yes
+
+    def show_message(self, icon, title: str, text: str) -> None:
+        """
+        Method to tell the user how a conversion went
+
+        :param icon: The QMessageBox icon
+        :param title: The window title
+        :param text: The message
+        :return: None
+        """
+        box = QMessageBox(self)
+        box.setIcon(icon)
+        box.setWindowTitle(title)
+        box.setText(text)
+        box.exec()
 
     def accept(self):
         # Update the database to reflect the changes made

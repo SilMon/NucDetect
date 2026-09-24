@@ -1175,12 +1175,17 @@ class NucDetect(QMainWindow):
         d = ImageLoader.get_image_data(path)
         # Add the data to the database
         # Passed by keyword: the signature takes eleven same-looking values in a row, which is how
-        # the minute slot silently received the day for as long as it did
+        # the minute slot silently received the day for as long as it did.
+        #
+        # NO RESOLUTION, since 2026-09-24. x_res/y_res hold the factor an ANALYSIS used, in pixels
+        # per micrometre with `unit` naming it; the file's declaration is pixels per inch or
+        # centimetre, and storing it in the same columns is what made the per-image scale dialog
+        # offer 68493.72 px/um for demo.tif. The declaration is read from the file when it is
+        # wanted -- see ask_for_per_image_scale
         self.inserter.add_new_image(md5,
                                     year=d["year"], month=d["month"], day=d["day"],
                                     hour=d["hour"], minute=d["minute"],
-                                    channels=d["channels"], width=d["width"], height=d["height"],
-                                    xres=d["x_res"], yres=d["y_res"], res_unit=d["unit"])
+                                    channels=d["channels"], width=d["width"], height=d["height"])
         self.inserter.register_image_filename(path)
         self.connector.commit_changes()
 
@@ -1343,11 +1348,12 @@ class NucDetect(QMainWindow):
         rows = []
         for path in paths:
             md5 = ImageLoader.calculate_image_id(path)
-            # The value the FILE declares, offered as a suggestion and never applied on its own --
-            # get_image_scale answers None when the image has no stored factor, which is also the
-            # state this dialog exists to fix
-            declared = self.requester.get_image_scale(md5)
-            rows.append((md5, os.path.basename(path), declared[0] if declared else None))
+            # The value the FILE declares, offered as a suggestion and never applied on its own.
+            # Read from the file and converted to px/um -- NOT from get_image_scale, which until
+            # 2026-09-24 handed this dialog a raw px/inch value for an unanalysed image, and hands
+            # it the previous run's factor for an analysed one, which no file declared
+            declared = ImageLoader.declared_pixels_per_micron(path)
+            rows.append((md5, os.path.basename(path), declared))
         dialog = ImageScaleDialog(rows, default=default, parent=self)
         if dialog.exec() != QDialog.Accepted:
             return None

@@ -19,7 +19,7 @@ from core.detector_modules.AreaAndROIExtractor import extract_nuclei_from_maps, 
     extract_foci_from_blobs
 from core.detector_modules.FCNMapper import FCNMapper
 from core.detector_modules.FocusMapper import FocusMapper
-from core.detector_modules.ImageLoader import ImageData, ImageLoader
+from core.detector_modules.ImageLoader import ANALYSIS_SCALE_UNIT, ImageData, ImageLoader
 from core.detector_modules.MapComparator import ColocalizationRow, MapComparator
 from core.detector_modules.NucleusMapper import NucleusMapper
 from core.detector_modules.QualityTester import QualityTester
@@ -413,7 +413,9 @@ class Detector:
                     f"{sum(1 for x in rows if x[3] is not None)} of {len(rows)} foci have a partner")
         imgdat["x_scale"] = analysis_settings["dots_per_micron"]
         imgdat["y_scale"] = analysis_settings["dots_per_micron"]
-        imgdat["scale_unit"] = "µm"
+        # The constant, not a literal: get_image_scale tells an analysis factor apart from a file's
+        # raw declaration by exactly this string
+        imgdat["scale_unit"] = ANALYSIS_SCALE_UNIT
         imgdat["handler"] = handler
         # Travels back with the result so the PARENT can escalate it. A batch worker's own logger
         # is a NullHandler, so the warning has to be raised where the results are collected

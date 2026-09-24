@@ -28,6 +28,12 @@ CREATE TABLE IF NOT EXISTS "groups"
     "name"       TEXT,
     PRIMARY KEY ("image", "experiment")
 ) WITHOUT ROWID;
+/*
+x_res / y_res are REAL and unit TEXT since schema version 4, 2026-09-24. They were declared INTEGER
+while holding a float and a name; SQLite's type affinity kept the values intact, so nothing failed,
+but the schema misdescribed them. They hold the conversion factor an analysis used, in pixels per
+micrometre, with unit naming it -- see Requester.get_image_scale.
+*/
 CREATE TABLE IF NOT EXISTS "images"
 (
     "md5"        TEXT,
@@ -39,9 +45,9 @@ CREATE TABLE IF NOT EXISTS "images"
     "channels"   INTEGER NOT NULL,
     "width"      INTEGER NOT NULL,
     "height"     INTEGER NOT NULL,
-    "x_res"      INTEGER,
-    "y_res"      INTEGER,
-    "unit"       INTEGER,
+    "x_res"      REAL,
+    "y_res"      REAL,
+    "unit"       TEXT,
     "analysed"   INTEGER NOT NULL,
     "settings"   TEXT,
     "experiment" TEXT,

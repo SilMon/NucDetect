@@ -39,7 +39,7 @@ from typing import Callable, Dict, List, NamedTuple, Optional
 
 #: The schema this build writes. Bump it when a NEW version is added to HISTORY below, never on its
 #: own -- a version number with no entry describing it cannot be converted to or from.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 #: What `PRAGMA user_version` reads on every database written before 2026-09-22. It is not a
 #: version: it is SQLite's default, and it means "ask the schema instead".
@@ -75,6 +75,32 @@ def _has_colocalization_tables(connection: sqlite3.Connection) -> bool:
                                                                     "colocalization_pairs")
 
 
+def _images_typed(connection: sqlite3.Connection) -> bool:
+    """True when images.x_res/y_res are declared REAL and unit TEXT -- the version-4 shape"""
+    declared = {row[1]: (row[2] or "").upper()
+                for row in connection.execute('PRAGMA table_info("images")').fetchall()}
+    return (declared.get("x_res") == "REAL" and declared.get("y_res") == "REAL"
+            and declared.get("unit") == "TEXT")
+
+
+def _is_v3_or_later(connection: sqlite3.Connection) -> bool:
+    return (_has_roi_table(connection) and "co_localized" in _roi_columns(connection)
+            and _has_colocalization_tables(connection))
+
+
+#: The version-4 images table, under a temporary name. It must match create_tables.sql column for
+#: column -- a converted database and a new one have to come out identical, and the schema-version
+#: checks compare the two. The ORDER of the columns is load-bearing as well: the copy below is
+#: `SELECT *`, which is positional
+_IMAGES_V4 = (
+    'CREATE TABLE "images_v4" ("md5" TEXT, "year" INTEGER, "month" INTEGER, "day" INTEGER, '
+    '"hour" INTEGER, "minute" INTEGER, "channels" INTEGER NOT NULL, "width" INTEGER NOT NULL, '
+    '"height" INTEGER NOT NULL, "x_res" REAL, "y_res" REAL, "unit" TEXT, '
+    '"analysed" INTEGER NOT NULL, "settings" TEXT, "experiment" TEXT, "modified" INTEGER NOT NULL, '
+    'PRIMARY KEY ("md5")) WITHOUT ROWID'
+)
+
+
 HISTORY: Dict[int, SchemaVersion] = {
     1: SchemaVersion(
         number=1,
@@ -99,8 +125,7 @@ HISTORY: Dict[int, SchemaVersion] = {
     3: SchemaVersion(
         number=3,
         description="co-localization stored per channel pair, in its own two tables",
-        recognise=lambda con: (_has_roi_table(con) and "co_localized" in _roi_columns(con)
-                               and _has_colocalization_tables(con)),
+        recognise=lambda con: _is_v3_or_later(con) and not _images_typed(con),
         # THE FIRST VERSION DEFINED BY TABLES RATHER THAN A COLUMN, which the module docstring's
         # "columns and types, and nothing else" has to be read against: these two tables DO heal
         # on open, like any other table. The version exists anyway because a version number has to
@@ -118,6 +143,28 @@ HISTORY: Dict[int, SchemaVersion] = {
             'CREATE TABLE IF NOT EXISTS "colocalization" ("image" TEXT, "focus" INTEGER, '
             '"channel_a" TEXT, "channel_b" TEXT, "partner" INTEGER, '
             'PRIMARY KEY ("image", "focus", "channel_a", "channel_b")) WITHOUT ROWID',
+        ],
+    ),
+    4: SchemaVersion(
+        number=4,
+        description="image resolution stored as numbers and its unit as text",
+        recognise=lambda con: _is_v3_or_later(con) and _images_typed(con),
+        # THE FIRST TABLE REBUILD. SQLite cannot change a declared column type in place, so the
+        # table is built again under a new name, filled, and swapped in. It changes TYPES ONLY --
+        # values are copied as they are, and SQLite's REAL affinity turns a stored integer 96 into
+        # 96.0 without changing what it means. Which of those values are a factor and which are a
+        # file's raw declaration is `unit`'s business and is left alone: RW, "do not migrate the
+        # existing databases" is about the data, and this converts the schema.
+        #
+        # The images table is small -- one row per image, 1120 in the largest database there is --
+        # so the rebuild is quick even where roi and points reach millions of rows. The index is
+        # recreated because DROP TABLE removes it with the table.
+        upgrade_from_previous=[
+            _IMAGES_V4,
+            'INSERT INTO "images_v4" SELECT * FROM "images"',
+            'DROP TABLE "images"',
+            'ALTER TABLE "images_v4" RENAME TO "images"',
+            'CREATE INDEX IF NOT EXISTS images_md5_idx ON images(md5)',
         ],
     ),
 }
@@ -150,6 +197,29 @@ def detect(connection: sqlite3.Connection) -> Optional[int]:
     return None
 
 
+def pending(connection: sqlite3.Connection) -> List[SchemaVersion]:
+    """
+    List the versions converting this database would pass through, oldest first
+
+    The human-readable half of ``plan``: the converter shows the user these descriptions rather
+    than SQL.
+
+    :param connection: An open connection, which is only read from
+    :return: The versions after the current one, up to SCHEMA_VERSION. Empty when already current
+    :raises Unconvertible: as ``plan``
+    """
+    current = detect(connection)
+    if current is None:
+        raise Unconvertible(
+            "the schema matches no version this build knows -- it was not written by NucDetect, "
+            "or it is from a build newer than this one")
+    if current > SCHEMA_VERSION:
+        raise Unconvertible(
+            f"the database is version {current} and this build understands {SCHEMA_VERSION} -- "
+            f"converting it would mean removing data. Use a newer NucDetect")
+    return [HISTORY[number] for number in range(current + 1, SCHEMA_VERSION + 1)]
+
+
 def plan(connection: sqlite3.Connection) -> List[str]:
     """
     Describe what converting this database to SCHEMA_VERSION would do, without doing any of it
@@ -162,19 +232,7 @@ def plan(connection: sqlite3.Connection) -> List[str]:
     :return: The statements that would run, in order. Empty when already current
     :raises Unconvertible: when the schema matches no known version, or is NEWER than this build
     """
-    current = detect(connection)
-    if current is None:
-        raise Unconvertible(
-            "the schema matches no version this build knows -- it was not written by NucDetect, "
-            "or it is from a build newer than this one")
-    if current > SCHEMA_VERSION:
-        raise Unconvertible(
-            f"the database is version {current} and this build understands {SCHEMA_VERSION} -- "
-            f"converting it would mean removing data. Use a newer NucDetect")
-    steps: List[str] = []
-    for number in range(current + 1, SCHEMA_VERSION + 1):
-        steps.extend(HISTORY[number].upgrade_from_previous)
-    return steps
+    return [step for version in pending(connection) for step in version.upgrade_from_previous]
 
 
 def upgrade(connection: sqlite3.Connection) -> List[str]:
@@ -193,12 +251,29 @@ def upgrade(connection: sqlite3.Connection) -> List[str]:
     :raises Unconvertible: as ``plan``
     """
     steps = plan(connection)
-    # PRAGMA user_version cannot be parameterised, hence the f-string. SCHEMA_VERSION is a module
-    # constant and never user input, which is the only reason that is acceptable here
-    with connection:
+    # AN EXPLICIT BEGIN, and it is what makes the promise above true. Until 2026-09-24 this relied
+    # on `with connection:`, and Python's sqlite3 module opens its implicit transaction only before
+    # INSERT/UPDATE/DELETE -- so a CREATE TABLE or ALTER TABLE at the head of the steps ran in
+    # AUTOCOMMIT and stayed committed if a later step failed. Nearly harmless while every step was
+    # an ADD COLUMN or a CREATE ... IF NOT EXISTS, which a retry simply repeats; version 4's rebuild
+    # is five steps, and a failure after its CREATE would have left a stray table behind in a
+    # database reported as unchanged -- and a failure after its DROP, no images table at all. SQLite's DDL IS transactional, including
+    # DROP and RENAME, once a transaction is actually open.
+    if connection.in_transaction:
+        raise sqlite3.OperationalError("upgrade() needs a connection with no open transaction -- "
+                                       "commit or roll back first")
+    connection.execute("BEGIN IMMEDIATE")
+    try:
         for statement in steps:
             connection.execute(statement)
+        # PRAGMA user_version cannot be parameterised, hence the f-string. SCHEMA_VERSION is a
+        # module constant and never user input, which is the only reason that is acceptable here.
+        # It is part of the transaction: the stamp lives in the file header, which SQLite journals
         connection.execute(f"PRAGMA user_version = {int(SCHEMA_VERSION)}")
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
     return steps
 
 
