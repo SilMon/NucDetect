@@ -41,7 +41,7 @@ main.x`` do the work inside the engine.
 """
 import os
 import sqlite3
-from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence
+from typing import Dict, Iterable, List, NamedTuple, Optional, Sequence, Tuple
 
 #: The tables carrying one image's analysis data, in FOREIGN-KEY-SAFE INSERT ORDER -- parents
 #: before children. The reverse of this order is the safe DELETE order, which is why it is a list
@@ -75,6 +75,9 @@ class TransferReport(NamedTuple):
     already_present: List[str]
     #: The experiment whose membership was carried across, if any
     experiment: Optional[str]
+    #: Images a MIGRATE left in the source, because another experiment there still has them. Their
+    #: membership of THIS experiment moved; their analysis data stayed, and was copied
+    shared: Tuple[str, ...] = ()
 
     def summary(self) -> str:
         """One line for a status bar or a log."""
@@ -130,7 +133,9 @@ def transfer_images(source: str, target: str, md5s: Iterable[str],
         with a ``Connector`` first, which also stamps its version
     :param md5s: The images to transfer
     :param experiment: The experiment these images belong to. Its row and their group memberships
-        travel with them; None transfers the image data alone
+        OF THIS EXPERIMENT travel with them -- a membership of another experiment stays where it is,
+        and on a migrate an image that other experiment still holds keeps its data in the source
+        (see ``TransferReport.shared``). None transfers the image data alone
     :param move: True to remove the rows from the source afterwards -- RW's *migrate*. False
         leaves the source intact -- RW's *copy*
     :return: What was done, per table
@@ -149,6 +154,7 @@ def transfer_images(source: str, target: str, md5s: Iterable[str],
     params = tuple(md5s)
     copied: Dict[str, int] = {}
     removed: Dict[str, int] = {}
+    shared: Tuple[str, ...] = ()
 
     # isolation_level=None hands the transaction to us. The default mode issues an implicit COMMIT
     # before anything it considers DDL, which would break the all-or-nothing guarantee above
@@ -168,17 +174,53 @@ def transfer_images(source: str, target: str, md5s: Iterable[str],
             present_tables = {row[0] for row in con.execute(
                 "SELECT name FROM main.sqlite_master WHERE type='table'")}
             tables = [(t, w) for t, w in IMAGE_TABLES if t in present_tables]
+            # WITHOUT an experiment, memberships are not image data and do not travel -- the
+            # docstring always said "the image data alone", and until 2026-09-24 `groups` went
+            # anyway, carrying the image's memberships of every experiment into a database that
+            # holds none of them
+            if experiment is None:
+                tables = [(t, w) for t, w in tables if t != "groups"]
+
+            def selecting(table: str, where: str, images: Sequence[str]) -> Tuple[str, tuple]:
+                """The WHERE clause and parameters choosing `images`' rows of `table`"""
+                clause = where.format(placeholders=",".join("?" * len(images)), schema="main")
+                values = tuple(images)
+                # SCOPED TO THE EXPERIMENT, since 2026-09-24. `groups` holds one row per image PER
+                # EXPERIMENT, and selecting it by image alone carried -- and on a migrate DELETED --
+                # the image's memberships of every other experiment too. Found while building the
+                # per-experiment move out of the standard database, which is the first transfer to
+                # run where an image can belong to two experiments in the source
+                if table == "groups" and experiment is not None:
+                    clause += " AND experiment = ?"
+                    values += (experiment,)
+                return clause, values
+
             for table, where in tables:
-                clause = where.format(placeholders=holders, schema="main")
+                clause, values = selecting(table, where, md5s)
                 cur = con.execute(
                     f"INSERT OR REPLACE INTO target.{table} "
-                    f"SELECT * FROM main.{table} WHERE {clause}", params)
+                    f"SELECT * FROM main.{table} WHERE {clause}", values)
                 copied[table] = cur.rowcount if cur.rowcount > 0 else 0
             if move:
+                # An image ANOTHER experiment in the source still holds keeps its analysis data
+                # there: removing it would leave that experiment with a membership and no image.
+                # Only this experiment's membership leaves with it
+                if "groups" in present_tables:
+                    # Without an experiment, ANY membership in the source keeps the image's data
+                    # there; with one, any membership of ANOTHER experiment does
+                    other = "" if experiment is None else " AND experiment <> ?"
+                    shared = tuple(row[0] for row in con.execute(
+                        f"SELECT DISTINCT image FROM main.groups WHERE image IN ({holders})"
+                        f"{other}", params + (() if experiment is None else (experiment,))))
+                leaving = [md5 for md5 in md5s if md5 not in shared]
                 # Reverse order: points before roi, because points are identified THROUGH roi
                 for table, where in reversed(tables):
-                    clause = where.format(placeholders=holders, schema="main")
-                    cur = con.execute(f"DELETE FROM main.{table} WHERE {clause}", params)
+                    images = md5s if table == "groups" else leaving
+                    if not images:
+                        removed[table] = 0
+                        continue
+                    clause, values = selecting(table, where, images)
+                    cur = con.execute(f"DELETE FROM main.{table} WHERE {clause}", values)
                     removed[table] = cur.rowcount if cur.rowcount > 0 else 0
                 if experiment is not None:
                     # The standard database is to hold no experiment data at all -- RW. The row
@@ -203,7 +245,7 @@ def transfer_images(source: str, target: str, md5s: Iterable[str],
     # NOT vacuumed. A migrate leaves free pages in the source, and reclaiming them rewrites the
     # whole file -- seconds and a full-size temporary copy on the 749 MB databases this project
     # has. Whoever wants the space back can ask for it explicitly
-    return TransferReport(copied, removed, present, experiment)
+    return TransferReport(copied, removed, present, experiment, shared)
 
 
 def experiment_data_in(path: str) -> Dict[str, int]:

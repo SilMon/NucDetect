@@ -39,7 +39,7 @@ from typing import Callable, Dict, List, NamedTuple, Optional
 
 #: The schema this build writes. Bump it when a NEW version is added to HISTORY below, never on its
 #: own -- a version number with no entry describing it cannot be converted to or from.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 #: What `PRAGMA user_version` reads on every database written before 2026-09-22. It is not a
 #: version: it is SQLite's default, and it means "ask the schema instead".
@@ -81,6 +81,32 @@ def _images_typed(connection: sqlite3.Connection) -> bool:
                 for row in connection.execute('PRAGMA table_info("images")').fetchall()}
     return (declared.get("x_res") == "REAL" and declared.get("y_res") == "REAL"
             and declared.get("unit") == "TEXT")
+
+
+def _declared(connection: sqlite3.Connection, table: str) -> Dict[str, str]:
+    """Each column's declared type, upper-cased"""
+    return {row[1]: (row[2] or "").upper()
+            for row in connection.execute(f'PRAGMA table_info("{table}")').fetchall()}
+
+
+def _names_typed(connection: sqlite3.Connection) -> bool:
+    """True when channels.name, groups.image and groups.experiment are TEXT -- the v5 shape"""
+    channels, groups = _declared(connection, "channels"), _declared(connection, "groups")
+    return (channels.get("name") == "TEXT" and groups.get("image") == "TEXT"
+            and groups.get("experiment") == "TEXT")
+
+
+def _rebuild(table: str, create: str, index: Optional[str] = None) -> List[str]:
+    """
+    The statements rebuilding one table under a new declaration
+
+    SQLite cannot change a declared type in place. The table is created under a temporary name,
+    filled with `SELECT *` -- positional, so `create` must keep the column ORDER -- and swapped in.
+    Values are copied as they are; the new declaration governs only what is stored from now on.
+    """
+    statements = [create, f'INSERT INTO "{table}_new" SELECT * FROM "{table}"',
+                  f'DROP TABLE "{table}"', f'ALTER TABLE "{table}_new" RENAME TO "{table}"']
+    return statements + ([index] if index else [])
 
 
 def _is_v3_or_later(connection: sqlite3.Connection) -> bool:
@@ -148,7 +174,8 @@ HISTORY: Dict[int, SchemaVersion] = {
     4: SchemaVersion(
         number=4,
         description="image resolution stored as numbers and its unit as text",
-        recognise=lambda con: _is_v3_or_later(con) and _images_typed(con),
+        recognise=lambda con: (_is_v3_or_later(con) and _images_typed(con)
+                               and not _names_typed(con)),
         # THE FIRST TABLE REBUILD. SQLite cannot change a declared column type in place, so the
         # table is built again under a new name, filled, and swapped in. It changes TYPES ONLY --
         # values are copied as they are, and SQLite's REAL affinity turns a stored integer 96 into
@@ -166,6 +193,28 @@ HISTORY: Dict[int, SchemaVersion] = {
             'ALTER TABLE "images_v4" RENAME TO "images"',
             'CREATE INDEX IF NOT EXISTS images_md5_idx ON images(md5)',
         ],
+    ),
+    5: SchemaVersion(
+        number=5,
+        description="channel names and experiment memberships stored as text",
+        recognise=lambda con: _is_v3_or_later(con) and _images_typed(con) and _names_typed(con),
+        # channels.name, groups.image and groups.experiment were declared INTEGER while holding
+        # names and md5s, so any value that LOOKED numeric was converted when stored: an experiment
+        # named "2024" came back as the number 2024. Two small tables -- one row per channel of an
+        # image, one per membership -- so the rebuild is quick on any database. roi.image and
+        # statistics.image carry the same declaration and are left for the redesign of those
+        # tables (RW, 2026-09-24): they reach millions of rows, and that redesign rebuilds them
+        # anyway. A value converted before this version is NOT recovered: a float cannot be turned
+        # back into the md5 it came from. None exists in any database measured on 2026-09-24
+        upgrade_from_previous=(
+            _rebuild("channels",
+                     'CREATE TABLE "channels_new" ("md5" TEXT, "index_" INTEGER, "name" TEXT, '
+                     '"active" INTEGER, "main" INTEGER, PRIMARY KEY ("md5", "index_")) '
+                     'WITHOUT ROWID')
+            + _rebuild("groups",
+                       'CREATE TABLE "groups_new" ("image" TEXT, "experiment" TEXT, "name" TEXT, '
+                       'PRIMARY KEY ("image", "experiment")) WITHOUT ROWID')
+        ),
     ),
 }
 

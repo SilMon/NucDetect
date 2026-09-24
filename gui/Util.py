@@ -22,6 +22,7 @@ from skimage.transform import resize, downscale_local_mean
 
 from gui.definitions.icons import Color
 from core.detector_modules.ImageLoader import ImageLoader, dtype_max
+from core.database import selection
 from core.logging_config import get_logger
 from gui import Paths
 
@@ -437,7 +438,10 @@ def check_if_image_was_analysed_and_modified(md5: str) -> Tuple[bool, bool]:
     # the obvious spelling would not have closed anything. This function runs once per row of the
     # image list, so a folder of 500 images leaked 500 connections, and on Windows 500 open file
     # handles on the database, until the garbage collector happened to finalise them.
-    with closing(sqlite3.connect(Paths.database)) as connection:
+    # selection.get_active(), NOT Paths.database: the image list must show the database the
+    # program is using. The default path ignored a database switch, so after one the list's
+    # analysed/modified colours came from the standard database while the table did not
+    with closing(sqlite3.connect(selection.get_active())) as connection:
         cursor = connection.cursor()
         analysed = cursor.execute(
             "SELECT analysed FROM images WHERE md5=?",
@@ -468,7 +472,8 @@ def get_image_scale(md5: str) -> Tuple[float, float]:
     """
     # See check_if_image_was_analysed_and_modified above for why this is closing() and not a plain
     # `with sqlite3.connect(...)`
-    with closing(sqlite3.connect(Paths.database)) as connection:
+    # The active database, for the same reason as check_if_image_was_analysed_and_modified
+    with closing(sqlite3.connect(selection.get_active())) as connection:
         cursor = connection.cursor()
         x_scale = cursor.execute(
             "SELECT x_res FROM images WHERE md5=?",

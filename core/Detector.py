@@ -64,6 +64,9 @@ class AnalysisResult(ImageData, total=False):
     """
     #: The image id (md5), which is the primary key everything else is keyed by
     id: str
+    #: The file the image was read from. Carried since 2026-09-24 because a result is written to
+    #: several databases, and one that has never seen the image registers it -- file name included
+    path: str
     #: The channel image arrays, one per channel. NOT ``channels`` -- see the class docstring
     channel_arrays: List[np.ndarray]
     #: Which channels the analysis ran on, and which one was the nucleus channel
@@ -208,6 +211,7 @@ class Detector:
         self.analysis_log["Messages"][self.analysis_log["Analysed Images"][-1]] = []
         prg[LOAD](0.3, "Hashing image")
         imgdat["id"] = self.imageloader.calculate_image_id(path)
+        imgdat["path"] = path
         # A per-image conversion factor overrides the run-wide one, for THIS image only.
         #
         # Done here rather than at either dispatch site because this is where the image identity is

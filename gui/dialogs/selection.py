@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import QDialog, QCheckBox, QDialogButtonBox, QProgressBar
 from gui import Paths
 from gui import Util
 from gui.Util import create_image_item_list_from
+from core.database import experiments
 from core.database.connections import Requester
 from gui.definitions.icons import Icon
 from gui.loader import Loader
@@ -53,7 +54,8 @@ class ExperimentSelectionDialog(QDialog):
                             QtCore.Qt.WindowSystemMenuHint |
                             QtCore.Qt.WindowMinMaxButtonsHint)
         # Load available experiments
-        exps = self.requester.get_all_experiments()
+        # Every database's experiments, not only the active one's -- RW, 2026-09-24
+        exps = experiments.experiment_names()
         # Add experiments to combo box
         for experiment in exps:
             self.ui.cbx_exp.addItem(experiment)
@@ -71,10 +73,15 @@ class ExperimentSelectionDialog(QDialog):
         """
         # Get the selected experiment
         exp = current_text
-        # Load available channels
-        channels = self.requester.get_channels_for_experiment(exp)
-        # Get main channel
-        main = self.requester.get_main_channel_for_experiment(exp)
+        # Read from the experiment's own database
+        req = experiments.requester_for(exp)
+        try:
+            # Load available channels
+            channels = req.get_channels_for_experiment(exp)
+            # Get main channel
+            main = req.get_main_channel_for_experiment(exp)
+        finally:
+            req.connector.close_connection()
         # Clean up channels
         channels = [x for x in channels if x != main]
         self.clear_vbox()

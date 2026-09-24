@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (
                              QDialog, QInputDialog, QSizePolicy, QMessageBox, QSpinBox,
                              QHBoxLayout, QVBoxLayout, QHeaderView, QMenuBar, QMenu, QAction,
                              QComboBox, QListWidget, QAbstractItemView, QListWidgetItem,
-                             QAbstractScrollArea, QWidget)
+                             QAbstractScrollArea, QWidget, QPushButton)
 from matplotlib.backends.backend_qt5 import NavigationToolbar2QT as NavigationToolbar
 
 from gui import Plots
@@ -25,7 +25,10 @@ from gui import Util
 from core.DataProcessing import perform_statistical_analysis_on_groups
 from gui.Plots import PlotCanvas
 from gui.Util import create_image_item_list_from
-from core.database.connections import Inserter, Requester, NO_COLOCALIZATION
+from core.database import experiments, selection, transfer
+from core.database.connections import (Connector, Inserter, Requester, Specifiers,
+                                       NO_COLOCALIZATION)
+from core.detector_modules.ImageLoader import ImageLoader
 from core.logging_config import get_logger
 from gui.definitions.icons import Icon
 from gui.dialogs.GraphicsItems import EditorView, ROIDrawer, ROIItem
@@ -176,7 +179,8 @@ class DataExportDialog(QDialog):
             cbx_cont.extend(DataExportDialog.STANDARD_OPTIONS)
         else:
             cbx_cont.extend(DataExportDialog.STANDARD_OPTIONS[1:])
-        cbx_cont.extend(self.req.get_all_experiments())
+        # Every database's experiments -- RW, 2026-09-24
+        cbx_cont.extend(experiments.experiment_names())
         ui.cbx_choice.addItems(cbx_cont)
         self.update_single_file_note(ui)
         return ui
@@ -229,7 +233,7 @@ class DataExportDialog(QDialog):
         # Save all defined experiments
         elif selection == DataExportDialog.STANDARD_OPTIONS[2]:  # All defined experiments
             # Get all defined experiments
-            exps = self.req.get_all_experiments()
+            exps = experiments.experiment_names()
             # Check if the data should be saved in one file
             if self.export_goes_into_one_workbook():
                 self.export_into_one_workbook(exps, "results_all_experiments",
@@ -505,9 +509,14 @@ class DataExportDialog(QDialog):
         header.insert(2, "Group")
         header.extend(("Channel", "Foci"))
         # Get the data for the given image
-        rows = self.req.get_table_data_for_experiment(experiment)
-        # The nucleus is the fourth cell of an experiment row, after the inserted Group
-        self.append_pair_columns(header, rows, nucleus_column=3)
+        # From the experiment's OWN database, whichever one is active
+        req = experiments.requester_for(experiment)
+        try:
+            rows = req.get_table_data_for_experiment(experiment)
+            # The nucleus is the fourth cell of an experiment row, after the inserted Group
+            self.append_pair_columns(header, rows, nucleus_column=3, req=req)
+        finally:
+            req.connector.close_connection()
         self.save_table_to_disk(experiment,
                                 rows, header,
                                 include_header=include_header,
@@ -516,7 +525,7 @@ class DataExportDialog(QDialog):
                                 writer=writer)
 
     def append_pair_columns(self, header: List[str], rows: List[List],
-                            nucleus_column: int) -> None:
+                            nucleus_column: int, req: Optional[Requester] = None) -> None:
         """
         Method to add one co-localization column per channel pair to an export, in place
 
@@ -532,15 +541,17 @@ class DataExportDialog(QDialog):
         :param rows: The export's rows, each extended by one cell per pair. The image md5 is the
             second cell of every row
         :param nucleus_column: Where the nucleus hash sits in a row
+        :param req: The database the rows came from; the dialog's own when not given
         :return: None
         """
+        req = req or self.req
         images = sorted({row[1] for row in rows})
-        per_image = {image: self.req.get_colocalization_pairs(image) for image in images}
+        per_image = {image: req.get_colocalization_pairs(image) for image in images}
         pairs = sorted({pair for image_pairs in per_image.values() for pair in image_pairs})
         if not pairs:
             return
         # Once per image and pair, not per row: a row repeats its nucleus once per channel
-        shares = {(image, pair): self.req.get_colocalization_by_nucleus(image, pair)
+        shares = {(image, pair): req.get_colocalization_by_nucleus(image, pair)
                   for image, image_pairs in per_image.items() for pair in image_pairs}
         header.extend(f"Co-Loc. {a}/{b} [%]" for a, b in pairs)
         for row in rows:
@@ -1113,12 +1124,18 @@ class ExperimentDialog(QDialog):
         # Image Loader for lazy loading
         self.update_timer = None
         self.initialize_ui()
-        # Create connection to database
-        self.inserter = Inserter()
-        self.requester = Requester()
-        # What each experiment looked like when it was read, so save_changes can write only what
-        # the user actually changed
-        self.loaded_state: Dict[str, Tuple] = {}
+        # ONE CONNECTION PER DATABASE, opened on first use. Since 2026-09-24 each experiment lives
+        # in its own database (RW: "Creating an experiment should create the database"), and the
+        # dialog lists every one of them, so it talks to several files at once. `inserter` and
+        # `requester` stay, on the STANDARD database, which is where the legacy experiments are
+        self._connectors: Dict[str, Connector] = {}
+        standard = self._connector(experiments.standard())
+        self.inserter = Inserter(standard)
+        self.requester = Requester(standard)
+        # What each experiment looked like when it was read, keyed by (database, name) -- one name
+        # can exist in two databases after a COPY out of the standard one -- so save_changes can
+        # write only what the user actually changed
+        self.loaded_state: Dict[Tuple[Optional[str], str], Tuple] = {}
         self.load_experiments()
 
     def initialize_ui(self):
@@ -1134,9 +1151,20 @@ class ExperimentDialog(QDialog):
         # Connect add btn to dialog
         self.ui.btn_add_group.clicked.connect(self.open_group_dialog)
         self.ui.btn_add.clicked.connect(self.add_experiment)
+        # Connected 2026-09-24. The button was enabled and disabled with the selection and never
+        # connected, so "remove" did nothing at all
+        self.ui.btn_remove.clicked.connect(self.remove_experiment)
         self.ui.btn_images_add.clicked.connect(self.add_images_to_experiment)
         self.ui.btn_images_remove.clicked.connect(self.remove_images_from_experiment)
         self.ui.btn_images_clear.clicked.connect(self.remove_all_images_from_experiment)
+        # Offered for an experiment still stored in the standard database -- RW, 2026-09-24: offer
+        # a move, per experiment, rather than moving anything on his behalf
+        self.btn_move = QPushButton("Move to own database", self)
+        self.btn_move.setToolTip("Move this experiment out of the standard database into a "
+                                 "database of its own")
+        self.btn_move.setEnabled(False)
+        self.btn_move.clicked.connect(self.move_selected_experiment)
+        self.ui.horizontalLayout_3.addWidget(self.btn_move)
         self.ui.lv_experiments.selectionModel().selectionChanged.connect(self.on_exp_selection_change)
         # The image-selection handler was defined but never connected, so btn_images_remove was
         # never enabled or disabled in response to a selection. Connected after setModel(), which
@@ -1150,6 +1178,69 @@ class ExperimentDialog(QDialog):
         self.setWindowFlags(self.windowFlags() |
                             QtCore.Qt.WindowSystemMenuHint |
                             QtCore.Qt.WindowMinMaxButtonsHint)
+
+    def _connector(self, path: str) -> Connector:
+        """
+        Method to get this dialog's connection to one database, opening it on first use
+
+        :param path: The database
+        :return: The connection
+        """
+        path = os.path.abspath(path)
+        if path not in self._connectors:
+            self._connectors[path] = Connector(path=path)
+        return self._connectors[path]
+
+    def _database_of(self, data: Dict) -> str:
+        """The database an experiment lives in -- the standard one for a legacy experiment"""
+        return data.get("database") or experiments.standard()
+
+    def _inserter_for(self, data: Dict) -> Inserter:
+        """
+        Method to get an Inserter on the database an experiment lives in
+
+        :param data: The experiment's item data
+        :return: The Inserter
+        """
+        return Inserter(self._connector(self._database_of(data)))
+
+    def _requester_for(self, data: Dict) -> Requester:
+        """As `_inserter_for`, for reading"""
+        return Requester(self._connector(self._database_of(data)))
+
+    def _commit_all(self) -> None:
+        """Method to commit every open connection -- a transfer must not wait on this dialog's locks"""
+        for connector in self._connectors.values():
+            connector.commit_changes()
+
+    def _close_all(self, commit: bool) -> None:
+        """
+        Method to close every connection this dialog opened
+
+        :param commit: True to keep the writes made while the dialog was open, False to discard them
+        :return: None
+        """
+        for connector in self._connectors.values():
+            try:
+                if commit:
+                    connector.commit_changes()
+            finally:
+                connector.close_connection()
+        self._connectors.clear()
+
+    def label_for(self, data: Dict) -> str:
+        """
+        Method to build an experiment's list label, including where it is stored
+
+        :param data: The experiment's item data
+        :return: The label
+        """
+        label = self.create_experiment_label(data["name"], data["details"], data["groups"])
+        if data.get("legacy"):
+            return label + "\nStored in the standard database"
+        if data.get("database"):
+            return label + f"\nDatabase: {os.path.basename(data['database'])}"
+        return label + "\nNew -- its database is created on OK"
 
     def on_image_selection_change(self, selected: QItemSelection, deselected: QItemSelection) -> None:
         """
@@ -1186,20 +1277,37 @@ class ExperimentDialog(QDialog):
                     "Please enter a name." if not name
                     else f"An experiment named '{name}' already exists.")
                 return
+            # Its database is named after it, so a file of that name must not exist already --
+            # two names can sanitise to one file name ("a:b" and "a_b"), and the second would
+            # otherwise be created into the first one's database
+            try:
+                taken = os.path.exists(Paths.database_for(name))
+            except ValueError:
+                QMessageBox.information(self, "Add new Experiment...",
+                                        f"'{name}' cannot be used as a database name.")
+                return
+            if taken:
+                QMessageBox.information(
+                    self, "Add new Experiment...",
+                    f"A database for '{name}' already exists in the data folder -- choose "
+                    f"another name.")
+                return
             add_item = QStandardItem()
-            text = f"{name}\nNo Details\nGroups: No groups"
-            add_item.setText(text)
-            add_item.setData(
-                {"name": name,
-                 # None, not the name: this experiment has no row in the database yet, so there is
-                 # nothing for save_changes to rename FROM
-                 "loaded_name": None,
-                 "details": "",
-                 "notes": "",
-                 "groups": {},
-                 "keys": [],
-                 "image_paths": []}
-            )
+            data = {"name": name,
+                    # None, not the name: this experiment has no row in the database yet, so there
+                    # is nothing for save_changes to rename FROM
+                    "loaded_name": None,
+                    "details": "",
+                    "notes": "",
+                    "groups": {},
+                    "keys": [],
+                    "image_paths": [],
+                    # Created on OK, by save_changes -- RW: "Creating an experiment should create
+                    # the database." Not now, so a cancelled dialog leaves no file behind
+                    "database": None,
+                    "legacy": False}
+            add_item.setText(self.label_for(data))
+            add_item.setData(data)
             add_item.setIcon(Icon.get_icon("CLIPBOARD"))
             self.exp_model.appendRow(add_item)
 
@@ -1256,9 +1364,19 @@ class ExperimentDialog(QDialog):
             data["details"] = self.ui.te_details.toPlainText()
             data["notes"] = self.ui.te_notes.toPlainText()
             item.setData(data)
+        # Removals made while the dialog was open are pending on these connections; committing them
+        # first means a transfer below does not wait on this dialog's own write locks
+        self._commit_all()
         for ind in range(self.exp_model.rowCount()):
             item = self.exp_model.item(ind)
             data = item.data()
+            # A NEW experiment gets its database now, with the experiment in it
+            if not data.get("legacy") and not data.get("database"):
+                data["database"] = experiments.create_experiment_database(
+                    data["name"], data["details"], data["notes"])
+                item.setData(data)
+                LOGGER.info("Created the database of experiment %s: %s", data["name"],
+                            data["database"])
             # The name this experiment was READ under, or None for one added in this dialog. A
             # rename used to be indistinguishable from a new experiment: add_new_experiment is an
             # INSERT OR REPLACE keyed on the name, so it wrote a second row and left the first
@@ -1274,10 +1392,16 @@ class ExperimentDialog(QDialog):
             # rename finds nothing in the snapshot and the comparison is meaningless. The
             # fingerprint includes the name, so a renamed experiment differs from its snapshot and
             # is written
-            if self.get_experiment_fingerprint(data) == self.loaded_state.get(loaded_name or data["name"]):
+            if (self.get_experiment_fingerprint(data)
+                    == self.loaded_state.get((data.get("database"), loaded_name or data["name"]))):
                 continue
+            # Images new to an experiment database are brought into it first -- their analysis
+            # data if the standard database has it, by RW's migrate-or-copy choice
+            if not data.get("legacy"):
+                self.bring_images_into(data)
+            inserter = self._inserter_for(data)
             # Add experiment to database
-            self.inserter.add_new_experiment(data["name"], data["details"], data["notes"])
+            inserter.add_new_experiment(data["name"], data["details"], data["notes"])
             # REPLACED, not merged. add_image_to_experiment_group is an INSERT OR REPLACE and
             # nothing deleted from the groups table, so a removal made in this dialog or in the
             # group dialog was undone by this very loop -- the stored row survived, and
@@ -1285,15 +1409,14 @@ class ExperimentDialog(QDialog):
             # Deleting the experiment's rows first makes what the model holds authoritative, which
             # is also what preserves images that are not currently LOADED: they are still in
             # data["groups"], so they are written straight back
-            self.inserter.remove_group_associations_for_experiment(data["name"])
+            inserter.remove_group_associations_for_experiment(data["name"])
             for group, values in data["groups"].items():
                 for img in values:
-                    self.inserter.add_image_to_experiment_group(img, data["name"], group)
+                    inserter.add_image_to_experiment_group(img, data["name"], group)
             # Update data for images
             for key in data["keys"]:
-                self.inserter.update_image_experiment_association(key, data["name"])
-        self.inserter.commit_and_close()
-        self.requester.connector.close_connection()
+                inserter.update_image_experiment_association(key, data["name"])
+        self._close_all(commit=True)
 
     def reject(self) -> None:
         """
@@ -1309,8 +1432,7 @@ class ExperimentDialog(QDialog):
 
         :return: None
         """
-        self.inserter.connector.close_connection()
-        self.requester.connector.close_connection()
+        self._close_all(commit=False)
         super().reject()
 
     def remove_images_from_experiment(self) -> None:
@@ -1342,7 +1464,7 @@ class ExperimentDialog(QDialog):
             for group in exp_data["groups"].values():
                 if item_data["key"] in group:
                     group.remove(item_data["key"])
-            self.inserter.remove_image_from_experiment(item_data["key"])
+            self._inserter_for(exp_data).remove_image_from_experiment(item_data["key"])
             exp.setData(exp_data)
             # Remove item from model
             self.img_model.removeRows(index.row(), 1)
@@ -1361,7 +1483,7 @@ class ExperimentDialog(QDialog):
         # membership, so an experiment cleared here came back full on the next load
         exp_data["groups"] = {}
         exp.setData(exp_data)
-        self.inserter.remove_all_images_from_experiment(exp_data["name"])
+        self._inserter_for(exp_data).remove_all_images_from_experiment(exp_data["name"])
         # Clear image model
         self.img_model.clear()
 
@@ -1393,10 +1515,12 @@ class ExperimentDialog(QDialog):
 
         :return: None
         """
-        exps = self.requester.get_all_experiments()
-        # Iterate over all experiments
-        for exp in sorted(exps):
-            imgs = self.requester.get_associated_images_for_experiment(exp)
+        # EVERY experiment, in whichever database it lives -- RW, 2026-09-24. The legacy ones still
+        # in the standard database are listed too, marked, with the move offered
+        for location in experiments.all_experiments():
+            exp = location.name
+            requester = Requester(self._connector(location.path))
+            imgs = requester.get_associated_images_for_experiment(exp)
             # EVERY experiment is listed. This used to be guarded by
             # `if all(elem in self.data["keys"] for elem in imgs)`, so an experiment with a single
             # image missing from the currently loaded list vanished from the dialog completely --
@@ -1407,7 +1531,7 @@ class ExperimentDialog(QDialog):
             # table -- unpacking that raises TypeError, and an experiment listed by
             # get_all_experiments but missing its details row is a partially written state, not a
             # reason to refuse to open the dialog
-            info = self.requester.get_info_for_experiment(exp)
+            info = requester.get_info_for_experiment(exp)
             details, notes = info if info else ("", "")
             groups = {}
             # Only the loaded images have a path here -- .index() raises for the others. The
@@ -1417,32 +1541,284 @@ class ExperimentDialog(QDialog):
             img_paths = [self.data["paths"][self.data["keys"].index(x)]
                          for x in imgs if x not in missing]
             for key in imgs:
-                group = self.requester.get_associated_group_for_image(key, exp)
+                group = requester.get_associated_group_for_image(key, exp)
                 if group in groups:
                     groups[group].append(key)
                 else:
                     groups[group] = [key]
             add_item = QStandardItem()
-            label = self.create_experiment_label(name, details, groups)
+            data = {
+                "name": name,
+                # The name as stored. save_changes compares it against "name" to tell a rename
+                # from an edit, and looks the experiment up in loaded_state by it
+                "loaded_name": name,
+                "details": details,
+                "notes": notes,
+                "groups": groups,
+                "keys": imgs,
+                "image_paths": img_paths,
+                # Where it lives. None for a legacy experiment in the standard database, so the
+                # same (database, name) key is used for it before and after a save
+                "database": None if location.legacy else location.path,
+                "legacy": location.legacy,
+            }
+            label = self.label_for(data)
             if missing:
                 label += f"\n({len(missing)} of {len(imgs)} images not loaded)"
             add_item.setText(label)
-            add_item.setData(
-                {
-                    "name": name,
-                    # The name as stored. save_changes compares it against "name" to tell a rename
-                    # from an edit, and looks the experiment up in loaded_state by it
-                    "loaded_name": name,
-                    "details": details,
-                    "notes": notes,
-                    "groups": groups,
-                    "keys": imgs,
-                    "image_paths": img_paths
-                }
-            )
+            add_item.setData(data)
             add_item.setIcon(Icon.get_icon("CLIPBOARD"))
-            self.loaded_state[name] = self.get_experiment_fingerprint(add_item.data())
+            self.loaded_state[(data["database"], name)] = self.get_experiment_fingerprint(data)
             self.exp_model.appendRow(add_item)
+
+    def ask_transfer_mode(self, experiment: str, count: int) -> bool:
+        """
+        Method to ask whether analysis data leaves the standard database or is copied
+
+        RW, 2026-09-22: *"If some or all of the required analysis data is already in the standard
+        database, the user should have two options: Migrate the data to the new database or copy
+        it."* Copy is the default, because it is the one that loses nothing.
+
+        :param experiment: The experiment the data goes to
+        :param count: How many images it concerns
+        :return: True to MIGRATE (remove from the standard database), False to copy
+        """
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("Migrate or copy?")
+        box.setText(f"{count} image{'s' if count != 1 else ''} of '{experiment}' already "
+                    f"{'have' if count != 1 else 'has'} data in the standard database.")
+        box.setInformativeText("Migrate moves it into the experiment's database and removes it "
+                               "from the standard one. Copy leaves the standard database as it is.")
+        migrate = box.addButton("Migrate", QMessageBox.AcceptRole)
+        copy = box.addButton("Copy", QMessageBox.RejectRole)
+        box.setDefaultButton(copy)
+        box.exec()
+        return box.clickedButton() is migrate
+
+    def bring_images_into(self, data: Dict) -> None:
+        """
+        Method to make every image of an experiment present in the experiment's own database
+
+        An image the standard database knows arrives by TRANSFER -- its registration and any
+        analysis data, migrated or copied as the user chooses, asked once per experiment. An image
+        no database knows yet is registered from its file. Images the experiment database already
+        holds are left alone.
+
+        :param data: The experiment's item data; its "database" must be set
+        :return: None
+        """
+        database = data["database"]
+        present = set(transfer.images_in_target(database, data["keys"]))
+        missing = [key for key in data["keys"] if key not in present]
+        if not missing:
+            return
+        in_standard = transfer.images_in_target(experiments.standard(), missing)
+        if in_standard:
+            move = self.ask_transfer_mode(data["name"], len(in_standard))
+            # This dialog's connections must hold no open transaction on either file: the
+            # transfer begins an IMMEDIATE transaction on the source and attaches the target
+            self._commit_all()
+            report = transfer.transfer_images(experiments.standard(), database, in_standard,
+                                              move=move)
+            LOGGER.info("Experiment %s: %s", data["name"], report.summary())
+        inserter = self._inserter_for(data)
+        for key in missing:
+            if key in in_standard or key not in self.data["keys"]:
+                continue
+            path = self.data["paths"][self.data["keys"].index(key)]
+            meta = ImageLoader.get_image_data(path)
+            inserter.add_new_image(key, year=meta["year"], month=meta["month"], day=meta["day"],
+                                   hour=meta["hour"], minute=meta["minute"],
+                                   channels=meta["channels"], width=meta["width"],
+                                   height=meta["height"])
+            inserter.register_image_filename(path)
+
+    def confirm_removal(self, text: str) -> bool:
+        """
+        Method to ask whether an experiment may be removed
+
+        Split out so the removal can be driven without a modal window. No is the default: the
+        action cannot be undone.
+
+        :param text: What removing it will do
+        :return: True to remove
+        """
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Remove experiment?")
+        box.setText(text)
+        box.setInformativeText("This cannot be undone. Remove it?")
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        box.setDefaultButton(QMessageBox.No)
+        return box.exec() == QMessageBox.Yes
+
+    def remove_experiment(self) -> None:
+        """
+        Method to remove the selected experiment, and with it its database
+
+        RW, 2026-09-24: *"Removing an experiment should, after a warning to and confirmation by the
+        user, delete the database associated with the experiment."* Done at once, not on OK: the
+        warning says it is permanent, and it is.
+
+        Three cases that are NOT a file deletion, each said in the warning:
+
+        * a **legacy** experiment lives in the standard database, which is never deleted -- the
+          experiment and its memberships are removed from it, its images and results stay;
+        * a database that holds **other experiments too** keeps them -- only this one is removed;
+        * a **new** experiment not yet saved has no database -- it is simply dropped from the list.
+
+        **The database the program is using is refused**: Windows cannot delete an open file, and
+        the program would be left working on a database that no longer exists. The user switches
+        away in Settings first.
+
+        :return: None
+        """
+        indexes = self.ui.lv_experiments.selectionModel().selectedIndexes()
+        if not indexes:
+            return
+        item = self.exp_model.itemFromIndex(indexes[0])
+        data = item.data()
+        name = data["loaded_name"] or data["name"]
+        path = data.get("database")
+        if not data.get("legacy") and not path:
+            self._drop_experiment_item(item, data)
+            return
+        if data.get("legacy"):
+            text = (f"'{name}' is stored in the standard database. Removing it deletes the "
+                    f"experiment and its group assignments there; the images and their results "
+                    f"stay in the standard database.")
+            others = True
+        else:
+            others = [n for n in experiments.experiments_in(path) if n != name]
+            if os.path.abspath(path) == os.path.abspath(selection.get_active()):
+                QMessageBox.information(self, "Remove experiment",
+                                        f"{os.path.basename(path)} is the database the program is "
+                                        f"using. Switch to another database in Settings first.")
+                return
+            if others:
+                text = (f"{os.path.basename(path)} holds other experiments as well, so it is kept: "
+                        f"only '{name}' and its group assignments are removed from it.")
+            else:
+                text = (f"Removing '{name}' permanently deletes its database, "
+                        f"{os.path.basename(path)}, with every result stored in it. Results the "
+                        f"standard database also holds stay there.")
+        if not self.confirm_removal(text):
+            return
+        if others:
+            inserter = self._inserter_for(data)
+            # Both: remove_all_images_from_experiment only clears images.experiment, and the
+            # memberships are the GROUPS rows
+            inserter.remove_all_images_from_experiment(name)
+            inserter.remove_group_associations_for_experiment(name)
+            inserter.connector.delete("experiments", ("name", Specifiers.EQUALS, name))
+            inserter.connector.commit_changes()
+        else:
+            # This dialog's own connection first -- an open handle is what would stop the deletion
+            connector = self._connectors.pop(os.path.abspath(path), None)
+            if connector is not None:
+                connector.close_connection()
+            try:
+                os.remove(path)
+                # A write-ahead log or shared-memory file, if one was ever left behind
+                for suffix in ("-wal", "-shm", "-journal"):
+                    if os.path.exists(path + suffix):
+                        os.remove(path + suffix)
+            except OSError as exc:
+                QMessageBox.warning(self, "Remove experiment",
+                                    f"{os.path.basename(path)} could not be deleted:\n{exc}")
+                return
+        LOGGER.info("Removed experiment %s (%s)", name,
+                    "database deleted" if not others else f"from {path or 'the standard database'}")
+        self._drop_experiment_item(item, data)
+
+    def _drop_experiment_item(self, item: QStandardItem, data: Dict) -> None:
+        """
+        Method to take a removed experiment out of the list and out of the saved snapshot
+
+        :param item: The experiment's list item
+        :param data: Its item data
+        :return: None
+        """
+        self.loaded_state.pop((data.get("database"), data.get("loaded_name") or data["name"]), None)
+        self.ui.lv_experiments.selectionModel().clearSelection()
+        self.exp_model.removeRow(item.row())
+        self.clear_experiment_screen()
+
+    def move_selected_experiment(self) -> None:
+        """
+        Method to move the selected legacy experiment out of the standard database
+
+        RW, 2026-09-24: offer the move per experiment; nothing moves unless the user asks. The
+        experiment's database is created, and the experiment, its memberships and its images'
+        data are transferred -- migrated or copied, as the user chooses. An image another
+        experiment in the standard database still holds keeps its data there either way.
+
+        **Only an unedited experiment is moved.** Pending edits would otherwise be written to the
+        standard database by a later OK, after the experiment has left it.
+
+        :return: None
+        """
+        indexes = self.ui.lv_experiments.selectionModel().selectedIndexes()
+        if not indexes:
+            return
+        item = self.exp_model.itemFromIndex(indexes[0])
+        data = item.data()
+        if not data.get("legacy"):
+            return
+        # Edits are looked for in the fields AND in the stored item, but the item is NOT refreshed
+        # from the screen first: that rebuilds its image keys from the images currently LOADED, so
+        # an experiment with an unloaded image would always read as edited and never move
+        edited = (self.ui.le_name.text() != data["name"]
+                  or self.ui.te_details.toPlainText() != data["details"]
+                  or self.ui.te_notes.toPlainText() != data["notes"])
+        if (edited or self.get_experiment_fingerprint(data)
+                != self.loaded_state.get((None, data["loaded_name"]))):
+            QMessageBox.information(self, "Move experiment",
+                                    "This experiment has unsaved changes. Close the dialog with OK "
+                                    "to save them, then move it.")
+            return
+        target = os.path.abspath(Paths.database_for(data["name"]))
+        if os.path.exists(target):
+            QMessageBox.information(self, "Move experiment",
+                                    f"A database named {os.path.basename(target)} already exists.")
+            return
+        move = self.ask_transfer_mode(data["name"], len(data["keys"]))
+        self._commit_all()
+        # The target first, with the schema and its own standard settings; the transfer then
+        # carries the experiment row, its memberships and the images' data
+        created = Connector(path=target)
+        try:
+            created.create_tables()
+            created.create_standard_settings()
+            created.commit_changes()
+        finally:
+            created.close_connection()
+        report = transfer.transfer_images(experiments.standard(), target, data["keys"],
+                                          experiment=data["name"], move=move)
+        # An experiment without images carries nothing through the transfer, so its row is
+        # written, and on a migrate removed, here
+        if not data["keys"]:
+            self._inserter_for({"database": target}).add_new_experiment(
+                data["name"], data["details"], data["notes"])
+            if move:
+                self.inserter.connector.delete("experiments",
+                                               ("name", Specifiers.EQUALS, data["name"]))
+            self._commit_all()
+        LOGGER.info("Moved experiment %s to %s: %s", data["name"], target, report.summary())
+        del self.loaded_state[(None, data["loaded_name"])]
+        data.update({"database": target, "legacy": False})
+        item.setData(data)
+        item.setText(self.label_for(data))
+        self.loaded_state[(target, data["name"])] = self.get_experiment_fingerprint(data)
+        self.btn_move.setEnabled(False)
+        kept = (f" {len(report.shared)} image{'s' if len(report.shared) != 1 else ''} also "
+                f"belong{'s' if len(report.shared) == 1 else ''} to another experiment there and "
+                f"kept {'their' if len(report.shared) != 1 else 'its'} data."
+                if move and report.shared else "")
+        QMessageBox.information(self, "Move experiment",
+                                f"'{data['name']}' now has its own database, "
+                                f"{os.path.basename(target)}.{kept}")
 
     def apply_pending_rename(self, item: QStandardItem, data: Dict, loaded_name: str) -> Dict:
         """
@@ -1470,7 +1846,10 @@ class ExperimentDialog(QDialog):
             data["name"] = loaded_name
             item.setData(data)
             return data
-        self.inserter.rename_experiment(loaded_name, data["name"])
+        # In the experiment's OWN database. Its FILE keeps the name it was created under: renaming a
+        # file the program may have open is not safe, and every lookup finds an experiment by
+        # reading the databases rather than by guessing the file name
+        self._inserter_for(data).rename_experiment(loaded_name, data["name"])
         return data
 
     @staticmethod
@@ -1521,9 +1900,11 @@ class ExperimentDialog(QDialog):
             self.store_current_information_to_item(item)
         # Clear the image list
         self.img_model.clear()
+        self.btn_move.setEnabled(False)
         if selected:
             self.enable_experiment_buttons(True)
             data = self.exp_model.item(selected[0].row()).data()
+            self.btn_move.setEnabled(bool(data.get("legacy")))
             # Insert data into textfields
             self.ui.le_name.setText(data["name"])
             self.ui.te_details.setPlainText(data["details"])
@@ -1630,7 +2011,7 @@ class ExperimentDialog(QDialog):
             }
         )
         item.setData(data)
-        item.setText(self.create_experiment_label(name, details, groups))
+        item.setText(self.label_for(data))
 
     def clear_experiment_screen(self) -> None:
         """
@@ -1714,7 +2095,8 @@ class StatisticsDialog(QDialog):
         self.ui = None
         self.experiment = experiment
         self.active_channels = active_channels
-        self.requester = Requester()
+        # The experiment's own database, whichever one is active -- RW, 2026-09-24
+        self.requester = experiments.requester_for(experiment)
         self.data = self.get_group_data()
         self.statistics = None
         self.comparison_groups: List = []
@@ -1813,6 +2195,9 @@ class StatisticsDialog(QDialog):
         code = exp_sel_dial.exec()
         if code == QDialog.Accepted:
             self.experiment = exp_sel_dial.get_selected_experiment()
+            # Another experiment may live in another database
+            self.requester.connector.close_connection()
+            self.requester = experiments.requester_for(self.experiment)
             self.active_channels = exp_sel_dial.get_active_channels()
             # ASSIGNED, not discarded. self.data kept the previous experiment's DataFrame, so the
             # table, the plot and every statistic described the old experiment under the new title

@@ -49,6 +49,7 @@ from core.roi.ROIHandler import ROIHandler
 import sqlite3
 
 from core.database import selection as db_selection
+from core.database import experiments
 from core.database.connections import Connector, Requester, Inserter
 from gui.definitions.icons import Icon, Color
 from core.detector_modules.ImageLoader import ImageLoader
@@ -259,6 +260,10 @@ class NucDetect(QMainWindow):
         # What the table was last built from, so choosing another pair can rebuild the SAME view:
         # the experiment shown, or None for a single image, which is then _displayed_keys[0]
         self._table_experiment: Optional[str] = None
+        # The experiment-membership index of the analysis run in progress. Built BEFORE the run, for
+        # the warning, and handed to every save of that run -- so the databases written are exactly
+        # the ones the user agreed to. None outside a run; a save then builds its own
+        self._run_index: Optional[Dict[str, List[str]]] = None
         # Contains data of the loaded image
         self.cur_img = None
         # Contains the associated roi for the loaded image
@@ -995,12 +1000,18 @@ class NucDetect(QMainWindow):
 
         :return: The name of the associated experiment, if any. None if the image is not associated
         """
-        # Get the associated experiment
-        exp = self.requester.get_experiment_for_image(self.cur_img["key"])
-        if not exp:
+        # Get the associated experiment -- in ANY database since 2026-09-24, not only the active
+        # one. An image in several experiments offers the first by name
+        found = experiments.experiments_of_image(self.cur_img["key"])
+        if not found:
             return
-        # Get number of attached images
-        num_imgs = len(self.requester.get_associated_images_for_experiment(exp))
+        exp = found[0]
+        # Get number of attached images, from the experiment's own database
+        req = experiments.requester_for(exp)
+        try:
+            num_imgs = len(req.get_associated_images_for_experiment(exp))
+        finally:
+            req.connector.close_connection()
         exit_code = self.open_two_choice_dialog(
             "Experiment attached!",
             "",
@@ -1091,7 +1102,15 @@ class NucDetect(QMainWindow):
         exp_dialog = ExperimentDialog(data=data)
         code = exp_dialog.exec()
         if code == QDialog.Accepted:
-            exp_dialog.save_changes()
+            try:
+                exp_dialog.save_changes()
+            except Exception as exc:                                 # noqa: BLE001
+                LOGGER.exception("Saving the experiments failed")
+                QMessageBox.warning(self, "Experiments not saved",
+                                    f"The changes could not be saved completely:\n{exc}")
+            # A migration takes images out of the standard database, so their analysed state in the
+            # list may have changed
+            self.check_all_item_statuses()
 
     def _show_loading_dialog(self) -> None:
         """
@@ -1382,6 +1401,15 @@ class NucDetect(QMainWindow):
         if not settings:
             # If the dialog was rejected, abort analysis
             return
+        # Before anything starts: an image that belongs to experiments updates their databases too,
+        # and RW ruled that the user is told how many first and can decline
+        index, message = self.plan_experiment_updates([self.cur_img["key"]], settings)
+        if message and not self.confirm_experiment_updates(message):
+            self.ui.list_images.setEnabled(True)
+            self.enable_buttons(True)
+            self.prg_signal.emit("Analysis cancelled -- no database was changed", 0, 100, "")
+            return
+        self._run_index = index
         self.res_table_model.setRowCount(0)
         # The table is being emptied for a new run, so nothing is on display any more. Without this
         # the previous image would keep its marker and its name would stay above an empty table
@@ -1437,7 +1465,7 @@ class NucDetect(QMainWindow):
             if roi.main:
                 roi.calculate_ellipse_parameters()
         reporter.sub(*bounds[DATABASE])(0.0, "Writing results to database")
-        self.save_rois_to_database(data)
+        self.save_rois_to_database(data, index=self._run_index)
         reporter.sub(*bounds[TABLE])(0.0, "Creating result table")
         self.create_result_table()
         # Only now is the analysis actually over. The previous version announced completion before
@@ -1496,15 +1524,114 @@ class NucDetect(QMainWindow):
         settings = self.show_analysis_settings_dialog(show_redo_option=True)
         if not settings:
             return
-        thread = Thread(target=self._run_guarded, args=(self._analyze_all, settings))
+        # The run's images are decided HERE, on the GUI thread, so the warning below can name how
+        # many of them belong to experiments -- RW: "A solution has to be found for batch analysis.
+        # Warning should be shown before the analysis starts, a declining should stop the
+        # reanalysis." ONE warning for the whole run, not one per image
+        paths = self.batch_candidates(settings)
+        index, message = self.plan_experiment_updates(
+            [ImageLoader.calculate_image_id(p) for p in paths], settings)
+        if message and not self.confirm_experiment_updates(message):
+            self.ui.list_images.setEnabled(True)
+            self.enable_buttons(True)
+            self.prg_signal.emit("Batch analysis cancelled -- no database was changed", 0, 100, "")
+            return
+        self._run_index = index
+        thread = Thread(target=self._run_guarded, args=(self._analyze_all, settings, 10, paths))
         thread.start()
 
-    def _analyze_all(self, settings: Dict[str, Union[int, float, str, Iterable]], batch_size: int = 10) -> None:
+    def batch_candidates(self, settings: Dict) -> List[str]:
+        """
+        Method to decide which loaded images a batch run analyses
+
+        One definition, used both to warn before the run and to run it. The rule is unchanged: an
+        image is analysed unless it already was and "re-analyse" is off.
+
+        :param settings: The settings the analysis dialog returned
+        :return: The paths of the images to analyse
+        """
+        paths = []
+        for image in self.loaded_files:
+            md5 = ImageLoader.calculate_image_id(image)
+            if not self.requester.check_if_image_was_analysed(md5) or settings["re-analyse"]:
+                paths.append(image)
+        return paths
+
+    def plan_experiment_updates(self, md5s: List[str],
+                                settings: Dict) -> Tuple[Dict[str, List[str]], Optional[str]]:
+        """
+        Method to work out which experiment databases a run will update, and what to tell the user
+
+        RW, 2026-09-24: *"Re-Analysis should always update all experiment databases the image is
+        part of [...] The user should be informed how many databases will be affected."* The
+        standard database is always written and is not what the warning is about; the experiment
+        databases are, because their stored results are replaced.
+
+        :param md5s: The images the run will analyse
+        :param settings: The settings the analysis dialog returned
+        :return: The membership index to hand to the saves, and the warning to show -- None when no
+            experiment database is affected
+        """
+        index = experiments.membership_index(md5s)
+        per_database: Dict[str, int] = {}
+        for md5 in md5s:
+            for path in index.get(md5, []):
+                per_database[path] = per_database.get(path, 0) + 1
+        new_experiment = None
+        if settings.get("add_to_experiment"):
+            name = settings["experiment_details"]["name"]
+            existing = experiments.database_of(name)
+            if existing is None:
+                new_experiment = name
+            else:
+                existing = os.path.abspath(existing)
+                added = sum(1 for md5 in md5s if existing not in index.get(md5, []))
+                if added:
+                    per_database[existing] = per_database.get(existing, 0) + added
+        if not per_database and not new_experiment:
+            return index, None
+        lines = [f"  - {os.path.basename(path)}: {count} image{'s' if count != 1 else ''}"
+                 for path, count in sorted(per_database.items(),
+                                           key=lambda item: os.path.basename(item[0]).lower())]
+        affected = len(per_database) + (1 if new_experiment else 0)
+        message = (f"This analysis will update {affected} experiment "
+                   f"database{'s' if affected != 1 else ''} as well as the standard database.")
+        if lines:
+            message += ("\n\nThese images get the new results there, replacing any stored ones:\n"
+                        + "\n".join(lines))
+        if new_experiment:
+            message += (f"\n\nA new database will be created for the experiment "
+                        f"'{new_experiment}'.")
+        return index, message
+
+    def confirm_experiment_updates(self, message: str) -> bool:
+        """
+        Method to ask whether a run may update the experiment databases it affects
+
+        Split out so the analysis can be driven without a modal window. No is the default: the
+        action replaces stored results.
+
+        :param message: The text from `plan_experiment_updates`
+        :return: True to go ahead
+        """
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Update experiment databases?")
+        box.setText(message)
+        box.setInformativeText("Continue with the analysis?")
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        box.setDefaultButton(QMessageBox.No)
+        return box.exec() == QMessageBox.Yes
+
+    def _analyze_all(self, settings: Dict[str, Union[int, float, str, Iterable]], batch_size: int = 10,
+                     paths: Optional[List[str]] = None) -> None:
         """
         Method to perform concurrent batch analysis of registered images
 
         :param settings: The settings for this analysis, e.g. channel names, active channels ect.
         :param batch_size: The number of images that are loaded parallel
+        :param paths: The images to analyse, as `analyze_all` decided them before warning about
+            them; worked out here when not given
         :return: None
         """
         start_time = time.time()
@@ -1528,12 +1655,8 @@ class NucDetect(QMainWindow):
             # come from a user-editable JSON file and from callers that build the dict by hand
             log_analysis = settings["analysis_settings"].get("logging", True)
             self.prg_signal.emit("Starting multi image analysis", 0, 100, "")
-            paths = []
-            for image in self.loaded_files:
-                # Get md5 hash of file
-                md5 = ImageLoader.calculate_image_id(image)
-                if not self.requester.check_if_image_was_analysed(md5) or settings["re-analyse"]:
-                    paths.append(image)
+            if paths is None:
+                paths = self.batch_candidates(settings)
             LOGGER.info("Batch analysis of %d images", len(paths))
             maxi = len(paths)
             # Number of batches, rounded up -- the last one is short unless the count divides evenly
@@ -1578,7 +1701,7 @@ class NucDetect(QMainWindow):
                     # Outside the log_analysis branch above on purpose: the replayed record is
                     # file-only and optional, the verdict is neither
                     self.report_plausibility(r)
-                    self.save_rois_to_database(r, all_=True)
+                    self.save_rois_to_database(r, all_=True, index=self._run_index)
                     # Get the image hash and file name
                     name = self.requester.get_image_filename(r["handler"].ident)
                     mnum = len([x for x in r["handler"] if x.main])
@@ -1664,19 +1787,93 @@ class NucDetect(QMainWindow):
 
     @staticmethod
     def save_rois_to_database(data: Dict[str, Union[str, ROIHandler, np.ndarray, Dict[str, str]]],
-                              all_: bool = False) -> None:
+                              all_: bool = False,
+                              index: Optional[Dict[str, List[str]]] = None) -> List[str]:
         """
-        Method to save the data stored in the ROIHandler rois to the database
+        Method to save an analysis result to every database it belongs in
+
+        RW, 2026-09-24: an analysis is written to **the standard database and to every experiment
+        database the image belongs to** -- *"Re-Analysis should always update all experiment
+        databases the image is part of. This is the whole point of re-analyzing an image."* Until
+        then it went to the ACTIVE database only. The active database is not a target of its own:
+        when it is neither of those, it does not receive the result.
+
+        An image analysed with "add to experiment" also goes to that experiment's database, which is
+        CREATED if it does not exist yet -- *"Creating an experiment should create the database."*
+
+        The rows are prepared ONCE -- the statistics are the expensive part -- and written to each
+        database in its own transaction. A database that fails does not stop the others; the
+        failures are raised together afterwards, so none is silent.
 
         :param data: The data dict returned by the Detector class
         :param all_: Deactivates printing to console
+        :param index: The run's `experiments.membership_index`. Pass the one the pre-run warning was
+            built from, so the databases written are exactly the ones the user was told about;
+            built for this image when absent
+        :return: The databases written to
+        """
+        key = data["id"]
+        targets = experiments.analysis_targets(key, index)
+        membership = None
+        if data.get("add_to_experiment"):
+            details = data["experiment_details"]
+            path = experiments.database_of(details["name"])
+            if path is None:
+                path = experiments.create_experiment_database(details["name"], details["details"],
+                                                              details["notes"])
+                LOGGER.info("Created the database of experiment %s: %s", details["name"], path)
+            membership = (os.path.abspath(path), details)
+            if membership[0] not in targets:
+                targets.append(membership[0])
+        # data["channel_arrays"], not data["channels"]: the latter is the channel COUNT from the
+        # image metadata and always was -- the analysis used to overwrite it here
+        prepared = NucDetect.prepare_roihandler_for_database(data["handler"], data["channel_arrays"])
+        failures = []
+        for target in targets:
+            try:
+                NucDetect._write_result(target, data, prepared,
+                                        membership[1] if membership and membership[0] == target
+                                        else None)
+            except Exception as exc:                                  # noqa: BLE001
+                LOGGER.exception("Saving %s to %s failed", key, target)
+                failures.append(f"{os.path.basename(target)}: {exc}")
+        if failures:
+            raise RuntimeError("The result could not be saved to every database -- "
+                               + "; ".join(failures))
+        if not all_:
+            LOGGER.info("ROI saved to %d database(s)", len(targets))
+        return targets
+
+    @staticmethod
+    def _write_result(target: str, data: Dict, prepared: Tuple[List, List, List],
+                      membership: Optional[Dict[str, str]]) -> None:
+        """
+        Method to write one analysis result into one database, in one transaction
+
+        :param target: The database
+        :param data: The data dict returned by the Detector class
+        :param prepared: `prepare_roihandler_for_database`'s rows, computed once for all targets
+        :param membership: The experiment details when the image is to be added to an experiment
+            held in THIS database, else None
         :return: None
         """
         key = data["id"]
-        # Establish new connector
-        req = Requester()
-        ins = Inserter()
+        connector = Connector(path=target)
+        req = Requester(connector)
+        ins = Inserter(connector)
         try:
+            # A target that has never seen this image registers it first -- the standard database
+            # when another one is active, since registration at load goes to the active database.
+            # Without the images row every UPDATE below matches nothing and the result is lost.
+            # A stubbed result without metadata cannot be registered and is written as before
+            connector.create_tables()
+            if not req.check_if_image_is_registered(key) and "width" in data:
+                ins.add_new_image(key, year=data["year"], month=data["month"], day=data["day"],
+                                  hour=data["hour"], minute=data["minute"],
+                                  channels=data["channels"], width=data["width"],
+                                  height=data["height"])
+                if data.get("path"):
+                    ins.register_image_filename(data["path"])
             # Clear any previously saved data for this image before writing the new results.
             #
             # This is unconditional on purpose. It used to be guarded by `get_info_for_image(key)[8]`
@@ -1704,11 +1901,11 @@ class NucDetect(QMainWindow):
             # DELETEs keyed on this image and is a no-op for a hash with no rows, which is the
             # same argument the guard's own comment made for the first-analysis case.
             ins.delete_existing_image_data(key)
-            # Check if image should be added to experiment
-            if data["add_to_experiment"]:
-                exp_data = data["experiment_details"]
-                ins.add_image_to_experiment(key, exp_data["name"], exp_data["details"],
-                                            exp_data["notes"], "Standard")
+            # Added to the experiment in ITS OWN database only -- the standard database is to hold
+            # no experiment data (RW, 2026-09-22)
+            if membership:
+                ins.add_image_to_experiment(key, membership["name"], membership["details"],
+                                            membership["notes"], "Standard")
             # Update channel info. Cleared first: the rows are keyed by (md5, index) and were only
             # ever replaced, so re-registering an image with fewer channels than before left the
             # surplus indices in place -- and the editor offers exactly what this table says
@@ -1720,10 +1917,7 @@ class NucDetect(QMainWindow):
             ins.set_image_scale(key, data["x_scale"], data["y_scale"])
             ins.set_image_scale_unit(key, data["scale_unit"])
             # Save data for detected ROI
-            # data["channel_arrays"], not data["channels"]: the latter is the channel COUNT
-            # from the image metadata and always was -- the analysis used to overwrite it here
-            roidat, pdat, elldat = NucDetect.prepare_roihandler_for_database(
-                data["handler"], data["channel_arrays"])
+            roidat, pdat, elldat = prepared
             # Check if there is any data to save
             if roidat:
                 # Save data to database. This ALSO sets `analysed` as a side effect, which is what
@@ -1747,14 +1941,11 @@ class NucDetect(QMainWindow):
             # not open. "Analysed" means an analysis ran, not that it found something.
             ins.set_image_analysed(key)
             # Only commit once all writes succeeded, so a failed save doesn't persist a partial state
-            ins.commit()
-            req.commit()
+            connector.commit_changes()
         finally:
-            # Always release both connections, even if an error interrupted the writes above
-            ins.connector.close_connection()
-            req.connector.close_connection()
-        if not all_:
-            LOGGER.info("ROI saved to database")
+            # Always release the connection, even if an error interrupted the writes above --
+            # closing without a commit rolls this database's writes back
+            connector.close_connection()
 
     @staticmethod
     def prepare_roihandler_for_database(handler: ROIHandler, channels: List[np.ndarray]) -> Tuple[List, List, List]:
@@ -1929,29 +2120,40 @@ class NucDetect(QMainWindow):
         # The pairs offered are those the SHOWN images compared, so they are collected before the
         # rows are built. A pair chosen for a previous view that none of these images compared
         # falls back to each image's first pair rather than filling the column with n/a
-        if experiment:
-            keys = list(self.requester.get_associated_images_for_experiment(experiment))
-        else:
-            key = image_key or (self.cur_img["key"] if self.cur_img else None)
-            keys = [key] if key else []
-        pairs = self.collect_colocalization_pairs(keys)
-        pair = self._coloc_pair if self._coloc_pair in pairs else None
-        self._table_experiment = experiment
-        rows = self.prepare_main_table_rows(experiment, pair=pair, image_key=image_key)
+        # AN EXPERIMENT IS READ FROM ITS OWN DATABASE, whichever one is active -- RW, 2026-09-24:
+        # the views "should read accross databases". A single image is read from the active one
+        req = experiments.requester_for(experiment) if experiment else self.requester
+        try:
+            if experiment:
+                keys = list(req.get_associated_images_for_experiment(experiment))
+            else:
+                key = image_key or (self.cur_img["key"] if self.cur_img else None)
+                keys = [key] if key else []
+            pairs = self.collect_colocalization_pairs(keys, req)
+            pair = self._coloc_pair if self._coloc_pair in pairs else None
+            self._table_experiment = experiment
+            rows = self.prepare_main_table_rows(experiment, pair=pair, image_key=image_key,
+                                                req=req)
+        finally:
+            if req is not self.requester:
+                req.connector.close_connection()
         self.coloc_signal.emit([list(x) for x in pairs], list(pair) if pair else None,
                                bool(experiment))
         self.table_signal.emit(header, rows)
 
-    def collect_colocalization_pairs(self, keys: List[str]) -> List[Tuple[str, str]]:
+    def collect_colocalization_pairs(self, keys: List[str],
+                                     req: Optional[Requester] = None) -> List[Tuple[str, str]]:
         """
         Method to collect every channel pair the given images were analysed with
 
         :param keys: The md5 hashes of the images
+        :param req: The database to read; the active one when not given
         :return: The pairs, sorted and without repetition
         """
+        req = req or self.requester
         pairs = set()
         for key in keys:
-            pairs.update(self.requester.get_colocalization_pairs(key))
+            pairs.update(req.get_colocalization_pairs(key))
         return sorted(pairs)
 
     def _apply_coloc_pairs(self, pairs: List[List[str]], selected: Optional[List[str]],
@@ -2014,7 +2216,8 @@ class NucDetect(QMainWindow):
 
     def prepare_main_table_rows(self, experiment: Union[str, None] = None,
                                 pair: Optional[Tuple[str, str]] = None,
-                                image_key: Optional[str] = None) -> List[List[str]]:
+                                image_key: Optional[str] = None,
+                                req: Optional[Requester] = None) -> List[List[str]]:
         """
         Method to prepare the rows of the result table on the main UI
 
@@ -2022,17 +2225,20 @@ class NucDetect(QMainWindow):
         :param pair: The channel pair for the Co-Loc. column; None for each image's first pair
         :param image_key: The image to show when no experiment is, if not the selected one -- a
             pair change rebuilds whatever is on screen, which after an analysis is not the selection
+        :param req: The database to read -- the experiment's own for an experiment; the active one
+            when not given
         :return: The prepared rows
         """
+        req = req or self.requester
         # The label and the list marker both answer "what am I looking at?", which stopped being
         # obvious on 2026-08-22: an automatic advance moves the SELECTION without changing the
         # table, so the two can legitimately disagree. Naming the source here is what makes that
         # visible instead of silent -- Romano asked for the names, not just the counts
         if experiment:
             # Get all assigned images
-            num_imgs = self.requester.get_number_of_associated_images_for_experiment(experiment)
+            num_imgs = req.get_number_of_associated_images_for_experiment(experiment)
             # Load data for experiment
-            rows = self.get_table_data_from_database(experiment, pair)
+            rows = self.get_table_data_from_database(experiment, pair, req)
             # Sort rows according to group
             rows = sorted(rows, key=lambda x: x[1])
             self.set_experiment_status_label_text(
@@ -2040,8 +2246,7 @@ class NucDetect(QMainWindow):
             )
             self.cur_exp = experiment
             # Every image of the experiment is on screen, so every one of them is marked
-            self._displayed_keys = list(
-                self.requester.get_associated_images_for_experiment(experiment))
+            self._displayed_keys = list(req.get_associated_images_for_experiment(experiment))
         else:
             key = image_key or self.cur_img["key"]
             name = (self.cur_img["file_name"] if self.cur_img and key == self.cur_img["key"]
@@ -2094,25 +2299,28 @@ class NucDetect(QMainWindow):
         return item_row
 
     def get_table_data_from_database(self, experiment: str,
-                                     pair: Optional[Tuple[str, str]] = None) -> List[List[str]]:
+                                     pair: Optional[Tuple[str, str]] = None,
+                                     req: Optional[Requester] = None) -> List[List[str]]:
         """
         Method to load the data of an experiment from the database
 
         :param experiment: The name of the experiment to get the data for
         :param pair: The channel pair for the Co-Loc. column; None for each image's first pair
+        :param req: The experiment's database; the active one when not given
         :return: List of row to created for display
         """
+        req = req or self.requester
         # Get images associated with experiment
-        imgs = self.requester.get_associated_images_for_experiment(experiment)
+        imgs = req.get_associated_images_for_experiment(experiment)
         rows: List[List[str]] = []
         # Iterate over all images
         for img in imgs:
             # Check if the image is already analysed
-            if not self.requester.check_if_image_was_analysed(img):
+            if not req.check_if_image_was_analysed(img):
                 continue
-            row = self.get_table_data_for_image(img, pair)
+            row = self.get_table_data_for_image(img, pair, req)
             # Check if the image was assigned to a group
-            group = self.requester.get_associated_group_for_image(img, experiment)
+            group = req.get_associated_group_for_image(img, experiment)
             for row_ in row:
                 row_.insert(2, group)
             rows.extend(row)
@@ -2145,18 +2353,21 @@ class NucDetect(QMainWindow):
                        plausibility["above_max_area"], plausibility["border"])
 
     def get_table_data_for_image(self, img: str,
-                                 pair: Optional[Tuple[str, str]] = None) -> List[List[str]]:
+                                 pair: Optional[Tuple[str, str]] = None,
+                                 req: Optional[Requester] = None) -> List[List[str]]:
         """
         Method to get the table data for the specified image
 
         :param img: The md5 hash of the image to get the data for
         :param pair: The channel pair for the Co-Loc. column; None for the image's first pair
+        :param req: The database to read; the active one when not given
         :return: List of rows created for display
         """
+        req = req or self.requester
         # Convert key to file name
-        name = self.requester.get_image_filename(img)
+        name = req.get_image_filename(img)
         self.prg_signal.emit(f"Creating result table for image {name}", 0, 100, "")
-        rows = self.requester.get_table_data_for_image(img, name, pair)
+        rows = req.get_table_data_for_image(img, name, pair)
         self.prg_signal.emit(f"Creating result table for image {name}", 100, 100, "")
         return rows
 
@@ -2479,8 +2690,8 @@ class NucDetect(QMainWindow):
 
         :return: None
         """
-        # Check if experiments were defined
-        exps = self.requester.get_all_experiments()
+        # Check if experiments were defined -- in any database
+        exps = experiments.experiment_names()
         if not exps:
             msg = QMessageBox()
             msg.setWindowIcon(Icon.get_icon("LOGO"))
@@ -2517,7 +2728,19 @@ class NucDetect(QMainWindow):
         # SettingsDialog.accept() performs the database update, the commit and the JSON save
         # itself; this block used to repeat all three. It was unreachable until accept() started
         # returning Accepted, so the repetition was never visible
-        sett.exec()
+        accepted = sett.exec() == QDialog.Accepted
+        # A database chosen in the dialog's combobox is switched to HERE, after accept() has saved
+        # the edited settings into the database they were shown from. switch_database moves the
+        # connections, the settings and the image list together and reloads all three
+        chosen = sett.chosen_database() if accepted else None
+        if chosen:
+            try:
+                self.switch_database(chosen)
+            except Exception as exc:                                 # noqa: BLE001
+                # switch_database has already returned to the previous database; say why
+                QMessageBox.warning(self, "Database not changed",
+                                    f"Could not switch to {os.path.basename(chosen)}:\n{exc}")
+            return
         self.check_all_item_statuses()
         self.settings = self.load_settings()
 

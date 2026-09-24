@@ -5,11 +5,19 @@ CREATE TABLE IF NOT EXISTS "encountered_names"
     "file_name" TEXT,
     PRIMARY KEY ("md5")
 ) WITHOUT ROWID;
+/*
+channels.name, groups.image and groups.experiment are TEXT since schema version 5, 2026-09-24. They
+were declared INTEGER while holding names and md5s, and SQLite's type affinity converts any stored
+value that LOOKS numeric: an experiment named "2024" came back as the number 2024, a channel named
+"1e3" as the number 1000, and an md5 made only of digits as a float that cannot be turned back into it.
+roi.image and statistics.image have the same declaration and are left for the redesign of those two
+tables, which rebuilds them anyway.
+*/
 CREATE TABLE IF NOT EXISTS "channels"
 (
     "md5"    TEXT,
     "index_" INTEGER,
-    "name"   INTEGER,
+    "name"   TEXT,
     "active" INTEGER,
     "main"   INTEGER,
     PRIMARY KEY ("md5", "index_")
@@ -23,8 +31,8 @@ CREATE TABLE IF NOT EXISTS "experiments"
 ) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS "groups"
 (
-    "image"      INTEGER,
-    "experiment" INTEGER,
+    "image"      TEXT,
+    "experiment" TEXT,
     "name"       TEXT,
     PRIMARY KEY ("image", "experiment")
 ) WITHOUT ROWID;

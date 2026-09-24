@@ -269,6 +269,17 @@ class NucleusMapper(AreaMapper):
         :param line: Toggle to draw a line between segmented areas
         :return: The segmented binary map
         """
-        # Create watershed segmentation based on centers
-        return watershed(-edm, cmask, mask=mask, watershed_line=line)
+        # Create watershed segmentation based on centers.
+        #
+        # NEGATED AS FLOAT, since 2026-09-24. The map arrives as uint8, and `-edm` on an unsigned
+        # array wraps modulo 256: 1..255 become 255..1, which keeps their order, but 0 stays 0 --
+        # the LOWEST value where a true negation makes it the highest. A foreground pixel quantises
+        # to 0 once the distance range exceeds ~383 px (a threshold that caught the whole frame),
+        # and those pixels were flooded first. The upcast costs nothing: watershed converts its
+        # input to float64 anyway, but only AFTER the minus had wrapped.
+        #
+        # Output-identical on every image where no foreground pixel quantises to 0, which is every
+        # real image measured -- the flood order depends only on the ordering of the values, and
+        # 256 - x orders 1..255 exactly as -x does
+        return watershed(-edm.astype(np.float64), cmask, mask=mask, watershed_line=line)
 

@@ -527,19 +527,70 @@ class SettingsDialog(QDialog):
         self.ui.btn_reset_an.clicked.connect(self.reset_analysis_data)
         self.ui.btn_reset_log.clicked.connect(self.reset_log_file)
         self.ui.btn_convert_db.clicked.connect(lambda: self.convert_database())
+        self.fill_database_choices()
+        self.ui.cmbx_database.currentIndexChanged.connect(lambda _: self.show_database_info())
         self.show_database_info()
         # TODO implement program settings and chosen presets
 
-    def show_database_info(self) -> None:
+    def fill_database_choices(self) -> None:
         """
-        Method to show which database is in use and which schema version it has
+        Method to list every database the program can switch to
 
-        Read through a READ-ONLY connection: opening a database to describe it must not change it,
-        which is the first of the two rules the schema-version module keeps.
+        RW, 2026-09-24: *"A combobox in the settings main tab that is filled with all available
+        databases."* That is every `.db` in the data folder, the standard database first -- it is
+        listed even before it exists on disk, since opening it creates it -- and the active one
+        wherever it lives, so the box always shows the truth about what is in use.
 
         :return: None
         """
-        path = selection.get_active()
+        combo = self.ui.cmbx_database
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            standard = os.path.abspath(gpaths.database)
+            others = sorted({os.path.abspath(p) for p in gpaths.list_databases()} - {standard},
+                            key=lambda p: os.path.basename(p).lower())
+            active = os.path.abspath(selection.get_active())
+            if active != standard and active not in others:
+                others.insert(0, active)
+            combo.addItem(f"{os.path.basename(standard)} (standard)", standard)
+            for path in others:
+                combo.addItem(os.path.basename(path), path)
+                combo.setItemData(combo.count() - 1, path, Qt.ToolTipRole)
+            combo.setCurrentIndex(max(0, combo.findData(active)))
+        finally:
+            combo.blockSignals(False)
+
+    def chosen_database(self) -> Optional[str]:
+        """
+        Method to report a database switch the user asked for
+
+        **The switch itself is the caller's** -- `NucDetect.switch_database` moves the window's
+        connections, settings and image list together, which this dialog cannot. It is applied
+        after OK, so the settings edited here are saved to the database they were shown from first.
+
+        :return: The chosen database, or None when it is the one already in use
+        """
+        chosen = self.ui.cmbx_database.currentData()
+        if not chosen or os.path.abspath(chosen) == os.path.abspath(selection.get_active()):
+            return None
+        return chosen
+
+    def show_database_info(self) -> None:
+        """
+        Method to show the schema version of the database selected in the combobox
+
+        Read through a READ-ONLY connection: opening a database to describe it must not change it,
+        which is the first of the two rules the schema-version module keeps. A database that does
+        not exist yet -- the standard one before first use -- is described as such rather than
+        created by the attempt to look at it.
+
+        :return: None
+        """
+        path = self.ui.cmbx_database.currentData() or selection.get_active()
+        if not os.path.isfile(path):
+            self.ui.lbl_db_info.setText(f"{path}\nnot created yet -- it will be on first use")
+            return
         try:
             with closing(sqlite3.connect(f"file:{path.replace(os.sep, '/')}?mode=ro",
                                          uri=True)) as connection:
@@ -604,6 +655,8 @@ class SettingsDialog(QDialog):
                     schema_version.SCHEMA_VERSION, len(applied))
         self.show_message(QMessageBox.Information, "Conversion finished",
                           f"{name} is now at version {schema_version.SCHEMA_VERSION}.")
+        # A converted file may be new to the data folder, so the list is rebuilt, not just redrawn
+        self.fill_database_choices()
         self.show_database_info()
         return applied
 
